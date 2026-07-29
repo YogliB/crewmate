@@ -34,16 +34,21 @@
 		"lint:ci": "oxlint src",
 		"format": "oxfmt --write .",
 		"format:ci": "oxfmt --check .",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:ci": "vitest run --coverage",
 		"prepare": "husky"
 	},
 	"devDependencies": {
-		"@types/node": "26.1.2",
+		"@types/node": "24",
+		"@vitest/coverage-v8": "^4.1.10",
 		"eslint-plugin-security": "4.0.1",
 		"husky": "9.1.7",
 		"oxfmt": "0.61.0",
 		"oxlint": "1.76.0",
 		"tsdown": "0.22.14",
-		"typescript": "7.0.2"
+		"typescript": "7.0.2",
+		"vitest": "^4.1.10"
 	},
 	"devEngines": {
 		"packageManager": {
@@ -53,6 +58,6 @@
 		}
 	},
 	"engines": {
-		"node": ">=20.0.0"
+		"node": ">=24.0.0"
 	}
 }

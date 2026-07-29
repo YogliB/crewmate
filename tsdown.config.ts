@@ -14,5 +14,5 @@ export default defineConfig({
 	}),
 	platform: "node",
 	sourcemap: false,
-	target: "node20",
+	target: "node24",
 });

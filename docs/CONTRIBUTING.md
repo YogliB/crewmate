@@ -113,7 +113,7 @@ Enhancement suggestions are tracked as [GitHub issues](https://github.com/YogliB
 
 Prerequisites:
 
-- Node.js **20** or later (see `engines` in `package.json`)
+- Node.js **24** or later (see `engines` in `package.json`)
 - [Nub](https://nubjs.com) (see `devEngines.packageManager` in `package.json`)
 
 Clone the repository, install dependencies, and build:
@@ -132,6 +132,7 @@ nub run build
 nub run typecheck
 nub run format:ci
 nub run lint:ci
+nub run test:ci
 ```
 
 `nub run lint:ci` runs `oxlint`, including the custom `oxlint-repo-guidelines/no-more-docs` rule that blocks new Markdown/`docs/` files not explicitly allow-listed in [scripts/oxlint-repo-guidelines.js](../scripts/oxlint-repo-guidelines.js).

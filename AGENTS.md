@@ -42,7 +42,7 @@ See [package.json](package.json) for the build, dev, lint, and format scripts. S
 
 ## Testing instructions
 
-No test suite exists yet. Add tests alongside new behavior and document the runner here once one is introduced.
+`nub run test` runs the Vitest suite once; `nub run test:ci` runs it with coverage and enforces 100% per-file coverage for statements, branches, functions, and lines.
 
 ## Lint and format
 
