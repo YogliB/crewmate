@@ -30,14 +30,15 @@
 		"dev": "tsdown --config tsdown.config.ts --watch",
 		"build": "tsdown --config tsdown.config.ts",
 		"typecheck": "tsc --noEmit",
-		"lint": "oxlint --fix .",
-		"lint:ci": "oxlint .",
+		"lint": "oxlint --fix src",
+		"lint:ci": "oxlint src",
 		"format": "oxfmt --write .",
 		"format:ci": "oxfmt --check .",
 		"prepare": "husky"
 	},
 	"devDependencies": {
 		"@types/node": "26.1.2",
+		"eslint-plugin-security": "4.0.1",
 		"husky": "9.1.7",
 		"oxfmt": "0.61.0",
 		"oxlint": "1.76.0",
