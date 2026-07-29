@@ -1,4 +1,5 @@
 .DS_Store
+.devin/
 .env
 .env.*
 !.env.example
