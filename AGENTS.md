@@ -8,21 +8,22 @@ Treat **AGENTS.md** as the agent-facing index for [README.md](README.md), [docs/
 
 ## Agent index
 
-| Topic                                    | Where to look                                                                                            |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Keeping human docs and this file aligned | [Documentation sync](#documentation-sync)                                                                |
-| User-facing behavior, CLI usage          | [README.md](README.md)                                                                                   |
-| License text                             | [LICENSE.md](LICENSE.md)                                                                                 |
-| Contributing flow, commit style          | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)                                                             |
-| Security policy and reporting            | [docs/SECURITY.md](docs/SECURITY.md)                                                                     |
-| Common build/lint/format problems        | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)                                                       |
-| Community expectations                   | [docs/CODE_OF_CONDUCT.md](docs/CODE_OF_CONDUCT.md)                                                       |
-| Architecture overview                    | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                                                             |
-| Release notes                            | [docs/CHANGELOG.md](docs/CHANGELOG.md)                                                                   |
-| Library and CLI implementation           | [src/index.ts](src/index.ts), [src/bin.ts](src/bin.ts)                                                   |
-| tsdown build                             | [tsdown.config.ts](tsdown.config.ts)                                                                     |
-| Lint/format rules and custom docs rule   | [.oxlintrc.json](.oxlintrc.json), [scripts/oxlint-repo-guidelines.js](scripts/oxlint-repo-guidelines.js) |
-| npm scripts and package metadata         | [package.json](package.json)                                                                             |
+| Topic                                    | Where to look                                                                                                                                                                                                                                                                  |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Keeping human docs and this file aligned | [Documentation sync](#documentation-sync)                                                                                                                                                                                                                                      |
+| User-facing behavior, CLI usage          | [README.md](README.md)                                                                                                                                                                                                                                                         |
+| License text                             | [LICENSE.md](LICENSE.md)                                                                                                                                                                                                                                                       |
+| Contributing flow, commit style          | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)                                                                                                                                                                                                                                   |
+| Security policy and reporting            | [docs/SECURITY.md](docs/SECURITY.md)                                                                                                                                                                                                                                           |
+| Common build/lint/format problems        | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)                                                                                                                                                                                                                             |
+| Community expectations                   | [docs/CODE_OF_CONDUCT.md](docs/CODE_OF_CONDUCT.md)                                                                                                                                                                                                                             |
+| Architecture overview                    | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                                                                                                                                                                                                                                   |
+| Release notes                            | [docs/CHANGELOG.md](docs/CHANGELOG.md)                                                                                                                                                                                                                                         |
+| CI workflows                             | [.github/workflows/quality.yml](.github/workflows/quality.yml), [.github/workflows/verification.yml](.github/workflows/verification.yml), [.github/workflows/security.yml](.github/workflows/security.yml), [.github/workflows/anti-slop.yml](.github/workflows/anti-slop.yml) |
+| Library and CLI implementation           | [src/index.ts](src/index.ts), [src/bin.ts](src/bin.ts)                                                                                                                                                                                                                         |
+| tsdown build                             | [tsdown.config.ts](tsdown.config.ts)                                                                                                                                                                                                                                           |
+| Lint/format rules and custom docs rule   | [.oxlintrc.json](.oxlintrc.json), [scripts/oxlint-repo-guidelines.js](scripts/oxlint-repo-guidelines.js)                                                                                                                                                                       |
+| npm scripts and package metadata         | [package.json](package.json)                                                                                                                                                                                                                                                   |
 
 ## Project overview
 
@@ -49,8 +50,8 @@ No test suite exists yet. Add tests alongside new behavior and document the runn
 
 ## Build and release
 
-`nub run build` emits `dist/` via tsdown. There is no publish workflow yet.
+`nub run build` emits `dist/` via tsdown. There is no publish workflow yet. CI checks live in [.github/workflows/quality.yml](.github/workflows/quality.yml), [.github/workflows/verification.yml](.github/workflows/verification.yml), and [.github/workflows/security.yml](.github/workflows/security.yml).
 
 ## Pull requests and commits
 
-See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for PR shape and commit conventions. Add unreleased notes to [docs/CHANGELOG.md](docs/CHANGELOG.md) for user-facing changes.
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for PR shape and commit conventions. Add unreleased notes to [docs/CHANGELOG.md](docs/CHANGELOG.md) for user-facing changes. Match the checks in [.github/workflows/quality.yml](.github/workflows/quality.yml), [.github/workflows/verification.yml](.github/workflows/verification.yml), and [.github/workflows/security.yml](.github/workflows/security.yml) before opening a PR.
