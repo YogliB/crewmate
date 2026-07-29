@@ -17,7 +17,8 @@ This document describes the actual architecture of pickup: currently a minimal T
 │   ├── CHANGELOG.md       # Release notes
 │   ├── CODE_OF_CONDUCT.md # Community expectations
 │   ├── CONTRIBUTING.md    # Contributor workflow and validation commands
-│   └── SECURITY.md        # Security policy and reporting process
+│   ├── SECURITY.md        # Security policy and reporting process
+│   └── TROUBLESHOOTING.md # Common build/lint/format problems and fixes
 ├── scripts/
 │   └── oxlint-repo-guidelines.js  # Custom oxlint rule blocking undeclared doc files
 ├── tsdown.config.ts   # Build configuration

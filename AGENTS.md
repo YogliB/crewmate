@@ -4,7 +4,7 @@ Instructions and entry points for coding agents working on this repository. For 
 
 ## Documentation sync
 
-Treat **AGENTS.md** as the agent-facing index for [README.md](README.md), [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md), [docs/SECURITY.md](docs/SECURITY.md), and [docs/CODE_OF_CONDUCT.md](docs/CODE_OF_CONDUCT.md). Keep it aligned with those docs when workflow, release, or navigation facts change.
+Treat **AGENTS.md** as the agent-facing index for [README.md](README.md), [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md), [docs/SECURITY.md](docs/SECURITY.md), [docs/CODE_OF_CONDUCT.md](docs/CODE_OF_CONDUCT.md), and [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md). Keep it aligned with those docs when workflow, release, or navigation facts change.
 
 ## Agent index
 
@@ -15,6 +15,7 @@ Treat **AGENTS.md** as the agent-facing index for [README.md](README.md), [docs/
 | License text                             | [LICENSE.md](LICENSE.md)                                                                                 |
 | Contributing flow, commit style          | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)                                                             |
 | Security policy and reporting            | [docs/SECURITY.md](docs/SECURITY.md)                                                                     |
+| Common build/lint/format problems        | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)                                                       |
 | Community expectations                   | [docs/CODE_OF_CONDUCT.md](docs/CODE_OF_CONDUCT.md)                                                       |
 | Architecture overview                    | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                                                             |
 | Release notes                            | [docs/CHANGELOG.md](docs/CHANGELOG.md)                                                                   |

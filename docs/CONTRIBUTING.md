@@ -142,7 +142,7 @@ If your pull request resolves an issue, mention it in the PR body with `Fixes #1
 
 ### Improving The Documentation
 
-Documentation lives in the repository root (`README.md`, `AGENTS.md`, `LICENSE.md`) and in `docs/` (`ARCHITECTURE.md`, `CHANGELOG.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`). Typos, clarifications, and examples that match current behavior are welcome as pull requests.
+Documentation lives in the repository root (`README.md`, `AGENTS.md`, `LICENSE.md`) and in `docs/` (`ARCHITECTURE.md`, `CHANGELOG.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TROUBLESHOOTING.md`). Typos, clarifications, and examples that match current behavior are welcome as pull requests.
 
 `AGENTS.md` is the agent-oriented index and command reference; it must stay aligned with the human docs and with reality (`package.json`, and so on). When your change updates how the repo is developed, tested, released, or explained to contributors, update **every** affected doc in the same pull request so nothing drifts.
 
