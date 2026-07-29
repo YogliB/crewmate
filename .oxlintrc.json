@@ -1,0 +1,7 @@
+{
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"jsPlugins": ["./scripts/oxlint-repo-guidelines.js"],
+	"rules": {
+		"oxlint-repo-guidelines/no-more-docs": "error"
+	}
+}
