@@ -5,6 +5,7 @@
 	"options": { "denyWarnings": true },
 	"rules": {
 		"import/no-default-export": "off",
+		"import/no-nodejs-modules": "off",
 		"security/detect-bidi-characters": "error",
 		"security/detect-buffer-noassert": "error",
 		"security/detect-child-process": "error",

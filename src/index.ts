@@ -1,4 +1,3 @@
-// eslint-disable-next-line import/no-nodejs-modules
 import process from "node:process";
 
 const CLI_ARGV_OFFSET = 2;
