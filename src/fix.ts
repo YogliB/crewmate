@@ -1,12 +1,45 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, realpath, writeFile } from "node:fs/promises";
+import path from "node:path";
 
-const NOT_FOUND_INDEX = -1;
-const STEP = 1;
 const FENCE_MARKER = "```";
 const FIX_MESSAGE = "fix: address @pickup comment";
-const MISSING_FILE_REPLY = "Could not find the file to fix.";
+const MISSING_FILE_REPLY = "Could not find the file.";
+const NO_CHANGE_REPLY = "No changes needed.";
 const NO_FIX_REPLY = "Could not generate a fix.";
 const EMPTY_EXPLANATION_WARNING = "Warning: claude returned empty explanation\n";
+
+const isOutsideRepo = (repoRoot: string, resolved: string): boolean => {
+	const relative = path.relative(repoRoot, resolved);
+	return relative.startsWith("..") || path.isAbsolute(relative) || resolved === repoRoot;
+};
+
+const toSafePath = async (targetPath: string, repoRoot: string): Promise<string> => {
+	const resolved = path.resolve(repoRoot, targetPath);
+	if (isOutsideRepo(repoRoot, resolved)) {
+		throw new Error("Invalid target path");
+	}
+	try {
+		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- resolved is validated against the repository root before realpath
+		const realResolved = await realpath(resolved);
+		if (isOutsideRepo(repoRoot, realResolved)) {
+			throw new Error("Invalid target path");
+		}
+		return realResolved;
+	} catch (error) {
+		const { code } = error as NodeJS.ErrnoException;
+		if (code !== "ENOENT") {
+			throw new Error("Invalid target path", { cause: error });
+		}
+	}
+	const parent = path.dirname(resolved);
+	// oxlint-disable-next-line security/detect-non-literal-fs-filename -- parent is derived from a path validated against the repository root
+	const realParent = await realpath(parent);
+	const realResolved = path.join(realParent, path.basename(resolved));
+	if (isOutsideRepo(repoRoot, realResolved)) {
+		throw new Error("Invalid target path");
+	}
+	return realResolved;
+};
 
 type Runner = (file: string, args: string[]) => Promise<string>;
 
@@ -15,6 +48,7 @@ type ReplyContext = {
 	number: string;
 	owner: string;
 	repo: string;
+	repoRoot: string;
 	runner: Runner;
 };
 
@@ -25,14 +59,10 @@ const stripFences = (content: string): string => {
 	}
 	const firstNewline = trimmed.indexOf("\n");
 	const lastNewline = trimmed.lastIndexOf("\n");
-	if (
-		firstNewline === NOT_FOUND_INDEX ||
-		lastNewline === NOT_FOUND_INDEX ||
-		firstNewline >= lastNewline
-	) {
+	if (firstNewline === -1 || lastNewline === -1 || firstNewline >= lastNewline) {
 		return trimmed;
 	}
-	return trimmed.slice(firstNewline + STEP, lastNewline).trim();
+	return trimmed.slice(firstNewline + 1, lastNewline).trim();
 };
 
 const postReply = async (ctx: ReplyContext, body: string): Promise<void> => {
@@ -52,7 +82,12 @@ const handleExplain = async (
 ): Promise<void> => {
 	const targetPath = mention.path as string;
 	const line = mention.line as number;
-	const prompt = `Explain what line ${line} in ${targetPath} does in this PR. The review comment is: ${ctx.commentId}`;
+	const { content, found } = await readPrFile(ctx, targetPath);
+	if (!found) {
+		return;
+	}
+	const body = mention.body as string;
+	const prompt = `Review comment: ${JSON.stringify(body)}\nTarget file: ${JSON.stringify(targetPath)}\nLine: ${line}\nFile content: ${JSON.stringify(content)}\n\nExplain what the line does in this PR. Return only the explanation.`;
 	const answer = await ctx.runner("claude", ["-p", prompt]);
 	if (!answer) {
 		process.stderr.write(EMPTY_EXPLANATION_WARNING);
@@ -65,10 +100,21 @@ const readPrFile = async (
 	ctx: ReplyContext,
 	targetPath: string,
 ): Promise<{ content: string; found: boolean }> => {
-	await ctx.runner("gh", ["pr", "checkout", ctx.number]);
+	await ctx.runner("gh", ["pr", "checkout", "-R", `${ctx.owner}/${ctx.repo}`, ctx.number]);
+	let safePath: string;
 	try {
-		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- target file is from the PR working tree, not raw user input
-		const content = await readFile(targetPath, "utf8");
+		safePath = await toSafePath(targetPath, ctx.repoRoot);
+	} catch (error) {
+		const { code } = error as NodeJS.ErrnoException;
+		if (code === "ENOENT") {
+			await postReply(ctx, MISSING_FILE_REPLY);
+			return { content: "", found: false };
+		}
+		throw error;
+	}
+	try {
+		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- path validated against the repository root
+		const content = await readFile(safePath, "utf8");
 		return { content, found: true };
 	} catch (error) {
 		const { code } = error as NodeJS.ErrnoException;
@@ -89,7 +135,8 @@ const generateFix = async (
 	}: { content: string; mention: Record<string, unknown>; targetPath: string },
 ): Promise<string> => {
 	const line = mention.line as number;
-	const prompt = `Fix the issue described in this review comment: ${ctx.commentId}\n\nCurrent content of ${targetPath} (line ${line}):\n\n${content}\n\nReturn only the corrected file content. Do not wrap it in markdown.`;
+	const body = mention.body as string;
+	const prompt = `Fix the issue described in this review comment.\nReview comment: ${JSON.stringify(body)}\nTarget file: ${JSON.stringify(targetPath)}\nLine: ${line}\nFile content: ${JSON.stringify(content)}\n\nReturn only the corrected file content. Do not wrap it in markdown.`;
 	const fixed = await ctx.runner("claude", ["-p", prompt]);
 	const stripped = stripFences(fixed);
 	if (!stripped) {
@@ -100,18 +147,24 @@ const generateFix = async (
 };
 
 const applyFix = async (ctx: ReplyContext, targetPath: string, stripped: string): Promise<void> => {
+	const safePath = await toSafePath(targetPath, ctx.repoRoot);
 	try {
-		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- writing back to the checked-out PR working tree
-		await writeFile(targetPath, stripped);
-		await ctx.runner("git", ["add", targetPath]);
+		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- path validated against the repository root
+		await writeFile(safePath, stripped);
+		await ctx.runner("git", ["add", safePath]);
 		await ctx.runner("git", ["commit", "-m", FIX_MESSAGE]);
+	} catch (error) {
+		const { message } = error as Error;
+		await postReply(ctx, `Fix failed: ${message}`);
+		throw error;
+	}
+	try {
 		await ctx.runner("git", ["push"]);
 		const shortHash = await ctx.runner("git", ["rev-parse", "--short", "HEAD"]);
 		await postReply(ctx, `Fixed in ${shortHash}.`);
 	} catch (error) {
 		const { message } = error as Error;
 		await postReply(ctx, `Fix failed: ${message}`);
-		throw error;
 	}
 };
 
@@ -123,6 +176,10 @@ const handleFix = async (mention: Record<string, unknown>, ctx: ReplyContext): P
 	}
 	const fixed = await generateFix(ctx, { content, mention, targetPath });
 	if (!fixed) {
+		return;
+	}
+	if (fixed === content) {
+		await postReply(ctx, NO_CHANGE_REPLY);
 		return;
 	}
 	await applyFix(ctx, targetPath, fixed);
@@ -144,7 +201,7 @@ const dispatchMention = async (
 	ctx: ReplyContext,
 	{ allowFix, commentBody }: { allowFix: boolean; commentBody: string },
 ): Promise<void> => {
-	if (allowFix && commentBody.toLowerCase().includes("fix")) {
+	if (allowFix && /\bfix\b/i.test(commentBody)) {
 		await handleFix(mention, ctx);
 	} else {
 		await handleExplain(mention, ctx);

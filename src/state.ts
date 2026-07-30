@@ -15,15 +15,22 @@ const readRawState = async (filePath: string): Promise<string> => {
 		if (code === "ENOENT") {
 			return "";
 		}
-		process.stderr.write(
-			`Warning: could not read state file, resetting: ${(error as Error).message}\n`,
-		);
-		return "";
+		throw error;
 	}
 };
 
 const loadStateEntries = (state: Map<string, number[]>, raw: string): void => {
-	const parsed = JSON.parse(raw) as Record<string, unknown>;
+	let parsed: Record<string, unknown>;
+	try {
+		parsed = JSON.parse(raw) as Record<string, unknown>;
+	} catch {
+		process.stderr.write("Warning: state file is corrupted, resetting.\n");
+		return;
+	}
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		process.stderr.write("Warning: state file is corrupted, resetting.\n");
+		return;
+	}
 	for (const [key, value] of Object.entries(parsed)) {
 		if (Array.isArray(value) && value.every((item) => typeof item === "number")) {
 			state.set(key, value as number[]);
@@ -42,7 +49,7 @@ const loadState = async (filePath = statePath()): Promise<Map<string, number[]>>
 };
 
 const saveState = async (state: Map<string, number[]>, filePath = statePath()): Promise<void> => {
-	const dir = path.join(filePath, "..");
+	const dir = path.dirname(filePath);
 	// oxlint-disable-next-line security/detect-non-literal-fs-filename -- state dir is internal (XDG_CONFIG_HOME/homedir), not user input
 	await mkdir(dir, { recursive: true });
 	// oxlint-disable-next-line security/detect-non-literal-fs-filename -- state path is internal (XDG_CONFIG_HOME/homedir), not user input
