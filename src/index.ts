@@ -24,22 +24,37 @@ function showHelp(): void {
 	process.stdout.write(`\n${readFileSync(HELP_PATH, "utf8")}\n`);
 }
 
+const NAME = "[A-Za-z0-9_.-]+";
+const PR_SHORTHAND = new RegExp(
+	`^(?!\\.\\.?(?:\\/|$))(${NAME})\\/(?!\\.\\.?(?:\\/|$))(${NAME})\\/pull\\/(\\d+)\\/?$`,
+);
+
 const parsePrUrl = (
 	prUrl: string,
 ): { host: string; owner: string; repo: string; number: string } => {
-	const url = new URL(prUrl);
-	const parts = url.pathname.split("/").filter(Boolean);
-	const [owner, repo, pull, number] = parts;
-	if (
-		parts.length !== EXPECTED_PATH_PARTS ||
-		pull !== "pull" ||
-		typeof owner !== "string" ||
-		typeof repo !== "string" ||
-		typeof number !== "string"
-	) {
-		throw new TypeError(`Invalid PR URL: ${prUrl}`);
+	if (/^https?:\/\//i.test(prUrl)) {
+		const url = new URL(prUrl);
+		const parts = url.pathname.split("/").filter(Boolean);
+		const [owner, repo, pull, number] = parts;
+		if (
+			parts.length !== EXPECTED_PATH_PARTS ||
+			pull !== "pull" ||
+			typeof owner !== "string" ||
+			typeof repo !== "string" ||
+			typeof number !== "string"
+		) {
+			throw new TypeError(`Invalid PR reference: ${prUrl}`);
+		}
+		return { host: url.hostname, number, owner, repo };
 	}
-	return { host: url.hostname, number, owner, repo };
+
+	const shorthand = PR_SHORTHAND.exec(prUrl);
+	if (shorthand) {
+		const [, owner, repo, number] = shorthand;
+		return { host: "github.com", number, owner, repo };
+	}
+
+	throw new TypeError(`Invalid PR reference: ${prUrl}`);
 };
 
 const fetchReviewComments = async (
@@ -149,6 +164,18 @@ const pollIteration = async (
 	}
 };
 
+const toPrUrl = ({
+	host,
+	owner,
+	repo,
+	number,
+}: {
+	host: string;
+	owner: string;
+	repo: string;
+	number: string;
+}): string => `https://${host}/${owner}/${repo}/pull/${number}`;
+
 const watch = async (
 	prUrl: string,
 	options: {
@@ -162,9 +189,10 @@ const watch = async (
 	const runner = options.runner ?? exec;
 	const interval = options.interval ?? DEFAULT_INTERVAL_SECONDS;
 	const iterations = options.iterations ?? Infinity; // Infinity polls until the process is interrupted
-	const repoRoot = await preflight(prUrl, runner);
+	const normalizedPrUrl = toPrUrl(parsePrUrl(prUrl));
+	const repoRoot = await preflight(normalizedPrUrl, runner);
 	for (let index = 0; index < iterations; index += 1) {
-		await pollIteration(prUrl, runner, {
+		await pollIteration(normalizedPrUrl, runner, {
 			allowFix: options.allowFix ?? false,
 			allowedUser: options.allowedUser,
 			index,
@@ -199,7 +227,7 @@ const runWatch = async (
 ): Promise<void> => {
 	const [prUrl, ...flagArgs] = rest;
 	if (!prUrl || typeof prUrl !== "string") {
-		throw new TypeError("PR URL is required");
+		throw new TypeError("PR reference is required");
 	}
 	const interval = parseInterval(flagArgs);
 	const allowFix = flagArgs.includes("--fix");
