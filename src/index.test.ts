@@ -271,6 +271,24 @@ describe("parsePrUrl", () => {
 		});
 	});
 
+	it("parses an uppercase HTTPS URL", () => {
+		expect(run.parsePrUrl("HTTPS://github.com/owner/repo/pull/123")).toEqual({
+			host: "github.com",
+			number: "123",
+			owner: "owner",
+			repo: "repo",
+		});
+	});
+
+	it("parses a shorthand whose owner starts with 'http'", () => {
+		expect(run.parsePrUrl("httpie/cli/pull/123")).toEqual({
+			host: "github.com",
+			number: "123",
+			owner: "httpie",
+			repo: "cli",
+		});
+	});
+
 	it("throws for a non-pull URL", () => {
 		expect(() => run.parsePrUrl("https://github.com/owner/repo/issues/123")).toThrow(TypeError);
 	});
@@ -285,6 +303,10 @@ describe("parsePrUrl", () => {
 
 	it("throws for an invalid shorthand", () => {
 		expect(() => run.parsePrUrl("owner/repo/123")).toThrow(TypeError);
+	});
+
+	it("throws for a shorthand with unsafe owner characters", () => {
+		expect(() => run.parsePrUrl("../repo/pull/123")).toThrow(TypeError);
 	});
 });
 

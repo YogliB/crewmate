@@ -24,12 +24,15 @@ function showHelp(): void {
 	process.stdout.write(`\n${readFileSync(HELP_PATH, "utf8")}\n`);
 }
 
-const PR_SHORTHAND = /^([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/;
+const NAME = "[A-Za-z0-9_.-]+";
+const PR_SHORTHAND = new RegExp(
+	`^(?!\\.\\.?(?:\\/|$))(${NAME})\\/(?!\\.\\.?(?:\\/|$))(${NAME})\\/pull\\/(\\d+)\\/?$`,
+);
 
 const parsePrUrl = (
 	prUrl: string,
 ): { host: string; owner: string; repo: string; number: string } => {
-	if (prUrl.startsWith("http")) {
+	if (/^https?:\/\//i.test(prUrl)) {
 		const url = new URL(prUrl);
 		const parts = url.pathname.split("/").filter(Boolean);
 		const [owner, repo, pull, number] = parts;
@@ -161,6 +164,18 @@ const pollIteration = async (
 	}
 };
 
+const toPrUrl = ({
+	host,
+	owner,
+	repo,
+	number,
+}: {
+	host: string;
+	owner: string;
+	repo: string;
+	number: string;
+}): string => `https://${host}/${owner}/${repo}/pull/${number}`;
+
 const watch = async (
 	prUrl: string,
 	options: {
@@ -174,9 +189,10 @@ const watch = async (
 	const runner = options.runner ?? exec;
 	const interval = options.interval ?? DEFAULT_INTERVAL_SECONDS;
 	const iterations = options.iterations ?? Infinity; // Infinity polls until the process is interrupted
-	const repoRoot = await preflight(prUrl, runner);
+	const normalizedPrUrl = toPrUrl(parsePrUrl(prUrl));
+	const repoRoot = await preflight(normalizedPrUrl, runner);
 	for (let index = 0; index < iterations; index += 1) {
-		await pollIteration(prUrl, runner, {
+		await pollIteration(normalizedPrUrl, runner, {
 			allowFix: options.allowFix ?? false,
 			allowedUser: options.allowedUser,
 			index,
