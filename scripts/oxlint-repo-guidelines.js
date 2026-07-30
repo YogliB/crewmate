@@ -13,6 +13,7 @@ const allowedDocs = new Set([
 	"docs/CONTRIBUTING.md",
 	"docs/SECURITY.md",
 	"docs/TROUBLESHOOTING.md",
+	".github/pull_request_template.md",
 ]);
 const docsAnchorFile = path.resolve("src/index.ts");
 let docViolations;
