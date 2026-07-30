@@ -5,7 +5,7 @@
 	"keywords": [
 		"cli"
 	],
-	"homepage": "https://github.com/YogliB/pickup#readme",
+	"homepage": "https://yoglib.github.io/pickup/",
 	"bugs": {
 		"url": "https://github.com/YogliB/pickup/issues"
 	},
@@ -19,7 +19,7 @@
 		"pickup": "dist/bin.js"
 	},
 	"files": [
-		"assets/help.md",
+		"assets",
 		"dist",
 		"LICENSE.md",
 		"README.md"
