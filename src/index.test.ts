@@ -10,76 +10,23 @@ const startsWithRepos = (value: string | undefined): boolean =>
 	typeof value === "string" && value.startsWith("repos/");
 
 const PR_URL = "https://github.com/owner/repo/pull/123";
-
-const makeExplainRunner = (replies: { claude?: string } = {}): Runner =>
-	vi.fn((file: string, args: string[]) => {
-		if (file === "gh" && args.at(0) === "api" && startsWithRepos(args.at(1))) {
-			return Promise.resolve(
-				JSON.stringify([
-					{ body: "@pickup hello", id: 1, line: 5, path: "src/index.ts", user: { login: "alice" } },
-				]),
-			);
-		}
-		if (file === "gh" && args.at(0) === "pr") {
-			return Promise.resolve("");
-		}
-		if (file === "gh" && args.at(0) === "--version") {
-			return Promise.resolve("gh version");
-		}
-		if (file === "gh" && args.at(0) === "auth") {
-			return Promise.resolve("");
-		}
-		if (file === "claude") {
-			return Promise.resolve(replies.claude ?? "");
-		}
-		if (file === "git" && args.at(0) === "rev-parse") {
-			return Promise.resolve("abc123");
-		}
-		if (file === "git") {
-			return Promise.resolve("");
-		}
-		return Promise.resolve("");
-	}) as unknown as Runner;
-
-const makeFixRunner = (
-	targetPath: string,
-	options: { failOn?: string; fixed?: string } = {},
-): Runner =>
-	vi.fn((file: string, args: string[]) => {
-		if (
-			options.failOn &&
-			file === options.failOn.split(" ").at(0) &&
-			JSON.stringify(args).includes(options.failOn.split(" ").slice(1).join(" "))
-		) {
-			return Promise.reject(new Error(`${options.failOn} failed`));
-		}
-		if (file === "gh" && args.at(0) === "api" && startsWithRepos(args.at(1))) {
-			return Promise.resolve(
-				JSON.stringify([
-					{ body: "@pickup fix", id: 1, line: 1, path: targetPath, user: { login: "alice" } },
-				]),
-			);
-		}
-		if (file === "gh" && args.at(0) === "pr") {
-			return Promise.resolve("");
-		}
-		if (file === "claude") {
-			return Promise.resolve(options.fixed ?? "```\nnew\n```");
-		}
-		if (file === "git" && args.at(0) === "rev-parse") {
-			return Promise.resolve("abc123");
-		}
-		if (file === "git") {
-			return Promise.resolve("");
-		}
-		if (file === "gh" && args.at(0) === "--version") {
-			return Promise.resolve("");
-		}
-		if (file === "gh" && args.at(0) === "auth") {
-			return Promise.resolve("");
-		}
-		return Promise.resolve("");
-	}) as unknown as Runner;
+const FIRST_INDEX = 0;
+const SECOND_INDEX = 1;
+const FIRST_ID = 1;
+const SECOND_ID = 2;
+const THIRD_ID = 3;
+const FIRST_LINE = 1;
+const EXPLANATION_LINE = 5;
+const INVALID_LOGIN = 123;
+const NO_ITERATIONS = 0;
+const FIRST_ITERATION = 1;
+const TWO_ITERATIONS = 2;
+const NO_INTERVAL = 0;
+const NO_CALLS = 0;
+const FIRST_CALL = 1;
+const TWO_CALLS = 2;
+const NO_EXIT_CODE = 0;
+const ERROR_EXIT_CODE = 1;
 
 const countCalls = (
 	runner: Runner,
@@ -90,18 +37,110 @@ const countCalls = (
 		([calledFile, args]) => calledFile === file && argMatcher(args),
 	).length;
 
-describe("run", () => {
-	let tempDir = "";
+const resolveGhExplain = (args: string[]): Promise<string> => {
+	const [command, subcommand] = args;
+	if (command === "api" && startsWithRepos(subcommand)) {
+		return Promise.resolve(
+			JSON.stringify([
+				{
+					body: "@pickup hello",
+					id: FIRST_ID,
+					line: EXPLANATION_LINE,
+					path: "src/index.ts",
+					user: { login: "alice" },
+				},
+			]),
+		);
+	}
+	return Promise.resolve("");
+};
 
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-	});
+const resolveGit = (args: string[]): Promise<string> => {
+	const [command] = args;
+	if (command === "rev-parse") {
+		return Promise.resolve("abc123");
+	}
+	return Promise.resolve("");
+};
 
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-	});
+const resolveExplain = (
+	file: string,
+	args: string[],
+	replies: { claude?: string },
+): Promise<string> => {
+	if (file === "claude") {
+		return Promise.resolve(replies.claude ?? "");
+	}
+	if (file === "git") {
+		return resolveGit(args);
+	}
+	if (file === "gh") {
+		return resolveGhExplain(args);
+	}
+	return Promise.resolve("");
+};
 
+const makeExplainRunner = (replies: { claude?: string } = {}): Runner =>
+	vi.fn((file: string, args: string[]) => resolveExplain(file, args, replies)) as unknown as Runner;
+
+const resolveGhFix = (args: string[], targetPath: string): Promise<string> => {
+	const [command, subcommand] = args;
+	if (command === "api" && startsWithRepos(subcommand)) {
+		return Promise.resolve(
+			JSON.stringify([
+				{
+					body: "@pickup fix",
+					id: FIRST_ID,
+					line: FIRST_LINE,
+					path: targetPath,
+					user: { login: "alice" },
+				},
+			]),
+		);
+	}
+	if (command === "pr") {
+		return Promise.resolve("");
+	}
+	return Promise.resolve("");
+};
+
+const willFail = (file: string, args: string[], failOn: string | undefined): boolean => {
+	if (!failOn) {
+		return false;
+	}
+	const [command, ...rest] = failOn.split(" ");
+	return file === command && JSON.stringify(args).includes(rest.join(" "));
+};
+
+const resolveFix = (
+	file: string,
+	args: string[],
+	request: { failOn?: string; fixed?: string; targetPath: string },
+): Promise<string> => {
+	if (willFail(file, args, request.failOn)) {
+		return Promise.reject(new Error(`${request.failOn} failed`));
+	}
+	if (file === "gh") {
+		return resolveGhFix(args, request.targetPath);
+	}
+	if (file === "claude") {
+		return Promise.resolve(request.fixed ?? "```\nnew\n```");
+	}
+	if (file === "git") {
+		return resolveGit(args);
+	}
+	return Promise.resolve("");
+};
+
+const makeFixRunner = (
+	targetPath: string,
+	options: { failOn?: string; fixed?: string } = {},
+): Runner =>
+	vi.fn((file: string, args: string[]) =>
+		resolveFix(file, args, { targetPath, ...options }),
+	) as unknown as Runner;
+
+describe("run default", () => {
 	it("logs a greeting with the provided arguments", async () => {
 		const log = vi.spyOn(console, "log").mockImplementation(vi.fn());
 		await run(["--pick", "up"]);
@@ -116,30 +155,59 @@ describe("run", () => {
 		log.mockRestore();
 	});
 
-	it("exits with an error when watch is missing a PR URL", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = 0;
-		await run(["watch"]);
-		expect(process.exitCode).toBe(1);
-		process.exitCode = previousExitCode;
-	});
-
 	it("runs the CLI entry point", async () => {
 		const log = vi.spyOn(console, "log").mockImplementation(vi.fn());
 		await import("./bin.js");
 		expect(log).toHaveBeenCalledWith("Hello from pickup!", expect.any(Array));
 		log.mockRestore();
 	});
+});
+
+describe("run watch missing", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
+	});
+
+	it("exits with an error when watch is missing a PR URL", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		await run(["watch"]);
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+});
+
+describe("run watch flags", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
+	});
 
 	it("handles watch command with flags", async () => {
 		const runner = makeExplainRunner({ claude: "It does something." });
-		await run(["watch", PR_URL, "--interval", "5", "--user", "alice"], { iterations: 1, runner });
-		expect(countCalls(runner, "claude", (args) => args.at(0) === "-p")).toBe(1);
+		await run(["watch", PR_URL, "--interval", "5", "--user", "alice"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 	});
 
 	it("uses default interval when the flag has no value", async () => {
 		const runner = makeExplainRunner();
-		await run(["watch", PR_URL, "--interval"], { iterations: 1, runner });
+		await run(["watch", PR_URL, "--interval"], { iterations: FIRST_ITERATION, runner });
 		expect(runner).toHaveBeenCalled();
 	});
 
@@ -150,8 +218,8 @@ describe("run", () => {
 
 	it("uses the default runner when none is provided", async () => {
 		const previousExitCode = process.exitCode;
-		process.exitCode = 0;
-		await expect(run(["watch", PR_URL], { iterations: 0 })).resolves.toBeUndefined();
+		process.exitCode = NO_EXIT_CODE;
+		await expect(run(["watch", PR_URL], { iterations: NO_ITERATIONS })).resolves.toBeUndefined();
 		process.exitCode = previousExitCode;
 	});
 });
@@ -204,7 +272,7 @@ describe("findFlag", () => {
 	});
 });
 
-describe("state", () => {
+describe("state load", () => {
 	let tempDir = "";
 	const statePath = (): string => path.join(tempDir, "state.json");
 
@@ -218,21 +286,33 @@ describe("state", () => {
 
 	it("loads an empty state when the file is missing", async () => {
 		const state = await run.loadState(statePath());
-		expect(state.size).toBe(0);
+		expect(state.size).toBe(NO_CALLS);
 	});
 
 	it("loads a saved state", async () => {
-		const state = new Map<string, number[]>([[PR_URL, [1, 2]]]);
+		const state = new Map<string, number[]>([[PR_URL, [FIRST_ID, SECOND_ID]]]);
 		await run.saveState(state, statePath());
 		const loaded = await run.loadState(statePath());
-		expect(loaded.get(PR_URL)).toEqual([1, 2]);
+		expect(loaded.get(PR_URL)).toEqual([FIRST_ID, SECOND_ID]);
 	});
 
 	it("ignores malformed values", async () => {
 		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- test temp file
-		await writeFile(statePath(), JSON.stringify({ [PR_URL]: [1, "two", 3] }));
+		await writeFile(statePath(), JSON.stringify({ [PR_URL]: [FIRST_ID, "two", THIRD_ID] }));
 		const loaded = await run.loadState(statePath());
 		expect(loaded.get(PR_URL)).toBeUndefined();
+	});
+});
+
+describe("state errors", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
 	});
 
 	it("warns when the state path is a directory", async () => {
@@ -241,7 +321,7 @@ describe("state", () => {
 		await mkdir(dir, { recursive: true });
 		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
 		const state = await run.loadState(dir);
-		expect(state.size).toBe(0);
+		expect(state.size).toBe(NO_CALLS);
 		expect(warn).toHaveBeenCalled();
 		warn.mockRestore();
 	});
@@ -257,22 +337,24 @@ describe("state", () => {
 describe("findNewMention", () => {
 	it("returns the newest unseen mention", () => {
 		const comments = [
-			{ body: "@pickup hello", id: 1 },
-			{ body: "@pickup fix", id: 2 },
+			{ body: "@pickup hello", id: FIRST_ID },
+			{ body: "@pickup fix", id: SECOND_ID },
 		];
 		const mention = run.findNewMention(comments, []);
 		expect(mention).toBeDefined();
 		if (mention) {
-			expect(mention.id).toBe(2);
+			expect(mention.id).toBe(SECOND_ID);
 		}
 	});
 
 	it("ignores already seen mentions", () => {
-		expect(run.findNewMention([{ body: "@pickup hello", id: 1 }], [1])).toBeUndefined();
+		expect(
+			run.findNewMention([{ body: "@pickup hello", id: FIRST_ID }], [FIRST_ID]),
+		).toBeUndefined();
 	});
 
 	it("ignores comments without @pickup", () => {
-		expect(run.findNewMention([{ body: "hello", id: 1 }], [])).toBeUndefined();
+		expect(run.findNewMention([{ body: "hello", id: FIRST_ID }], [])).toBeUndefined();
 	});
 
 	it("ignores comments with non-numeric ids", () => {
@@ -280,7 +362,7 @@ describe("findNewMention", () => {
 	});
 
 	it("ignores comments without a body", () => {
-		expect(run.findNewMention([{ id: 1 }], [])).toBeUndefined();
+		expect(run.findNewMention([{ id: FIRST_ID }], [])).toBeUndefined();
 	});
 });
 
@@ -298,7 +380,7 @@ describe("stripFences", () => {
 	});
 });
 
-describe("watch", () => {
+describe("watch explain", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
@@ -312,44 +394,54 @@ describe("watch", () => {
 
 	it("polls once and replies to a mention", async () => {
 		const runner = makeExplainRunner({ claude: "It does something." });
-		await run.watch(PR_URL, { interval: 0, iterations: 1, runner });
-		expect(countCalls(runner, "claude", (args) => args.at(0) === "-p")).toBe(1);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(1);
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
 	});
 
 	it("skips mentions from other users", async () => {
 		const runner = makeExplainRunner({ claude: "It does something." });
-		await run.watch(PR_URL, { allowedUser: "bob", interval: 0, iterations: 1, runner });
-		expect(countCalls(runner, "claude", (args) => args.at(0) === "-p")).toBe(0);
-	});
-
-	it("sleeps between iterations", async () => {
-		const runner = makeExplainRunner({ claude: "It does something." });
-		await run.watch(PR_URL, { interval: 0, iterations: 2, runner });
-		expect(
-			countCalls(runner, "gh", (args) => args.at(0) === "api" && startsWithRepos(args.at(1))),
-		).toBe(2);
+		await run.watch(PR_URL, {
+			allowedUser: "bob",
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
 	});
 
 	it("warns when claude returns an empty explanation", async () => {
 		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
 		const runner = makeExplainRunner({ claude: "" });
-		await run.watch(PR_URL, { interval: 0, iterations: 1, runner });
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 		expect(warn).toHaveBeenCalled();
 		warn.mockRestore();
+	});
+});
+
+describe("watch users missing", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
 	});
 
 	it("handles comments without a user object", async () => {
 		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args.at(0) === "api" && startsWithRepos(args.at(1))) {
+			const [command, subcommand] = args;
+			if (file === "gh" && command === "api" && startsWithRepos(subcommand)) {
 				return Promise.resolve(
-					JSON.stringify([{ body: "@pickup hello", id: 1, line: 1, path: "src/index.ts" }]),
+					JSON.stringify([
+						{ body: "@pickup hello", id: FIRST_ID, line: FIRST_LINE, path: "src/index.ts" },
+					]),
 				);
 			}
-			if (file === "gh" && args.at(0) === "--version") {
-				return Promise.resolve("");
-			}
-			if (file === "gh" && args.at(0) === "auth") {
+			if (file === "gh" && (command === "--version" || command === "auth")) {
 				return Promise.resolve("");
 			}
 			if (file === "claude") {
@@ -357,23 +449,40 @@ describe("watch", () => {
 			}
 			return Promise.resolve("");
 		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: 0, iterations: 1, runner });
-		expect(countCalls(runner, "claude", (args) => args.at(0) === "-p")).toBe(1);
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+	});
+});
+
+describe("watch users invalid", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
 	});
 
 	it("handles comments with an invalid login", async () => {
 		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args.at(0) === "api" && startsWithRepos(args.at(1))) {
+			const [command, subcommand] = args;
+			if (file === "gh" && command === "api" && startsWithRepos(subcommand)) {
 				return Promise.resolve(
 					JSON.stringify([
-						{ body: "@pickup hello", id: 1, line: 1, path: "src/index.ts", user: { login: 123 } },
+						{
+							body: "@pickup hello",
+							id: FIRST_ID,
+							line: FIRST_LINE,
+							path: "src/index.ts",
+							user: { login: INVALID_LOGIN },
+						},
 					]),
 				);
 			}
-			if (file === "gh" && args.at(0) === "--version") {
-				return Promise.resolve("");
-			}
-			if (file === "gh" && args.at(0) === "auth") {
+			if (file === "gh" && (command === "--version" || command === "auth")) {
 				return Promise.resolve("");
 			}
 			if (file === "claude") {
@@ -381,21 +490,32 @@ describe("watch", () => {
 			}
 			return Promise.resolve("");
 		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: 0, iterations: 1, runner });
-		expect(countCalls(runner, "claude", (args) => args.at(0) === "-p")).toBe(1);
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+	});
+});
+
+describe("watch users null", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
 	});
 
 	it("handles comments with a null user", async () => {
 		const nullUser = JSON.parse('{"user":null}');
-		const base = { body: "@pickup hello", id: 1, line: 1, path: "src/index.ts" };
+		const base = { body: "@pickup hello", id: FIRST_ID, line: FIRST_LINE, path: "src/index.ts" };
 		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args.at(0) === "api" && startsWithRepos(args.at(1))) {
+			const [command, subcommand] = args;
+			if (file === "gh" && command === "api" && startsWithRepos(subcommand)) {
 				return Promise.resolve(JSON.stringify([Object.assign(base, nullUser)]));
 			}
-			if (file === "gh" && args.at(0) === "--version") {
-				return Promise.resolve("");
-			}
-			if (file === "gh" && args.at(0) === "auth") {
+			if (file === "gh" && (command === "--version" || command === "auth")) {
 				return Promise.resolve("");
 			}
 			if (file === "claude") {
@@ -403,8 +523,46 @@ describe("watch", () => {
 			}
 			return Promise.resolve("");
 		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: 0, iterations: 1, runner });
-		expect(countCalls(runner, "claude", (args) => args.at(0) === "-p")).toBe(1);
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+	});
+});
+
+describe("watch iterations", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
+	});
+
+	it("sleeps between iterations", async () => {
+		const runner = makeExplainRunner({ claude: "It does something." });
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: TWO_ITERATIONS, runner });
+		expect(
+			countCalls(
+				runner,
+				"gh",
+				(args) => args.at(FIRST_INDEX) === "api" && startsWithRepos(args.at(SECOND_INDEX)),
+			),
+		).toBe(TWO_CALLS);
+	});
+});
+
+describe("watch fix success", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
 	});
 
 	it("can fix a file when requested", async () => {
@@ -416,17 +574,53 @@ describe("watch", () => {
 		await writeFile(targetPath, "old");
 
 		const runner = makeFixRunner(targetPath);
-		await run.watch(PR_URL, { allowFix: true, interval: 0, iterations: 1, runner });
+		await run.watch(PR_URL, {
+			allowFix: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
 
 		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- test temp file
 		const content = await readFile(targetPath, "utf8");
 		expect(content).toBe("new");
 	});
+});
+
+describe("watch fix missing", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
+	});
 
 	it("reports when the file to fix is missing", async () => {
 		const runner = makeFixRunner("/missing/path.ts");
-		await run.watch(PR_URL, { allowFix: true, interval: 0, iterations: 1, runner });
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(1);
+		await run.watch(PR_URL, {
+			allowFix: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+	});
+});
+
+describe("watch fix empty", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
 	});
 
 	it("reports when claude returns an empty fix", async () => {
@@ -438,14 +632,37 @@ describe("watch", () => {
 		await writeFile(targetPath, "old");
 
 		const runner = makeFixRunner(targetPath, { fixed: "```\n\n```" });
-		await run.watch(PR_URL, { allowFix: true, interval: 0, iterations: 1, runner });
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(1);
+		await run.watch(PR_URL, {
+			allowFix: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+	});
+});
+
+describe("watch fix errors", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
 	});
 
 	it("throws when the file cannot be read", async () => {
 		const runner = makeFixRunner(tempDir);
 		await expect(
-			run.watch(PR_URL, { allowFix: true, interval: 0, iterations: 1, runner }),
+			run.watch(PR_URL, {
+				allowFix: true,
+				interval: NO_INTERVAL,
+				iterations: FIRST_ITERATION,
+				runner,
+			}),
 		).rejects.toThrow();
 	});
 
@@ -459,7 +676,12 @@ describe("watch", () => {
 
 		const runner = makeFixRunner(targetPath, { failOn: "git push", fixed: "```\nnew\n```" });
 		await expect(
-			run.watch(PR_URL, { allowFix: true, interval: 0, iterations: 1, runner }),
+			run.watch(PR_URL, {
+				allowFix: true,
+				interval: NO_INTERVAL,
+				iterations: FIRST_ITERATION,
+				runner,
+			}),
 		).rejects.toThrow("git push failed");
 	});
 });
