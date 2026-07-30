@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import run from "./index.js";
+import { PICKUP_PREFIX } from "./fix.js";
 import { tmpdir } from "node:os";
 
 type Runner = (file: string, args: string[]) => Promise<string>;
@@ -518,6 +519,83 @@ describe("findNewMention", () => {
 		expect(mention).toBeDefined();
 		expect(mention?.id).toBe(FIRST_ID);
 	});
+
+	it("skips a fresh install mention that already has a pickup reply", () => {
+		const mention = run.findNewMention(
+			[
+				{
+					body: "@pickup hello",
+					id: FIRST_ID,
+					in_reply_to_id: null,
+					line: FIRST_LINE,
+					path: "src/index.ts",
+				},
+				{
+					body: `${PICKUP_PREFIX} done`,
+					id: SECOND_ID,
+					in_reply_to_id: FIRST_ID,
+					line: FIRST_LINE,
+					path: "src/index.ts",
+				},
+			],
+			[],
+			undefined,
+			true,
+		);
+		expect(mention).toBeUndefined();
+	});
+
+	it("does not skip a fresh install mention with a non-pickup reply", () => {
+		const mention = run.findNewMention(
+			[
+				{
+					body: "@pickup hello",
+					id: FIRST_ID,
+					in_reply_to_id: null,
+					line: FIRST_LINE,
+					path: "src/index.ts",
+				},
+				{
+					body: "thanks",
+					id: SECOND_ID,
+					in_reply_to_id: FIRST_ID,
+					line: FIRST_LINE,
+					path: "src/index.ts",
+				},
+			],
+			[],
+			undefined,
+			true,
+		);
+		expect(mention).toBeDefined();
+		expect(mention?.id).toBe(FIRST_ID);
+	});
+
+	it("does not use the pickup reply fallback when not fresh", () => {
+		const mention = run.findNewMention(
+			[
+				{
+					body: "@pickup hello",
+					id: FIRST_ID,
+					in_reply_to_id: null,
+					line: FIRST_LINE,
+					path: "src/index.ts",
+				},
+				{
+					body: `${PICKUP_PREFIX} done`,
+					id: SECOND_ID,
+					in_reply_to_id: FIRST_ID,
+					line: FIRST_LINE,
+					path: "src/index.ts",
+				},
+			],
+			[],
+			undefined,
+			false,
+		);
+		expect(mention).toBeDefined();
+		expect(mention?.id).toBe(FIRST_ID);
+	});
 });
 
 describe("stripFences", () => {
@@ -751,6 +829,49 @@ describe("watch iterations", () => {
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: TWO_ITERATIONS, runner });
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+	});
+
+	it("skips a fresh install mention that already has a pickup reply", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			const [command] = args;
+			if (file === "gh" && command === "api" && args.some((arg) => startsWithRepos(arg))) {
+				return Promise.resolve(
+					JSON.stringify([
+						[
+							{
+								body: "@pickup hello",
+								id: FIRST_ID,
+								in_reply_to_id: null,
+								line: FIRST_LINE,
+								path: "src/index.ts",
+								user: { login: "alice" },
+							},
+							{
+								body: `${PICKUP_PREFIX} done`,
+								id: SECOND_ID,
+								in_reply_to_id: FIRST_ID,
+								line: FIRST_LINE,
+								path: "src/index.ts",
+								user: { login: "pickup" },
+							},
+						],
+					]),
+				);
+			}
+			if (file === "gh" && (command === "--version" || command === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
 	});
 });
 

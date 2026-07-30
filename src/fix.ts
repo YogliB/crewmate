@@ -210,4 +210,4 @@ const dispatchMention = async (
 	}
 };
 
-export { type Runner, stripFences, getLogin, dispatchMention };
+export { PICKUP_PREFIX, type Runner, stripFences, getLogin, dispatchMention };

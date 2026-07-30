@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { setTimeout } from "node:timers/promises";
 import process from "node:process";
-import { dispatchMention, getLogin, type Runner, stripFences } from "./fix.js";
+import { dispatchMention, getLogin, PICKUP_PREFIX, type Runner, stripFences } from "./fix.js";
 import { loadState, saveState, statePath } from "./state.js";
 
 const CLI_ARGV_OFFSET = 2;
@@ -53,8 +53,21 @@ const findNewMention = (
 	comments: Record<string, unknown>[],
 	seenIds: number[],
 	allowedUser?: string,
+	isFresh = false,
 ): Record<string, unknown> | undefined => {
 	const seen = new Set(seenIds);
+	const pickupRepliedIds = isFresh
+		? new Set(
+				comments
+					.filter(
+						(comment) =>
+							typeof comment.body === "string" &&
+							comment.body.startsWith(PICKUP_PREFIX) &&
+							typeof comment.in_reply_to_id === "number",
+					)
+					.map((comment) => comment.in_reply_to_id as number),
+			)
+		: new Set<number>();
 	const [newest] = comments
 		.filter(
 			(comment) =>
@@ -65,6 +78,7 @@ const findNewMention = (
 				typeof comment.path === "string" &&
 				typeof comment.line === "number" &&
 				!seen.has(comment.id) &&
+				!pickupRepliedIds.has(comment.id) &&
 				(allowedUser === undefined || getLogin(comment.user) === allowedUser),
 		)
 		.toSorted((first, second) => (second.id as number) - (first.id as number));
@@ -107,7 +121,12 @@ const pollIteration = async (
 ): Promise<void> => {
 	const state = await loadState();
 	const comments = await fetchReviewComments(prUrl, runner);
-	const mention = findNewMention(comments, state.get(prUrl) ?? [], iteration.allowedUser);
+	const mention = findNewMention(
+		comments,
+		state.get(prUrl) ?? [],
+		iteration.allowedUser,
+		state.size === 0,
+	);
 	if (mention) {
 		// ponytail: persist seen ID before acting so an error does not reprocess the same mention
 		state.set(prUrl, [...(state.get(prUrl) ?? []), mention.id as number]);
