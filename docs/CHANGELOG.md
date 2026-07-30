@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Prefix all pickup replies with `🛻 pickup:` so users can identify the bot without a self-mention.
 - Added `pickup watch` to poll a PR for review comments mentioning `@pickup`, reply with explanations, and optionally generate, commit, push, and reply with a fix.
 - Added state persistence for seen comment IDs in `$XDG_CONFIG_HOME/pickup/state.json`.
 - Initial bare-metal CLI scaffold.
