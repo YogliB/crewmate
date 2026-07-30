@@ -145,12 +145,17 @@
 							.catch(() => {});
 					},
 					copy(text) {
-						navigator.clipboard.writeText(text).then(() => {
-							this.copied = true;
-							setTimeout(() => {
+						navigator.clipboard
+							.writeText(text)
+							.then(() => {
+								this.copied = true;
+								setTimeout(() => {
+									this.copied = false;
+								}, 1500);
+							})
+							.catch(() => {
 								this.copied = false;
-							}, 1500);
-						});
+							});
 					},
 				}));
 			});
