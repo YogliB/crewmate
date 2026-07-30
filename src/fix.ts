@@ -2,8 +2,9 @@ import { readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const FENCE_MARKER = "```";
-const FIX_MESSAGE = "fix: address @pickup comment";
+const FIX_MESSAGE = "fix: address pickup comment";
 const MISSING_FILE_REPLY = "Could not find the file.";
+const PICKUP_PREFIX = "🛻 pickup:";
 const NO_CHANGE_REPLY = "No changes needed.";
 const NO_FIX_REPLY = "Could not generate a fix.";
 const EMPTY_EXPLANATION_WARNING = "Warning: claude returned empty explanation\n";
@@ -66,13 +67,14 @@ const stripFences = (content: string): string => {
 };
 
 const postReply = async (ctx: ReplyContext, body: string): Promise<void> => {
+	const prefixedBody = `${PICKUP_PREFIX} ${body}`;
 	await ctx.runner("gh", [
 		"api",
 		"--method",
 		"POST",
 		`repos/${ctx.owner}/${ctx.repo}/pulls/${ctx.number}/comments/${ctx.commentId}/replies`,
 		"-f",
-		`body=${body}`,
+		`body=${prefixedBody}`,
 	]);
 };
 
