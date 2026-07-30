@@ -4,6 +4,7 @@ import path from "node:path";
 const ignoredDocDirs = new Set(["node_modules", ".git", "dist", "coverage", ".devin", ".agents"]);
 const allowedDocs = new Set([
 	"AGENTS.md",
+	"assets/help.md",
 	"LICENSE.md",
 	"README.md",
 	"docs/ARCHITECTURE.md",

@@ -1143,3 +1143,19 @@ describe("watch fix errors", () => {
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
 	});
 });
+
+describe("run help", () => {
+	it("prints help when --help is requested", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		await run(["--help"]);
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("Usage"));
+		write.mockRestore();
+	});
+
+	it("prints help when -h is requested", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		await run(["-h"]);
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("Usage"));
+		write.mockRestore();
+	});
+});
