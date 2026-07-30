@@ -1,7 +1,7 @@
 {
 	"name": "pickup",
 	"version": "0.0.1",
-	"description": "A new CLI",
+	"description": "A CLI that watches GitHub PR review comments for @pickup mentions and replies with explanations or generated fixes.",
 	"keywords": [
 		"cli"
 	],

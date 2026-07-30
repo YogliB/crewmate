@@ -2,5 +2,7 @@
 
 ## Unreleased
 
+- Added `pickup watch` to poll a PR for review comments mentioning `@pickup`, reply with explanations, and optionally generate, commit, push, and reply with a fix.
+- Added state persistence for seen comment IDs in `$XDG_CONFIG_HOME/pickup/state.json`.
 - Initial bare-metal CLI scaffold.
 - Added `docs/TROUBLESHOOTING.md` covering common build, lint, and format problems.

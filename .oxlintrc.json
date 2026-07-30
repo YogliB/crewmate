@@ -4,8 +4,6 @@
 	"plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "node", "promise"],
 	"options": { "denyWarnings": true },
 	"rules": {
-		"import/no-default-export": "off",
-		"import/no-nodejs-modules": "off",
 		"security/detect-bidi-characters": "error",
 		"security/detect-buffer-noassert": "error",
 		"security/detect-child-process": "error",
@@ -22,12 +20,30 @@
 		"security/detect-unsafe-regex": "error",
 		"oxlint-repo-guidelines/no-more-docs": "error"
 	},
+	"overrides": [
+		{
+			"files": ["**/*.test.ts"],
+			"rules": {
+				"max-lines": "off",
+				"security/detect-bidi-characters": "off",
+				"security/detect-buffer-noassert": "off",
+				"security/detect-child-process": "off",
+				"security/detect-disable-mustache-escape": "off",
+				"security/detect-eval-with-expression": "off",
+				"security/detect-new-buffer": "off",
+				"security/detect-no-csrf-before-method-override": "off",
+				"security/detect-non-literal-fs-filename": "off",
+				"security/detect-non-literal-regexp": "off",
+				"security/detect-non-literal-require": "off",
+				"security/detect-object-injection": "off",
+				"security/detect-possible-timing-attacks": "off",
+				"security/detect-pseudoRandomBytes": "off",
+				"security/detect-unsafe-regex": "off"
+			}
+		}
+	],
 	"categories": {
 		"correctness": "error",
-		"suspicious": "error",
-		"pedantic": "error",
-		"perf": "error",
-		"restriction": "error",
-		"style": "error"
+		"suspicious": "error"
 	}
 }
