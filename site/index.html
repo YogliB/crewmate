@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en" x-data="site" x-bind:data-theme="dark ? 'dark' : 'light'">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta
+			name="description"
+			content="pickup watches GitHub PR review comments for @pickup mentions and replies with explanations or generated fixes."
+		/>
+		<title>pickup</title>
+		<script>
+			document.documentElement.setAttribute(
+				"data-theme",
+				window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+			);
+		</script>
+		<link
+			rel="stylesheet"
+			href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.1.1/css/pico.min.css"
+			integrity="sha384-L1dWfspMTHU/ApYnFiMz2QID/PlP1xCW9visvBdbEkOLkSSWsP6ZJWhPw6apiXxU"
+			crossorigin="anonymous"
+		/>
+		<script
+			defer
+			src="https://cdn.jsdelivr.net/npm/alpinejs@3.15.12/dist/cdn.min.js"
+			integrity="sha384-pb6hrQvo4s23cEUFtj0CZkzGE3jyK3pj26RIupXXxhSrrcUA/Cn0lZgcCrGH0t6L"
+			crossorigin="anonymous"
+		></script>
+		<script
+			src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"
+			integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"
+			crossorigin="anonymous"
+		></script>
+		<style>
+			[x-cloak] {
+				display: none !important;
+			}
+			.logo {
+				max-width: 10rem;
+			}
+			.hero {
+				text-align: center;
+				padding: 4rem 0;
+			}
+		</style>
+	</head>
+	<body>
+		<nav class="container-fluid">
+			<ul>
+				<li>
+					<a href="./" class="contrast"><strong>pickup</strong></a>
+				</li>
+			</ul>
+			<ul>
+				<li>
+					<button
+						type="button"
+						class="outline contrast"
+						x-on:click="dark = !dark"
+						x-text="dark ? '☀' : '☾'"
+						aria-label="Toggle theme"
+					></button>
+				</li>
+				<li>
+					<a href="https://github.com/YogliB/pickup" target="_blank" rel="noopener noreferrer"
+						>GitHub</a
+					>
+				</li>
+			</ul>
+		</nav>
+
+		<header class="container hero">
+			<hgroup>
+				<h1>pickup</h1>
+				<p>
+					Watch GitHub PR review comments for <code>@pickup</code> mentions and reply with
+					explanations or generated fixes.
+				</p>
+			</hgroup>
+			<img x-cloak x-show="showLogo" src="logo.png" alt="pickup mascot" class="logo" />
+		</header>
+
+		<main class="container">
+			<section id="usage">
+				<h2>Usage</h2>
+				<figure>
+					<pre><code>pickup watch &lt;pr-url-or-shorthand&gt; [--interval &lt;seconds&gt;] [--fix] [--user &lt;login&gt;]</code></pre>
+				</figure>
+				<p>
+					PR references can be a full URL or shorthand like
+					<code>owner/repo/pull/4</code>.
+				</p>
+			</section>
+
+			<section id="features">
+				<h2>Features</h2>
+				<p>Load the feature list with htmx.</p>
+				<button
+					type="button"
+					class="secondary"
+					hx-get="fragments/features.html"
+					hx-target="#feature-list"
+				>
+					Load features
+				</button>
+				<div id="feature-list" style="margin-top: 1rem"></div>
+			</section>
+
+			<section id="try">
+				<h2>Try it</h2>
+				<div class="grid">
+					<pre style="margin: 0"><code id="try-cmd">pickup watch owner/repo/pull/4</code></pre>
+					<button
+						type="button"
+						class="secondary"
+						x-on:click="copy('pickup watch owner/repo/pull/4')"
+						x-text="copied ? 'Copied!' : 'Copy'"
+					></button>
+				</div>
+			</section>
+		</main>
+
+		<footer class="container" style="text-align: center; padding: 2rem 0">
+			<small>
+				Built with
+				<a href="https://alpinejs.dev" target="_blank" rel="noopener">Alpine.js</a>,
+				<a href="https://htmx.org" target="_blank" rel="noopener">htmx</a>, and
+				<a href="https://picocss.com" target="_blank" rel="noopener">Pico.css</a>. Source on
+				<a href="https://github.com/YogliB/pickup" target="_blank" rel="noopener">GitHub</a>.
+			</small>
+		</footer>
+
+		<script>
+			document.addEventListener("alpine:init", () => {
+				Alpine.data("site", () => ({
+					dark: false,
+					copied: false,
+					showLogo: false,
+					init() {
+						this.dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+						fetch("logo.png", { method: "HEAD" })
+							.then((response) => {
+								this.showLogo = response.ok;
+							})
+							.catch(() => {});
+					},
+					copy(text) {
+						navigator.clipboard
+							.writeText(text)
+							.then(() => {
+								this.copied = true;
+								setTimeout(() => {
+									this.copied = false;
+								}, 1500);
+							})
+							.catch(() => {
+								this.copied = false;
+							});
+					},
+				}));
+			});
+		</script>
+	</body>
+</html>

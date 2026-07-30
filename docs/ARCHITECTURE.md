@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This document describes the actual architecture of pickup: currently a minimal TypeScript CLI scaffold with a single placeholder entry point, pending real functionality.
+This document describes the actual architecture of pickup: a minimal TypeScript CLI scaffold with a public GitHub Pages site.
 
 ## 1. Project Structure
 
@@ -11,6 +11,10 @@ This document describes the actual architecture of pickup: currently a minimal T
 │   ├── index.ts      # Public library entrypoint
 │   └── bin.ts        # CLI entrypoint
 ├── dist/             # Built ESM output and type declarations
+├── assets/           # Static assets (help text, site banner)
+├── site/             # GitHub Pages site source
+│   ├── index.html    # Landing page
+│   └── fragments/    # Static htmx fragments
 ├── README.md         # User-facing usage and setup guide
 ├── docs/
 │   ├── ARCHITECTURE.md    # Repository overview and structure
@@ -22,7 +26,8 @@ This document describes the actual architecture of pickup: currently a minimal T
 ├── scripts/
 │   └── oxlint-repo-guidelines.js  # Custom oxlint rule blocking undeclared doc files
 ├── tsdown.config.ts   # Build configuration
-└── package.json       # Scripts, package metadata, and release config
+├── package.json       # Scripts, package metadata, and release config
+└── .github/workflows/ # CI/CD workflows, including Pages deployment
 ```
 
 ## 2. High-Level System Diagram
@@ -65,9 +70,9 @@ None yet.
 
 ## 6. Deployment & Infrastructure
 
-Cloud Provider: None. The project is a locally executed CLI/library.
+Cloud Provider: GitHub Pages for the project site.
 
-Build and release use tsdown to emit `dist/` ESM output and type declarations. Development uses [Nub](https://nubjs.com), targeting Node 20+.
+Build and release use tsdown to emit `dist/` ESM output and type declarations. The `site/` directory is deployed to GitHub Pages via `.github/workflows/pages.yml` on pushes to `main`. Development uses [Nub](https://nubjs.com), targeting Node 20+.
 
 ## 7. Security Considerations
 
