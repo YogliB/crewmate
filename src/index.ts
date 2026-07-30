@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { setTimeout } from "node:timers/promises";
+import { readFileSync } from "node:fs";
 import process from "node:process";
 import { dispatchMention, getLogin, PICKUP_PREFIX, type Runner, stripFences } from "./fix.js";
 import { loadState, saveState, statePath } from "./state.js";
@@ -9,6 +10,7 @@ const CLI_ARGV_OFFSET = 2;
 const EXPECTED_PATH_PARTS = 4;
 const DEFAULT_INTERVAL_SECONDS = 60;
 const MILLISECONDS_PER_SECOND = 1000;
+const HELP_PATH = new URL("../assets/help.md", import.meta.url);
 
 const execFilePromise = promisify(execFile);
 
@@ -16,6 +18,11 @@ const exec = async (file: string, args: string[]): Promise<string> => {
 	const { stdout } = await execFilePromise(file, args, { encoding: "utf8" });
 	return stdout.trim();
 };
+
+function showHelp(): void {
+	// eslint-disable-next-line security/detect-non-literal-fs-filename
+	process.stdout.write(`\n${readFileSync(HELP_PATH, "utf8")}\n`);
+}
 
 const parsePrUrl = (
 	prUrl: string,
@@ -213,6 +220,10 @@ const run = Object.assign(
 	): Promise<void> => {
 		try {
 			const [subcommand, ...rest] = argv;
+			if (subcommand === "--help" || subcommand === "-h") {
+				showHelp();
+				return;
+			}
 			if (subcommand === "watch") {
 				await runWatch(rest, options);
 				return;

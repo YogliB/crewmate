@@ -19,6 +19,7 @@
 		"pickup": "dist/bin.js"
 	},
 	"files": [
+		"assets/help.md",
 		"dist",
 		"LICENSE.md",
 		"README.md"
