@@ -262,6 +262,15 @@ describe("parsePrUrl", () => {
 		});
 	});
 
+	it("parses a PR shorthand", () => {
+		expect(run.parsePrUrl("owner/repo/pull/123")).toEqual({
+			host: "github.com",
+			number: "123",
+			owner: "owner",
+			repo: "repo",
+		});
+	});
+
 	it("throws for a non-pull URL", () => {
 		expect(() => run.parsePrUrl("https://github.com/owner/repo/issues/123")).toThrow(TypeError);
 	});
@@ -272,6 +281,10 @@ describe("parsePrUrl", () => {
 
 	it("throws when the path is too long", () => {
 		expect(() => run.parsePrUrl("https://github.com/owner/repo/pull/123/extra")).toThrow(TypeError);
+	});
+
+	it("throws for an invalid shorthand", () => {
+		expect(() => run.parsePrUrl("owner/repo/123")).toThrow(TypeError);
 	});
 });
 

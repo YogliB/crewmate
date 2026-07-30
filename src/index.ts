@@ -24,22 +24,34 @@ function showHelp(): void {
 	process.stdout.write(`\n${readFileSync(HELP_PATH, "utf8")}\n`);
 }
 
+const PR_SHORTHAND = /^([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/;
+
 const parsePrUrl = (
 	prUrl: string,
 ): { host: string; owner: string; repo: string; number: string } => {
-	const url = new URL(prUrl);
-	const parts = url.pathname.split("/").filter(Boolean);
-	const [owner, repo, pull, number] = parts;
-	if (
-		parts.length !== EXPECTED_PATH_PARTS ||
-		pull !== "pull" ||
-		typeof owner !== "string" ||
-		typeof repo !== "string" ||
-		typeof number !== "string"
-	) {
-		throw new TypeError(`Invalid PR URL: ${prUrl}`);
+	if (prUrl.startsWith("http")) {
+		const url = new URL(prUrl);
+		const parts = url.pathname.split("/").filter(Boolean);
+		const [owner, repo, pull, number] = parts;
+		if (
+			parts.length !== EXPECTED_PATH_PARTS ||
+			pull !== "pull" ||
+			typeof owner !== "string" ||
+			typeof repo !== "string" ||
+			typeof number !== "string"
+		) {
+			throw new TypeError(`Invalid PR reference: ${prUrl}`);
+		}
+		return { host: url.hostname, number, owner, repo };
 	}
-	return { host: url.hostname, number, owner, repo };
+
+	const shorthand = PR_SHORTHAND.exec(prUrl);
+	if (shorthand) {
+		const [, owner, repo, number] = shorthand;
+		return { host: "github.com", number, owner, repo };
+	}
+
+	throw new TypeError(`Invalid PR reference: ${prUrl}`);
 };
 
 const fetchReviewComments = async (
@@ -199,7 +211,7 @@ const runWatch = async (
 ): Promise<void> => {
 	const [prUrl, ...flagArgs] = rest;
 	if (!prUrl || typeof prUrl !== "string") {
-		throw new TypeError("PR URL is required");
+		throw new TypeError("PR reference is required");
 	}
 	const interval = parseInterval(flagArgs);
 	const allowFix = flagArgs.includes("--fix");

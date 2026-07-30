@@ -5,8 +5,10 @@ A CLI that watches GitHub PR review comments for `@pickup` mentions and replies 
 ## Usage
 
 ```bash
-pickup watch <pr-url> [--interval <seconds>] [--fix] [--user <login>]
+pickup watch <pr-url-or-shorthand> [--interval <seconds>] [--fix] [--user <login>]
 ```
+
+`<pr-url-or-shorthand>` can be a full URL (`https://github.com/owner/repo/pull/4`) or a shorthand (`owner/repo/pull/4`).
 
 - `--interval`: seconds between polls (default 60).
 - `--fix`: attempt to apply a generated fix and push a commit. The review comment body must also contain the word `fix` (case-insensitive).

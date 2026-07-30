@@ -4,7 +4,9 @@ A CLI that watches GitHub PR review comments for `@pickup` mentions and replies 
 
 ## Usage
 
-`pickup watch <pr-url> [options]`
+`pickup watch <pr-url-or-shorthand> [options]`
+
+`<pr-url-or-shorthand>` can be a full URL (`https://github.com/owner/repo/pull/4`) or a shorthand (`owner/repo/pull/4`).
 
 ## Options
 
