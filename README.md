@@ -1,6 +1,6 @@
 # pickup
 
-[![pickup site](assets/site-banner.png)](https://yoglib.github.io/pickup/)
+[![pickup site](site/logo.png)](https://yoglib.github.io/pickup/)
 
 A CLI that watches GitHub PR review comments for `@pickup` mentions and replies with explanations or generated fixes.
 
