@@ -1,48 +1,45 @@
 # Troubleshooting
 
-Common problems when building or contributing to pickup, and how to resolve them.
+Common issues when running `pickup`.
 
-## `nub install` fails or `nub` is not found
+## `pickup: command not found`
 
-pickup uses [Nub](https://nubjs.com) as its package manager (see `devEngines.packageManager` in [package.json](../package.json)). Install Nub first, then retry:
+Install the CLI globally:
 
 ```bash
-nub install
+npm install -g pickup
 ```
 
-If Nub isn't available in your environment, `devEngines.onFail` is set to `warn`, so npm/pnpm/yarn can be used as a fallback, but scripts in this doc assume `nub`.
+If you built from source, make sure `dist/` exists after `nub run build` and run `node dist/bin.js`.
 
-## `nub run build` fails or `dist/` is missing
+## `gh` is not installed or not logged in
 
-`nub run build` runs [tsdown](https://tsdown.dev) using [tsdown.config.ts](../tsdown.config.ts) to emit `dist/`. If the build fails:
+`pickup` uses the GitHub CLI. Install it and run:
 
-- Confirm Node.js is **20** or later (`node -v`); see `engines` in [package.json](../package.json).
-- Run `nub run typecheck` to surface TypeScript errors separately from bundling errors.
-- Delete `dist/` and rebuild to rule out stale output.
+```bash
+gh auth login
+```
 
-## `nub run typecheck` reports errors
+## `claude` is not installed
 
-`nub run typecheck` runs `tsc --noEmit` against the project's TypeScript config. Fix the reported type errors in `src/`; there is no `dist/` type-checking step, so `dist/*.d.ts` is only regenerated on the next build.
+`pickup` calls the `claude` command to generate explanations and fixes. Install the Claude CLI and make sure it is in your PATH.
 
-## `nub run lint:ci` fails with "New docs/markdown files are not allowed"
+## `gh pr checkout` fails
 
-This repository blocks new Markdown files outside an explicit allow list via the custom `oxlint-repo-guidelines/no-more-docs` rule (see [scripts/oxlint-repo-guidelines.js](../scripts/oxlint-repo-guidelines.js) and [.oxlintrc.json](../.oxlintrc.json)). If you added a new `.md` file or a file under `docs/`, either:
+`pickup` checks out the PR branch before reading a file. It needs a clean working tree. Commit or stash your own changes first.
 
-- Remove it, or
-- Add its path to the `allowedDocs` list in [scripts/oxlint-repo-guidelines.js](../scripts/oxlint-repo-guidelines.js) and link it from [AGENTS.md](../AGENTS.md) and, if user-facing, [README.md](../README.md).
+## `git push` failed after a fix
 
-## `nub run lint:ci` fails on other rules
+`pickup` commits the fix locally and tries to push it. If the push fails, the commit stays local. Push it manually when the problem is fixed.
 
-`nub run lint:ci` runs `oxlint src` with `denyWarnings: true`, so any warning fails CI. Run `nub run lint` locally to auto-fix what oxlint can, then address the remaining findings manually.
+## `@pickup` mention is ignored
 
-## `nub run format:ci` reports formatting differences
+`pickup` only replies to review comments (not replies) that contain `@pickup` and were not written by `pickup` itself. The newest unseen mention is handled on each poll; older ones wait for the next poll.
 
-`nub run format:ci` runs `oxfmt --check .`. Run `nub run format` to apply formatting in place, then re-run `nub run format:ci` to confirm.
+## Fix was not applied
 
-## The pre-commit hook rejects my commit
-
-The Husky `pre-commit` hook runs lint and format checks automatically (see [docs/CONTRIBUTING.md](CONTRIBUTING.md)). If a hook modifies files to fix formatting, stage the changes and commit again. If it fails outright, run `nub run lint:ci` and `nub run format:ci` locally to see the underlying error.
+The review comment must contain both `@pickup` and `fix` (case-insensitive) for `--fix` to run. If the file is missing or `claude` returns no change, `pickup` replies with the reason.
 
 ## Still stuck?
 
-Search existing [issues](https://github.com/YogliB/pickup/issues) or open a new one with the details described in [docs/CONTRIBUTING.md](CONTRIBUTING.md#reporting-bugs). For security-sensitive problems, follow [docs/SECURITY.md](SECURITY.md) instead of opening a public issue.
+Open an [issue](https://github.com/YogliB/pickup/issues) or check [CONTRIBUTING.md](CONTRIBUTING.md) for build and development problems.

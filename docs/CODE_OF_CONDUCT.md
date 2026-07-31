@@ -12,13 +12,13 @@ While acknowledging differences in social norms, we all strive to meet our commu
 
 With these considerations in mind, we agree to behave mindfully toward each other and act in ways that center our shared values, including:
 
-1. Respecting the **purpose of our community**, our activities, and our ways of gathering.
+1. Respecting the **purpose** **of our community**, our activities, and our ways of gathering.
 2. Engaging **kindly and honestly** with others.
 3. Respecting **different viewpoints** and experiences.
 4. **Taking responsibility** for our actions and contributions.
 5. Gracefully giving and accepting **constructive feedback**.
 6. Committing to **repairing harm** when it occurs.
-7. Behaving in other ways that promote and sustain the **well-being of our community**.
+7. Behaving in other ways that promote and sustain the **well-being** **of our community**.
 
 ## Restricted Behaviors
 
@@ -43,13 +43,11 @@ We agree to restrict the following behaviors in our community. Instances, threat
 
 Tensions can occur between community members even when they are trying their best to collaborate. Not every conflict represents a code of conduct violation, and this Code of Conduct reinforces encouraged behaviors and norms that can help avoid conflicts and minimize harm.
 
-When an incident does occur, it is important to report it promptly. To report a possible violation, email <me@yogev.dev> with a clear description of what happened and any context that helps us assess the report. Reports will be handled privately.
+When an incident does occur, it is important to report it promptly. **To report a possible violation, send an email to <me@yogev.dev>**
 
 Community Moderators take reports of violations seriously and will make every effort to respond in a timely manner. They will investigate all reports of code of conduct violations, reviewing messages, logs, and recordings, or interviewing witnesses and other participants. Community Moderators will keep investigation and enforcement actions as transparent as possible while prioritizing safety and confidentiality. In order to honor these values, enforcement actions are carried out in private with the involved parties, but communicating to the whole community may be part of a mutually agreed upon resolution.
 
 ## Addressing and Repairing Harm
-
-The remedies and repairs outlined below are the process this project uses when a violation is confirmed. The maintainers may adapt the response based on the severity, pattern, and impact of the incident.
 
 If an investigation by the Community Moderators finds that this Code of Conduct has been violated, the following enforcement ladder may be used to determine how best to repair harm, based on the incident's impact on the individuals involved and the community as a whole. Depending on the severity of a violation, lower rungs on the ladder may be skipped.
 
@@ -64,7 +62,7 @@ If an investigation by the Community Moderators finds that this Code of Conduct 
 3. Temporary Suspension
    1. Event: A pattern of repeated violation which the Community Moderators have tried to address with warnings, or a single serious violation.
    2. Consequence: A private written warning with conditions for return from suspension. In general, temporary suspensions give the person being suspended time to reflect upon their behavior and possible corrective actions.
-   3. Repair: Examples of repair include respecting the spirit of the suspension, meeting the specified conditions for return, and being thoughtful about how to reintegrate with the community when the suspension is lifted.
+   3. Repair: Examples of repair include respecting the spirit of the suspension, meeting the specified conditions for return, and being thoughtful about how to reintegrate with the community after the suspension is lifted.
 4. Permanent Ban
    1. Event: A pattern of repeated code of conduct violations that other steps on the ladder have failed to resolve, or a violation so serious that the Community Moderators determine there is no way to keep the community safe with this person as a member.
    2. Consequence: Access to all community spaces, tools, and communication channels is removed. In general, permanent bans should be rarely used, should have strong reasoning behind them, and should only be resorted to if working through other remedies has failed to change the behavior.
