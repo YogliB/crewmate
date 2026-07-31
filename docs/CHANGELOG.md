@@ -4,7 +4,7 @@
 
 - Removed the GitHub Pages site and the `site/` directory; documentation now lives in the repo.
 - Rewrote README.md and TROUBLESHOOTING.md to focus on using the CLI.
-- Updated AGENTS.md, CONTRIBUTING.md, and ARCHITECTURE.md to remove site references and stay accurate.
+- Updated AGENTS.md, CONTRIBUTING.md, ARCHITECTURE.md, and CODE_OF_CONDUCT.md to remove site references and stay accurate.
 
 ## 0.0.1
 
