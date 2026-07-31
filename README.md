@@ -29,7 +29,7 @@ pickup watch <pr-url-or-shorthand> [options]
 `<pr-url-or-shorthand>` can be a full URL (`https://github.com/owner/repo/pull/4`) or a shorthand (`owner/repo/pull/4`).
 
 - `--interval <seconds>` — seconds between polls. Default is `60`.
-- `--fix` — try to generate, commit, and push a fix. The review comment must also contain `fix`.
+- `--fix` — try to generate, commit, and push a fix. The review comment must also contain the tag `#fix`.
 - `--user <login>` — only reply to comments from this GitHub user.
 
 State (seen comment IDs) is stored in `$XDG_CONFIG_HOME/pickup/state.json`.
@@ -57,7 +57,6 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - **General PR comments**: right now only review comments on diff lines are handled; conversation comments should be supported too.
 - **Handle all mentions in one poll**: process every new `@pickup` mention in a single poll instead of just the newest one.
 - **Safer state handling**: recover from a missing or corrupted state file and let users configure the state path.
-- **Require #fix to apply fixes**: only generate and apply a fix when the review comment contains the literal tag `#fix`; otherwise reply with an explanation.
 - **Listen to repo and org changes**: watch for relevant activity across a repository or organization instead of polling a single PR.
 
 ## More docs

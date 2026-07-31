@@ -203,7 +203,7 @@ const dispatchMention = async (
 	ctx: ReplyContext,
 	{ allowFix, commentBody }: { allowFix: boolean; commentBody: string },
 ): Promise<void> => {
-	if (allowFix && /\bfix\b/i.test(commentBody)) {
+	if (allowFix && /#fix/i.test(commentBody)) {
 		await handleFix(mention, ctx);
 	} else {
 		await handleExplain(mention, ctx);

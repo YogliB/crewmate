@@ -106,7 +106,7 @@ const resolveGhFix = (
 			JSON.stringify([
 				[
 					{
-						body: request.body ?? "@pickup fix",
+						body: request.body ?? "@pickup #fix",
 						id: FIRST_ID,
 						in_reply_to_id: null,
 						line: FIRST_LINE,
@@ -949,13 +949,13 @@ describe("watch fix success", () => {
 		).toBe(FIRST_CALL);
 	});
 
-	it("explains instead of fixing when the comment body does not contain the word fix", async () => {
+	it("explains instead of fixing when the comment body does not contain the #fix tag", async () => {
 		const targetPath = path.join("src", "index.ts");
 		const targetDir = path.resolve("src");
 		await mkdir(targetDir, { recursive: true });
 		await writeFile(path.resolve(targetPath), "old");
 
-		const runner = makeFixRunner(targetPath, { body: "@pickup prefix", fixed: "new" });
+		const runner = makeFixRunner(targetPath, { body: "@pickup fix", fixed: "new" });
 		await run.watch(PR_URL, {
 			allowFix: true,
 			interval: NO_INTERVAL,
