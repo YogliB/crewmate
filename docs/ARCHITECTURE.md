@@ -20,7 +20,7 @@
 │   └── oxlint-repo-guidelines.js  # custom oxlint rule guarding doc sprawl
 ├── package.json   # scripts, metadata, and release config
 ├── tsdown.config.ts  # build configuration
-└── .github/workflows/  # CI checks (lint, format, test, security)
+└── .github/workflows/  # CI checks (lint, format, duplicates, knip, typecheck, test, security)
 ```
 
 ## Data Flow

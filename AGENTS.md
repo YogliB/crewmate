@@ -29,6 +29,8 @@ nub run build
 - `nub run typecheck` — run `tsc --noEmit`.
 - `nub run lint` / `nub run lint:ci` — run oxlint; use `lint` for auto-fix.
 - `nub run format` / `nub run format:ci` — run oxfmt; use `format` to apply.
+- `nub run duplicates:ci` — run jscpd to detect code duplication.
+- `nub run knip:ci` — find unused dependencies and exports with knip.
 - `nub run test` / `nub run test:ci` — run vitest with or without coverage.
 
 ## Project layout
@@ -42,8 +44,8 @@ nub run build
 
 ## Lint and format
 
-CI and the pre-commit hook run `oxlint` and `oxfmt`. `nub run format` fixes most issues. A custom `oxlint-repo-guidelines/no-more-docs` rule blocks new Markdown or `docs/` files that are not in the allow-list. Add to [scripts/oxlint-repo-guidelines.js](../scripts/oxlint-repo-guidelines.js) and update this file if a new doc is needed.
+CI and the pre-commit hook run `oxlint` and `oxfmt`. `nub run format` fixes most issues. CI and the pre-push hook also run `jscpd` (`nub run duplicates:ci`) and `knip` (`nub run knip:ci`) to catch duplication and unused dependencies. A custom `oxlint-repo-guidelines/no-more-docs` rule blocks new Markdown or `docs/` files that are not in the allow-list. Add to [scripts/oxlint-repo-guidelines.js](../scripts/oxlint-repo-guidelines.js) and update this file if a new doc is needed.
 
 ## Pull requests
 
-Keep changes focused. Run `nub run build`, `nub run typecheck`, `nub run format:ci`, `nub run lint:ci`, and `nub run test:ci` before opening a PR. Squash to a single commit and write a Conventional Commit message.
+Keep changes focused. Run `nub run build`, `nub run typecheck`, `nub run format:ci`, `nub run lint:ci`, `nub run duplicates:ci`, `nub run knip:ci`, and `nub run test:ci` before opening a PR. Squash to a single commit and write a Conventional Commit message.

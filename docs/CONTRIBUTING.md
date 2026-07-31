@@ -25,6 +25,8 @@ nub run build
 nub run typecheck
 nub run format:ci
 nub run lint:ci
+nub run duplicates:ci
+nub run knip:ci
 nub run test:ci
 ```
 
@@ -48,7 +50,11 @@ The custom `oxlint-repo-guidelines/no-more-docs` rule blocks new Markdown or `do
 
 ### The pre-commit hook rejects my commit
 
-Husky runs `nub run lint:ci` and `nub run format:ci` before each commit. If it fixes formatting, stage the changes and commit again.
+Husky's pre-commit hook runs `lint-staged`, which runs `oxfmt` and `oxlint` on staged files. If it fixes formatting, stage the changes and commit again.
+
+### The pre-push hook fails
+
+Husky's pre-push hook runs `nub run typecheck`, `nub run duplicates:ci`, and `nub run knip:ci`.
 
 ## Commit style
 
