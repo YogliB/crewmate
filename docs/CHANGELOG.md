@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Removed the GitHub Pages site and rewrote the docs: README and TROUBLESHOOTING now cover using the CLI; AGENTS, CONTRIBUTING, ARCHITECTURE, and CODE_OF_CONDUCT were updated to remove site references and stay accurate.
+- Removed the GitHub Pages site and rewrote the docs: README and TROUBLESHOOTING now cover using the CLI; AGENTS, CONTRIBUTING, ARCHITECTURE, and CODE_OF_CONDUCT were updated to remove site references and stay accurate. Added a TBD section to README.md for upcoming features.
 
 ## 0.0.1
 

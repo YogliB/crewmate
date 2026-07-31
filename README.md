@@ -47,6 +47,19 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - `gh pr checkout` needs a clean working tree, so commit or stash your own changes first.
 - If a fix is committed but `git push` fails, the commit stays local. Push it yourself once the problem is fixed.
 
+## TBD
+
+Things learned from this session that are next on the list:
+
+- **Pick your provider**: the `claude` command is hard-coded. Make it pluggable so you can use Cursor, Copilot, Devin, or any other CLI.
+- **Stream mode**: run `pickup` as a long-lived watcher that processes comments as they arrive, not only on a poll interval.
+- **Agent stream skill**: a skill or guide that teaches an agent to run `pickup` in stream mode and handle comments as they come in.
+- **Degit integration**: keep a fast, minimal copy of the target repo in the CLI config folder so agents have code context without a full clone.
+- **Observability logs**: write structured logs so it is clear what `pickup` is polling, replying to, and fixing.
+- **General PR comments**: right now only review comments on diff lines are handled; conversation comments should be supported too.
+- **Handle all mentions in one poll**: process every new `@pickup` mention in a single poll instead of just the newest one.
+- **Safer state handling**: recover from a missing or corrupted state file and let users configure the state path.
+
 ## More docs
 
 - [Contributing](docs/CONTRIBUTING.md) — build, test, and submit changes.
