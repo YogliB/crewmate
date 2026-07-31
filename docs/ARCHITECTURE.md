@@ -32,7 +32,7 @@
 `src/index.ts` fetches comments with `gh api`, finds the newest unseen `@pickup` mention, and either:
 
 - calls `src/fix.ts` to explain the line, or
-- calls `src/fix.ts` to generate and apply a fix when the comment contains `fix` and `--fix` is enabled.
+- calls `src/fix.ts` to generate and apply a fix when the comment contains `#fix` and `--fix` is enabled.
 
 ## State
 

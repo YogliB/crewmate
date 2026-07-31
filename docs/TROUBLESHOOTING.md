@@ -38,7 +38,7 @@ gh auth login
 
 ## Fix was not applied
 
-The review comment must contain both `@pickup` and `fix` (case-insensitive) for `--fix` to run. If the file is missing or `claude` returns no change, `pickup` replies with the reason.
+The review comment must contain both `@pickup` and the tag `#fix` (case-insensitive) for `--fix` to run. If the file is missing or `claude` returns no change, `pickup` replies with the reason.
 
 ## Still stuck?
 
