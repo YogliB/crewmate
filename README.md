@@ -1,30 +1,60 @@
 # pickup
 
-[![pickup site](site/logo.png)](https://yoglib.github.io/pickup/)
+<img src="assets/logo.png" alt="pickup mascot" width="120" />
 
-A CLI that watches GitHub PR review comments for `@pickup` mentions and replies with explanations or generated fixes.
+Watch GitHub PR review comments for `@pickup` mentions and reply with an explanation or a generated fix.
+
+## Before you start
+
+You need:
+
+- [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated.
+- The `claude` command in your PATH.
+- A clean git working tree.
+
+## Install
+
+```bash
+npm install -g pickup
+```
+
+If you are building from source, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ## Usage
 
 ```bash
-pickup watch <pr-url-or-shorthand> [--interval <seconds>] [--fix] [--user <login>]
+pickup watch <pr-url-or-shorthand> [options]
 ```
 
 `<pr-url-or-shorthand>` can be a full URL (`https://github.com/owner/repo/pull/4`) or a shorthand (`owner/repo/pull/4`).
 
-- `--interval`: seconds between polls (default 60).
-- `--fix`: attempt to apply a generated fix and push a commit. The review comment body must also contain the word `fix` (case-insensitive).
-- `--user`: only respond to comments from this GitHub login.
+- `--interval <seconds>` — seconds between polls. Default is `60`.
+- `--fix` — try to generate, commit, and push a fix. The review comment must also contain `fix`.
+- `--user <login>` — only reply to comments from this GitHub user.
 
-State (seen comment IDs) is persisted in `$XDG_CONFIG_HOME/pickup/state.json`.
+State (seen comment IDs) is stored in `$XDG_CONFIG_HOME/pickup/state.json`.
 
-## Caveats
+## Example
 
-- Each poll processes the newest unseen `@pickup` mention; additional mentions are handled in subsequent polls.
-- Run from a clean repository; `gh pr checkout` will fail if the working tree has uncommitted changes.
-- If `git push` fails after a fix is committed, the commit remains local and must be pushed manually.
+```bash
+pickup watch owner/repo/pull/4
+pickup watch owner/repo/pull/4 --fix --user myorg-bot
+```
 
-See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for how to contribute. [docs/SECURITY.md](docs/SECURITY.md) explains how to report vulnerabilities. [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) covers common build/lint/format problems. [AGENTS.md](AGENTS.md) summarizes setup and commands for tooling and coding agents.
+## Notes
+
+- Each poll handles the newest unseen `@pickup` mention; the rest wait for the next poll.
+- `gh pr checkout` needs a clean working tree, so commit or stash your own changes first.
+- If a fix is committed but `git push` fails, the commit stays local. Push it yourself once the problem is fixed.
+
+## More docs
+
+- [Contributing](docs/CONTRIBUTING.md) — build, test, and submit changes.
+- [Troubleshooting](docs/TROUBLESHOOTING.md) — common runtime issues.
+- [Security](docs/SECURITY.md) — how to report vulnerabilities.
+- [Changelog](docs/CHANGELOG.md) — what changed.
+- [Architecture](docs/ARCHITECTURE.md) — how the code is organized.
+- [AGENTS.md](AGENTS.md) — setup and commands for coding agents.
 
 ## License
 

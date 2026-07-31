@@ -1,78 +1,49 @@
 # Architecture Overview
 
-This document describes the actual architecture of pickup: a minimal TypeScript CLI scaffold with a public GitHub Pages site.
+`pickup` is a small TypeScript CLI that polls a GitHub PR for review comments mentioning `@pickup`, then replies with an explanation or a generated fix.
 
-## 1. Project Structure
+## Project Structure
 
 ```text
 ./
-├── AGENTS.md         # Agent-oriented repo guidance
 ├── src/
-│   ├── index.ts      # Public library entrypoint
-│   └── bin.ts        # CLI entrypoint
-├── dist/             # Built ESM output and type declarations
-├── assets/           # Static assets (help text, site banner)
-├── site/             # GitHub Pages site source
-│   └── index.html    # Landing page
-├── README.md         # User-facing usage and setup guide
-├── docs/
-│   ├── ARCHITECTURE.md    # Repository overview and structure
-│   ├── CHANGELOG.md       # Release notes
-│   ├── CODE_OF_CONDUCT.md # Community expectations
-│   ├── CONTRIBUTING.md    # Contributor workflow and validation commands
-│   ├── SECURITY.md        # Security policy and reporting process
-│   └── TROUBLESHOOTING.md # Common build/lint/format problems and fixes
+│   ├── index.ts   # CLI and watch loop
+│   ├── bin.ts     # executable entry point
+│   ├── fix.ts     # reply generation and fix application
+│   └── state.ts   # persistent seen-comment state
+├── dist/          # built ESM output from tsdown
+├── assets/
+│   ├── help.md    # help text shown for --help
+│   └── logo.png   # README mascot
+├── docs/          # user and contributor documentation
 ├── scripts/
-│   └── oxlint-repo-guidelines.js  # Custom oxlint rule blocking undeclared doc files
-├── tsdown.config.ts   # Build configuration
-├── package.json       # Scripts, package metadata, and release config
-└── .github/workflows/ # CI/CD workflows, including Pages deployment
+│   └── oxlint-repo-guidelines.js  # custom oxlint rule guarding doc sprawl
+├── package.json   # scripts, metadata, and release config
+├── tsdown.config.ts  # build configuration
+└── .github/workflows/  # CI checks (lint, format, test, security)
 ```
 
-## 2. High-Level System Diagram
+## Data Flow
 
 ```text
-[User/CLI] -> [src/bin.ts] -> [src/index.ts]
+[review comment on GitHub] --gh api--> [src/index.ts] --claude--> [reply or fix] --gh api--> [posted reply]
 ```
 
-There is no orchestration layer yet: `src/bin.ts` calls straight into `src/index.ts`.
+`src/index.ts` fetches comments with `gh api`, finds the newest unseen `@pickup` mention, and either:
 
-## 3. Core Components
+- calls `src/fix.ts` to explain the line, or
+- calls `src/fix.ts` to generate and apply a fix when the comment contains `fix` and `--fix` is enabled.
 
-### 3.1. CLI Entry Point
+## State
 
-Name: CLI runner
+Seen comment IDs are stored in `$XDG_CONFIG_HOME/pickup/state.json` as a JSON map of PR URLs to arrays of comment IDs. The file is read at the start of each poll and written before any reply is posted, so an error does not reprocess the same comment.
 
-Description: Invokes the library entrypoint. No argument parsing exists yet.
+## External Dependencies
 
-Technologies: TypeScript, Node standard library
+- `gh` — GitHub CLI, used for API calls and `gh pr checkout`.
+- `claude` — Claude CLI, used to generate explanations and fixes.
+- `git` — used to commit and push fixes.
 
-Deployment: Built into the published `pickup` executable and run locally via Node 20+.
+## Security Notes
 
-### 3.2. Library entrypoint
-
-Name: `run()`
-
-Description: Placeholder implementation that prints a greeting; replace with real CLI behavior as the project grows.
-
-Technologies: TypeScript, Node standard library
-
-Deployment: Bundled into the published library entrypoint.
-
-## 4. Data Stores
-
-None. The project has no persistent state.
-
-## 5. External Integrations / APIs
-
-None yet.
-
-## 6. Deployment & Infrastructure
-
-Cloud Provider: GitHub Pages for the project site.
-
-Build and release use tsdown to emit `dist/` ESM output and type declarations. The `site/` directory is deployed to GitHub Pages via `.github/workflows/pages.yml` on pushes to `main`. Development uses [Nub](https://nubjs.com), targeting Node 20+.
-
-## 7. Security Considerations
-
-No application login flow, no persisted state, and no network calls yet. See [docs/SECURITY.md](SECURITY.md) for the reporting process.
+No web server, no stored credentials, and no network calls from the process itself. The GitHub token comes from the `gh` CLI environment. See [docs/SECURITY.md](SECURITY.md) for reporting vulnerabilities.
