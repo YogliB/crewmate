@@ -13,8 +13,7 @@ This document describes the actual architecture of pickup: a minimal TypeScript 
 ├── dist/             # Built ESM output and type declarations
 ├── assets/           # Static assets (help text, site banner)
 ├── site/             # GitHub Pages site source
-│   ├── index.html    # Landing page
-│   └── fragments/    # Static htmx fragments
+│   └── index.html    # Landing page
 ├── README.md         # User-facing usage and setup guide
 ├── docs/
 │   ├── ARCHITECTURE.md    # Repository overview and structure
