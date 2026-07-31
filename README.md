@@ -49,8 +49,6 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 
 ## TBD
 
-Things learned from this session that are next on the list:
-
 - **Pick your provider**: the `claude` command is hard-coded. Make it pluggable so you can use Cursor, Copilot, Devin, or any other CLI.
 - **Stream mode**: run `pickup` as a long-lived watcher that processes comments as they arrive, not only on a poll interval.
 - **Agent stream skill**: a skill or guide that teaches an agent to run `pickup` in stream mode and handle comments as they come in.
@@ -59,6 +57,8 @@ Things learned from this session that are next on the list:
 - **General PR comments**: right now only review comments on diff lines are handled; conversation comments should be supported too.
 - **Handle all mentions in one poll**: process every new `@pickup` mention in a single poll instead of just the newest one.
 - **Safer state handling**: recover from a missing or corrupted state file and let users configure the state path.
+- **Require #fix to apply fixes**: only generate and apply a fix when the review comment contains the literal tag `#fix`; otherwise reply with an explanation.
+- **Listen to repo and org changes**: watch for relevant activity across a repository or organization instead of polling a single PR.
 
 ## More docs
 
