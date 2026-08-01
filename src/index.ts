@@ -71,12 +71,12 @@ const fetchReviewComments = async (
 	return (JSON.parse(out) as Record<string, unknown>[][]).flat();
 };
 
-const findNewMention = (
+const findNewMentions = (
 	comments: Record<string, unknown>[],
 	seenIds: number[],
 	allowedUser?: string,
 	isFresh = false,
-): Record<string, unknown> | undefined => {
+): Record<string, unknown>[] => {
 	const seen = new Set(seenIds);
 	const pickupRepliedIds = isFresh
 		? new Set(
@@ -90,7 +90,7 @@ const findNewMention = (
 					.map((comment) => comment.in_reply_to_id as number),
 			)
 		: new Set<number>();
-	const [newest] = comments
+	return comments
 		.filter(
 			(comment) =>
 				typeof comment.body === "string" &&
@@ -104,8 +104,11 @@ const findNewMention = (
 				(allowedUser === undefined || getLogin(comment.user) === allowedUser),
 		)
 		.toSorted((first, second) => (second.id as number) - (first.id as number));
-	return newest;
 };
+
+const findNewMention = (
+	...args: Parameters<typeof findNewMentions>
+): Record<string, unknown> | undefined => findNewMentions(...args).at(0);
 
 const preflight = async (prUrl: string, runner: Runner = exec): Promise<string> => {
 	const { host } = parsePrUrl(prUrl);
@@ -143,14 +146,15 @@ const pollIteration = async (
 ): Promise<void> => {
 	const state = await loadState();
 	const comments = await fetchReviewComments(prUrl, runner);
-	const mention = findNewMention(
+	const mentions = findNewMentions(
 		comments,
 		state.get(prUrl) ?? [],
 		iteration.allowedUser,
 		state.size === 0,
 	);
-	if (mention) {
-		// ponytail: persist seen ID before acting so an error does not reprocess the same mention
+	for (const mention of mentions) {
+		// ponytail: persist seen ID before acting so an error does not reprocess the same mention.
+		// If one respondToMention throws, the loop aborts; remaining unseen mentions are handled on the next poll.
 		state.set(prUrl, [...(state.get(prUrl) ?? []), mention.id as number]);
 		await saveState(state);
 		await respondToMention(mention, prUrl, {
@@ -267,6 +271,7 @@ const run = Object.assign(
 		exec,
 		findFlag,
 		findNewMention,
+		findNewMentions,
 		getLogin,
 		loadState,
 		parseInterval,

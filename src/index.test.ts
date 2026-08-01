@@ -95,6 +95,55 @@ const makeExplainRunner = (
 	request: { body?: string; claude?: string; path?: string } = {},
 ): Runner =>
 	vi.fn((file: string, args: string[]) => resolveExplain(file, args, request)) as unknown as Runner;
+const makeMultiMentionRunner = (options: { failOn?: string } = {}): Runner =>
+	vi.fn((file: string, args: string[]) => {
+		if (options.failOn && willFail(file, args, options.failOn)) {
+			return Promise.reject(new Error(`${options.failOn} failed`));
+		}
+		const [command] = args;
+		if (file === "claude") {
+			return Promise.resolve("It does something.");
+		}
+		if (file === "git") {
+			return resolveGit(args);
+		}
+		if (file === "gh") {
+			if (command === "pr") {
+				return Promise.resolve("");
+			}
+			if (command === "--version" || command === "auth") {
+				return Promise.resolve("");
+			}
+			if (command === "api" && args.some((arg) => startsWithRepos(arg))) {
+				if (args.includes("POST")) {
+					return Promise.resolve("");
+				}
+				return Promise.resolve(
+					JSON.stringify([
+						[
+							{
+								body: "@pickup hello",
+								id: FIRST_ID,
+								in_reply_to_id: null,
+								line: EXPLANATION_LINE,
+								path: "src/index.ts",
+								user: { login: "alice" },
+							},
+							{
+								body: "@pickup hi",
+								id: SECOND_ID,
+								in_reply_to_id: null,
+								line: EXPLANATION_LINE,
+								path: "src/index.ts",
+								user: { login: "alice" },
+							},
+						],
+					]),
+				);
+			}
+		}
+		return Promise.resolve("");
+	}) as unknown as Runner;
 
 const resolveGhFix = (
 	args: string[],
@@ -633,6 +682,19 @@ describe("findNewMention", () => {
 	});
 });
 
+describe("findNewMentions", () => {
+	it("returns all new mentions sorted by id descending", () => {
+		const comments = [
+			{ body: "@pickup hello", id: FIRST_ID, line: FIRST_LINE, path: "src/index.ts" },
+			{ body: "@pickup fix", id: SECOND_ID, line: FIRST_LINE, path: "src/index.ts" },
+		];
+		const mentions = run.findNewMentions(comments, []);
+		expect(mentions).toHaveLength(TWO_CALLS);
+		expect(mentions[0].id).toBe(SECOND_ID);
+		expect(mentions[1].id).toBe(FIRST_ID);
+	});
+});
+
 describe("stripFences", () => {
 	it("returns the content unchanged when no fences are present", () => {
 		expect(run.stripFences("plain text")).toBe("plain text");
@@ -664,6 +726,8 @@ describe("watch explain", () => {
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toEqual([FIRST_ID]);
 	});
 
 	it("skips mentions from other users", async () => {
@@ -692,6 +756,31 @@ describe("watch explain", () => {
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+	});
+	it("polls once and replies to all new mentions", async () => {
+		const runner = makeMultiMentionRunner();
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(TWO_CALLS);
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toEqual([SECOND_ID, FIRST_ID]);
+	});
+	it("saves state for the handled mentions when one fails", async () => {
+		const runner = makeMultiMentionRunner({ failOn: "claude @pickup hello" });
+		await expect(
+			run.watch(PR_URL, {
+				interval: NO_INTERVAL,
+				iterations: FIRST_ITERATION,
+				runner,
+			}),
+		).rejects.toThrow();
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toEqual([SECOND_ID, FIRST_ID]);
 	});
 });
 
