@@ -18,6 +18,6 @@ State is persisted in `$XDG_CONFIG_HOME/pickup/state.json`.
 
 ## Caveats
 
-- Each poll processes the newest unseen `@pickup` mention; additional mentions are handled in subsequent polls.
+- Each poll processes every new unseen `@pickup` mention; additional polls handle comments added after the current poll.
 - Run from a clean repository; `gh pr checkout` will fail if the working tree has uncommitted changes.
 - If `git push` fails after a fix is committed, the commit remains local and must be pushed manually.

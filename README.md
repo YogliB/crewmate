@@ -55,8 +55,6 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - **Degit integration**: keep a fast, minimal copy of the target repo in the CLI config folder so agents have code context without a full clone.
 - **Observability logs**: write structured logs so it is clear what `pickup` is polling, replying to, and fixing.
 - **General PR comments**: right now only review comments on diff lines are handled; conversation comments should be supported too.
-- **Handle all mentions in one poll**: process every new `@pickup` mention in a single poll instead of just the newest one.
-- **Safer state handling**: recover from a missing or corrupted state file and let users configure the state path.
 - **Listen to repo and org changes**: watch for relevant activity across a repository or organization instead of polling a single PR.
 
 ## More docs
