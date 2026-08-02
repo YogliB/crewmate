@@ -110,10 +110,14 @@ const findNewMention = (
 	...args: Parameters<typeof findNewMentions>
 ): Record<string, unknown> | undefined => findNewMentions(...args).at(0);
 
-const preflight = async (prUrl: string, runner: Runner = exec): Promise<string> => {
+const preflight = async (
+	prUrl: string,
+	runner: Runner = exec,
+	provider?: string,
+): Promise<string> => {
 	const { host } = parsePrUrl(prUrl);
 	await runner("gh", ["--version"]);
-	await runner("claude", ["--version"]);
+	await runner(provider || "claude", ["--version"]);
 	await runner("gh", ["auth", "status", "--hostname", host]);
 	const repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim();
 	return repoRoot;
@@ -128,6 +132,7 @@ const respondToMention = async (
 		json?: boolean;
 		model?: string;
 		prompt?: string;
+		provider?: string;
 		repoRoot: string;
 		runner: Runner;
 	},
@@ -144,6 +149,7 @@ const respondToMention = async (
 		number,
 		owner,
 		prompt: options.prompt,
+		provider: options.provider,
 		repo,
 		repoRoot: options.repoRoot,
 		runner,
@@ -164,6 +170,7 @@ const pollIteration = async (
 		json?: boolean;
 		model?: string;
 		prompt?: string;
+		provider?: string;
 		repoRoot: string;
 	},
 ): Promise<void> => {
@@ -176,9 +183,6 @@ const pollIteration = async (
 		state.size === 0,
 	);
 	for (const mention of mentions) {
-		// ponytail: persist seen ID before acting so an error does not reprocess the same mention.
-		// If one respondToMention throws, the loop aborts; remaining unseen mentions are handled on the next poll.
-		// In dry-run, state is not saved so a later real run can still post.
 		if (!iteration.dryRun) {
 			state.set(prUrl, [...(state.get(prUrl) ?? []), mention.id as number]);
 			await saveState(state);
@@ -189,6 +193,7 @@ const pollIteration = async (
 			json: iteration.json,
 			model: iteration.model,
 			prompt: iteration.prompt,
+			provider: iteration.provider,
 			repoRoot: iteration.repoRoot,
 			runner,
 		});
@@ -220,18 +225,19 @@ const watch = async (
 		json?: boolean;
 		model?: string;
 		prompt?: string;
+		provider?: string;
 		runner?: Runner;
 		iterations?: number;
 	} = {},
 ): Promise<void> => {
 	const runner = options.runner ?? exec;
 	const interval = options.interval ?? DEFAULT_INTERVAL_SECONDS;
-	const iterations = options.iterations ?? (options.dryRun ? 1 : Infinity); // Infinity polls until the process is interrupted; dry-run previews once
+	const iterations = options.iterations ?? (options.dryRun ? 1 : Infinity);
 	if (options.dryRun) {
 		process.stderr.write("Dry-run mode: no GitHub comments or git add/commit/push will be made.\n");
 	}
 	const normalizedPrUrl = toPrUrl(parsePrUrl(prUrl));
-	const repoRoot = await preflight(normalizedPrUrl, runner);
+	const repoRoot = await preflight(normalizedPrUrl, runner, options.provider);
 	for (let index = 0; index < iterations; index += 1) {
 		await pollIteration(normalizedPrUrl, runner, {
 			allowFix: options.allowFix ?? false,
@@ -243,6 +249,7 @@ const watch = async (
 			json: options.json,
 			model: options.model,
 			prompt: options.prompt,
+			provider: options.provider,
 			repoRoot,
 		});
 	}
@@ -253,8 +260,8 @@ const findFlag = (argv: string[], flag: string): string | undefined => {
 	if (index === -1 || index + 1 >= argv.length) {
 		return;
 	}
-	const value = argv.at(index + 1) as string;
-	if (value.startsWith("-")) {
+	const value = argv.at(index + 1);
+	if (value === undefined || value.startsWith("-")) {
 		return;
 	}
 	return value;
@@ -281,6 +288,7 @@ const runWatch = async (
 	const allowedUser = findFlag(flagArgs, "--user");
 	const prompt = findFlag(flagArgs, "--prompt");
 	const model = findFlag(flagArgs, "--model");
+	const provider = findFlag(flagArgs, "--provider");
 	await watch(prUrl, {
 		allowFix,
 		allowedUser,
@@ -290,6 +298,7 @@ const runWatch = async (
 		json,
 		model,
 		prompt,
+		provider,
 		runner: options.runner,
 	});
 };

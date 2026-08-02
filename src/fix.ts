@@ -7,7 +7,6 @@ const MISSING_FILE_REPLY = "Could not find the file.";
 const PICKUP_PREFIX = "🛻 pickup:";
 const NO_CHANGE_REPLY = "No changes needed.";
 const NO_FIX_REPLY = "Could not generate a fix.";
-const EMPTY_EXPLANATION_WARNING = "Warning: claude returned empty explanation\n";
 
 const isOutsideRepo = (repoRoot: string, resolved: string): boolean => {
 	const relative = path.relative(repoRoot, resolved);
@@ -52,6 +51,7 @@ type ReplyContext = {
 	number: string;
 	owner: string;
 	prompt?: string;
+	provider?: string;
 	repo: string;
 	repoRoot: string;
 	runner: Runner;
@@ -92,6 +92,12 @@ const postReply = async (ctx: ReplyContext, body: string): Promise<void> => {
 	]);
 };
 
+const callProvider = (ctx: ReplyContext, finalPrompt: string): Promise<string> =>
+	ctx.runner(
+		ctx.provider || "claude",
+		ctx.model ? ["--model", ctx.model, "-p", finalPrompt] : ["-p", finalPrompt],
+	);
+
 const handleExplain = async (
 	mention: Record<string, unknown>,
 	ctx: ReplyContext,
@@ -105,12 +111,9 @@ const handleExplain = async (
 	const body = mention.body as string;
 	const prompt = `Review comment: ${JSON.stringify(body)}\nTarget file: ${JSON.stringify(targetPath)}\nLine: ${line}\nFile content: ${JSON.stringify(content)}\n\nExplain what the line does in this PR. Return only the explanation.`;
 	const finalPrompt = ctx.prompt ? `${ctx.prompt}\n\n${prompt}` : prompt;
-	const answer = await ctx.runner(
-		"claude",
-		ctx.model ? ["--model", ctx.model, "-p", finalPrompt] : ["-p", finalPrompt],
-	);
+	const answer = await callProvider(ctx, finalPrompt);
 	if (!answer) {
-		process.stderr.write(EMPTY_EXPLANATION_WARNING);
+		process.stderr.write(`Warning: ${ctx.provider || "claude"} returned empty explanation\n`);
 		return;
 	}
 	await postReply(ctx, answer);
@@ -158,10 +161,7 @@ const generateFix = async (
 	const body = mention.body as string;
 	const prompt = `Fix the issue described in this review comment.\nReview comment: ${JSON.stringify(body)}\nTarget file: ${JSON.stringify(targetPath)}\nLine: ${line}\nFile content: ${JSON.stringify(content)}\n\nReturn only the corrected file content. Do not wrap it in markdown.`;
 	const finalPrompt = ctx.prompt ? `${ctx.prompt}\n\n${prompt}` : prompt;
-	const fixed = await ctx.runner(
-		"claude",
-		ctx.model ? ["--model", ctx.model, "-p", finalPrompt] : ["-p", finalPrompt],
-	);
+	const fixed = await callProvider(ctx, finalPrompt);
 	const stripped = stripFences(fixed);
 	if (!stripped) {
 		await postReply(ctx, NO_FIX_REPLY);

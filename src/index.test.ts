@@ -39,9 +39,9 @@ const countCalls = (
 		([calledFile, args]) => calledFile === file && argMatcher(args),
 	).length;
 
-const getClaudePrompt = (runner: Runner): string | undefined => {
+const getPrompt = (runner: Runner, provider = "claude"): string | undefined => {
 	const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-		([file, args]) => file === "claude" && args.includes("-p"),
+		([file, args]) => file === provider && args.includes("-p"),
 	);
 	const index = call?.[1].indexOf("-p");
 	return typeof index === "number" && index >= 0 ? call?.[1].at(index + 1) : undefined;
@@ -85,10 +85,10 @@ const resolveGit = (args: string[]): Promise<string> => {
 const resolveExplain = (
 	file: string,
 	args: string[],
-	request: { body?: string; claude?: string; path?: string } = {},
+	request: { answer?: string; body?: string; path?: string; provider?: string } = {},
 ): Promise<string> => {
-	if (file === "claude") {
-		return Promise.resolve(request.claude ?? "");
+	if (file === (request.provider || "claude")) {
+		return Promise.resolve(request.answer ?? "");
 	}
 	if (file === "git") {
 		return resolveGit(args);
@@ -100,16 +100,16 @@ const resolveExplain = (
 };
 
 const makeExplainRunner = (
-	request: { body?: string; claude?: string; path?: string } = {},
+	request: { answer?: string; body?: string; path?: string; provider?: string } = {},
 ): Runner =>
 	vi.fn((file: string, args: string[]) => resolveExplain(file, args, request)) as unknown as Runner;
-const makeMultiMentionRunner = (options: { failOn?: string } = {}): Runner =>
+const makeMultiMentionRunner = (options: { failOn?: string; provider?: string } = {}): Runner =>
 	vi.fn((file: string, args: string[]) => {
 		if (options.failOn && willFail(file, args, options.failOn)) {
 			return Promise.reject(new Error(`${options.failOn} failed`));
 		}
 		const [command] = args;
-		if (file === "claude") {
+		if (file === (options.provider || "claude")) {
 			return Promise.resolve("It does something.");
 		}
 		if (file === "git") {
@@ -191,7 +191,13 @@ const willFail = (file: string, args: string[], failOn: string | undefined): boo
 const resolveFix = (
 	file: string,
 	args: string[],
-	request: { body?: string; failOn?: string; fixed?: string; targetPath: string },
+	request: {
+		body?: string;
+		failOn?: string;
+		fixed?: string;
+		targetPath: string;
+		provider?: string;
+	},
 ): Promise<string> => {
 	if (willFail(file, args, request.failOn)) {
 		return Promise.reject(new Error(`${request.failOn} failed`));
@@ -199,7 +205,7 @@ const resolveFix = (
 	if (file === "gh") {
 		return resolveGhFix(args, request);
 	}
-	if (file === "claude") {
+	if (file === (request.provider || "claude")) {
 		return Promise.resolve(request.fixed ?? "```\nnew\n```");
 	}
 	if (file === "git") {
@@ -210,7 +216,7 @@ const resolveFix = (
 
 const makeFixRunner = (
 	targetPath: string,
-	options: { body?: string; failOn?: string; fixed?: string } = {},
+	options: { body?: string; failOn?: string; fixed?: string; provider?: string } = {},
 ): Runner =>
 	vi.fn((file: string, args: string[]) =>
 		resolveFix(file, args, { targetPath, ...options }),
@@ -281,7 +287,7 @@ describe("run watch flags", () => {
 	});
 
 	it("handles watch command with flags", async () => {
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["watch", PR_URL, "--interval", "5", "--user", "alice"], {
 			iterations: FIRST_ITERATION,
 			runner,
@@ -301,7 +307,6 @@ describe("run watch flags", () => {
 	});
 
 	it("uses the default runner when none is provided", async () => {
-		// test the run watch path without a provided runner
 		const previousExitCode = process.exitCode;
 		process.exitCode = NO_EXIT_CODE;
 		await expect(run(["watch", PR_URL], { iterations: NO_ITERATIONS })).resolves.toBeUndefined();
@@ -309,33 +314,33 @@ describe("run watch flags", () => {
 	});
 
 	it("passes a custom prompt to claude", async () => {
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["watch", PR_URL, "--prompt", "BE_TERSE"], {
 			iterations: FIRST_ITERATION,
 			runner,
 		});
-		expect(getClaudePrompt(runner)?.startsWith("BE_TERSE\n\n")).toBe(true);
+		expect(getPrompt(runner)?.startsWith("BE_TERSE\n\n")).toBe(true);
 	});
 
 	it("uses the default prompt when --prompt is missing", async () => {
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["watch", PR_URL], { iterations: FIRST_ITERATION, runner });
-		expect(getClaudePrompt(runner)?.startsWith("Review comment:")).toBe(true);
+		expect(getPrompt(runner)?.startsWith("Review comment:")).toBe(true);
 	});
 
 	it("ignores --prompt when the value is another flag", async () => {
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["watch", PR_URL, "--prompt", "--fix"], {
 			iterations: FIRST_ITERATION,
 			runner,
 		});
-		const prompt = getClaudePrompt(runner);
+		const prompt = getPrompt(runner);
 		expect(prompt?.startsWith("Review comment:")).toBe(true);
 		expect(prompt?.startsWith("BE_TERSE\n\n")).toBe(false);
 	});
 
 	it("passes a model to claude", async () => {
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, {
 			iterations: FIRST_ITERATION,
 			model: "claude-sonnet-4-20250514",
@@ -348,7 +353,7 @@ describe("run watch flags", () => {
 	});
 
 	it("passes a model via the CLI", async () => {
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["watch", PR_URL, "--model", "claude-sonnet-4-20250514"], {
 			iterations: FIRST_ITERATION,
 			runner,
@@ -360,7 +365,7 @@ describe("run watch flags", () => {
 	});
 
 	it("ignores --model when the value is another flag", async () => {
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["watch", PR_URL, "--model", "--fix"], {
 			iterations: FIRST_ITERATION,
 			runner,
@@ -372,12 +377,87 @@ describe("run watch flags", () => {
 	});
 
 	it("calls claude without a model when the model option is missing", async () => {
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, { iterations: FIRST_ITERATION, runner });
 		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
 			([file, args]) => file === "claude" && args.includes("-p"),
 		);
 		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
+	});
+
+	it("uses a custom provider for explanation", async () => {
+		const runner = makeExplainRunner({ answer: "It does something.", provider: "my-llm" });
+		await run.watch(PR_URL, {
+			iterations: FIRST_ITERATION,
+			provider: "my-llm",
+			runner,
+		});
+		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
+			([file, args]) => file === "my-llm" && args.includes("-p"),
+		);
+		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
+	});
+
+	it("passes a provider via the CLI", async () => {
+		const runner = makeExplainRunner({ answer: "It does something.", provider: "my-llm" });
+		await run(["watch", PR_URL, "--provider", "my-llm"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
+			([file, args]) => file === "my-llm" && args.includes("-p"),
+		);
+		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
+	});
+
+	it("ignores --provider when the value is another flag", async () => {
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["watch", PR_URL, "--provider", "--fix"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
+			([file, args]) => file === "claude" && args.includes("-p"),
+		);
+		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
+	});
+
+	it("calls the provider for --version during preflight", async () => {
+		const runner = makeExplainRunner({ answer: "", provider: "my-llm" });
+		await run.watch(PR_URL, { iterations: FIRST_ITERATION, provider: "my-llm", runner });
+		expect(countCalls(runner, "my-llm", (args) => args.at(FIRST_INDEX) === "--version")).toBe(
+			FIRST_CALL,
+		);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "--version")).toBe(
+			NO_CALLS,
+		);
+	});
+
+	it("passes a model to a custom provider", async () => {
+		const runner = makeExplainRunner({ answer: "It does something.", provider: "my-llm" });
+		await run.watch(PR_URL, {
+			iterations: FIRST_ITERATION,
+			model: "claude-sonnet-4-20250514",
+			provider: "my-llm",
+			runner,
+		});
+		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
+			([file, args]) => file === "my-llm" && args.includes("-p"),
+		);
+		expect(call?.[1]).toEqual(["--model", "claude-sonnet-4-20250514", "-p", expect.any(String)]);
+	});
+
+	it("warns when a custom provider returns an empty explanation", async () => {
+		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const runner = makeExplainRunner({ answer: "", provider: "my-llm" });
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			provider: "my-llm",
+			runner,
+		});
+		expect(warn).toHaveBeenCalledWith("Warning: my-llm returned empty explanation\n");
+		warn.mockRestore();
 	});
 });
 
@@ -465,6 +545,10 @@ describe("findFlag", () => {
 
 	it("returns undefined when the flag value is another flag", () => {
 		expect(run.findFlag(["--user", "--fix"], "--user")).toBeUndefined();
+	});
+
+	it("returns an empty quoted value as-is", () => {
+		expect(run.findFlag(["--user", ""], "--user")).toBe("");
 	});
 });
 
@@ -802,7 +886,7 @@ describe("watch explain", () => {
 	});
 
 	it("polls once and replies to a mention", async () => {
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
@@ -811,7 +895,7 @@ describe("watch explain", () => {
 	});
 
 	it("skips mentions from other users", async () => {
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, {
 			allowedUser: "bob",
 			interval: NO_INTERVAL,
@@ -823,9 +907,9 @@ describe("watch explain", () => {
 		expect(state.get(PR_URL)).toBeUndefined();
 	});
 
-	it("warns when claude returns an empty explanation", async () => {
+	it("warns when the provider returns an empty explanation", async () => {
 		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({ claude: "" });
+		const runner = makeExplainRunner({ answer: "" });
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 		expect(warn).toHaveBeenCalled();
 		warn.mockRestore();
@@ -1014,7 +1098,7 @@ describe("watch iterations", () => {
 	});
 
 	it("sleeps between iterations", async () => {
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: TWO_ITERATIONS, runner });
 		expect(
 			countCalls(
@@ -1029,7 +1113,7 @@ describe("watch iterations", () => {
 	});
 
 	it("does not reprocess a mention in the second iteration", async () => {
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: TWO_ITERATIONS, runner });
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
@@ -1169,7 +1253,7 @@ describe("watch fix success", () => {
 			runner,
 		});
 
-		expect(getClaudePrompt(runner)?.startsWith("FIX_STYLE\n\n")).toBe(true);
+		expect(getPrompt(runner)?.startsWith("FIX_STYLE\n\n")).toBe(true);
 	});
 
 	it("passes a model when fixing", async () => {
@@ -1210,6 +1294,45 @@ describe("watch fix success", () => {
 		);
 		expect(call?.[1]).toEqual(["--model", "claude-sonnet-4-20250514", "-p", expect.any(String)]);
 	});
+
+	it("passes a provider when fixing", async () => {
+		const targetPath = path.join("src", "index.ts");
+		const targetDir = path.resolve("src");
+		await mkdir(targetDir, { recursive: true });
+		await writeFile(path.resolve(targetPath), "old");
+
+		const runner = makeFixRunner(targetPath, { provider: "my-llm" });
+		await run.watch(PR_URL, {
+			allowFix: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			provider: "my-llm",
+			runner,
+		});
+
+		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
+			([file, args]) => file === "my-llm" && args.includes("-p"),
+		);
+		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
+	});
+
+	it("passes a provider via the CLI when fixing", async () => {
+		const targetPath = path.join("src", "index.ts");
+		const targetDir = path.resolve("src");
+		await mkdir(targetDir, { recursive: true });
+		await writeFile(path.resolve(targetPath), "old");
+
+		const runner = makeFixRunner(targetPath, { provider: "my-llm" });
+		await run(["watch", PR_URL, "--fix", "--provider", "my-llm"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+
+		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
+			([file, args]) => file === "my-llm" && args.includes("-p"),
+		);
+		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
+	});
 });
 
 const dryRunOutput = (write: { mock: { calls: unknown[][] } }): Record<string, unknown> =>
@@ -1235,7 +1358,7 @@ describe("watch dry-run", () => {
 
 	it("defaults dry-run to one iteration", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, { dryRun: true, interval: NO_INTERVAL, runner });
 
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
@@ -1245,7 +1368,7 @@ describe("watch dry-run", () => {
 
 	it("explain dry-run produces human-readable preview", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, {
 			dryRun: true,
 			interval: NO_INTERVAL,
@@ -1274,7 +1397,7 @@ describe("watch dry-run", () => {
 
 	it("explain dry-run --json produces JSON preview", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({ claude: "It does something." });
+		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, {
 			dryRun: true,
 			interval: NO_INTERVAL,

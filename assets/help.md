@@ -12,7 +12,8 @@ A CLI that watches GitHub PR review comments for `@pickup` mentions and replies 
 
 - `--interval <seconds>` Seconds between polls (default: 60)
 - `--fix` Attempt to apply a generated fix and push a commit. The review comment body must also contain the tag `#fix` (case-insensitive).
-- `--model <model>` Use a specific `claude` model for explanations and fixes.
+- `--model <model>` Use a specific model for explanations and fixes.
+- `--provider <command>` Use a specific provider CLI instead of `claude`.
 - `--prompt <text>` Prepend custom instructions to the LLM prompt.
 - `--dry-run` Preview the reply or fix on stdout without posting to GitHub or committing/pushing.
 - `--json` When used with `--dry-run`, output the preview as JSON.
@@ -26,3 +27,4 @@ State is persisted in `$XDG_CONFIG_HOME/pickup/state.json`.
 - Run from a clean repository; `gh pr checkout` will fail if the working tree has uncommitted changes.
 - `--dry-run` still runs `gh pr checkout`; it only skips posting replies and committing/pushing fixes.
 - If `git push` fails after a fix is committed, the commit remains local and must be pushed manually.
+- `--provider` expects a CLI with the same flags as `claude` (`--version`, `--model`, `-p`).
