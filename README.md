@@ -9,7 +9,7 @@ Watch GitHub PR review comments for `@pickup` mentions and reply with an explana
 You need:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated.
-- The `claude` command in your PATH.
+- A `claude`-shaped CLI in your PATH (default is `claude`; use `--provider` to swap).
 - A clean git working tree.
 
 ## Install
@@ -30,7 +30,8 @@ pickup watch <pr-url-or-shorthand> [options]
 
 - `--interval <seconds>` — seconds between polls. Default is `60`.
 - `--fix` — try to generate, commit, and push a fix. The review comment must also contain the tag `#fix`.
-- `--model <model>` — use a specific `claude` model for explanations and fixes.
+- `--model <model>` — use a specific model for explanations and fixes.
+- `--provider <command>` — use a specific provider CLI instead of `claude`.
 - `--prompt <text>` — prepend custom instructions to the LLM prompt.
 - `--dry-run` — preview the reply or fix on stdout without posting to GitHub or committing/pushing.
 - `--json` — when used with `--dry-run`, output the preview as JSON.
@@ -51,10 +52,10 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - `gh pr checkout` needs a clean working tree, so commit or stash your own changes first.
 - `--dry-run` still runs `gh pr checkout` and may change the working tree; it only skips posting replies and committing/pushing fixes.
 - If a fix is committed but `git push` fails, the commit stays local. Push it yourself once the problem is fixed.
+- `--provider` expects a `claude`-shaped CLI (`--version`, `--model`, `-p`). Wrap other tools in a shim.
 
 ## TBD
 
-- **Pick your provider**: the `claude` command is hard-coded. Make it pluggable so you can use Cursor, Copilot, Devin, or any other CLI.
 - **Stream mode**: run `pickup` as a long-lived watcher that processes comments as they arrive, not only on a poll interval.
 - **Agent stream skill**: a skill or guide that teaches an agent to run `pickup` in stream mode and handle comments as they come in.
 - **Degit integration**: keep a fast, minimal copy of the target repo in the CLI config folder so agents have code context without a full clone.
