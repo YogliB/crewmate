@@ -56,6 +56,8 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - **Observability logs**: write structured logs so it is clear what `pickup` is polling, replying to, and fixing.
 - **General PR comments**: right now only review comments on diff lines are handled; conversation comments should be supported too.
 - **Listen to repo and org changes**: watch for relevant activity across a repository or organization instead of polling a single PR.
+- **`pickup init`**: one-time interactive setup that writes provider, model, and default flags to config.
+- **Model selection**: choose which model a provider uses instead of taking the CLI's default.
 
 ## More docs
 
