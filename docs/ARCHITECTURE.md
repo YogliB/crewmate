@@ -34,7 +34,7 @@
 - calls `src/fix.ts` to explain the line, or
 - calls `src/fix.ts` to generate and apply a fix when the comment contains `#fix` and `--fix` is enabled.
 
-With `--dry-run`, the generated reply or fix is written as JSON to stdout instead of posting to GitHub or committing/pushing.
+With `--dry-run`, the generated reply or fix is written to stdout as a human-readable preview instead of posting to GitHub or committing/pushing. Use `--json` with `--dry-run` for a machine-readable JSON preview.
 
 ## State
 

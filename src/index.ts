@@ -122,7 +122,13 @@ const preflight = async (prUrl: string, runner: Runner = exec): Promise<string> 
 const respondToMention = async (
 	mention: Record<string, unknown>,
 	prUrl: string,
-	options: { allowFix: boolean; dryRun?: boolean; repoRoot: string; runner: Runner },
+	options: {
+		allowFix: boolean;
+		dryRun?: boolean;
+		json?: boolean;
+		repoRoot: string;
+		runner: Runner;
+	},
 ): Promise<void> => {
 	const { runner } = options;
 	const { owner, repo, number } = parsePrUrl(prUrl);
@@ -131,6 +137,7 @@ const respondToMention = async (
 	const ctx = {
 		commentId,
 		dryRun: options.dryRun,
+		json: options.json,
 		number,
 		owner,
 		repo,
@@ -150,6 +157,7 @@ const pollIteration = async (
 		index: number;
 		interval: number;
 		iterations: number;
+		json?: boolean;
 		repoRoot: string;
 	},
 ): Promise<void> => {
@@ -172,6 +180,7 @@ const pollIteration = async (
 		await respondToMention(mention, prUrl, {
 			allowFix: iteration.allowFix,
 			dryRun: iteration.dryRun,
+			json: iteration.json,
 			repoRoot: iteration.repoRoot,
 			runner,
 		});
@@ -200,6 +209,7 @@ const watch = async (
 		allowFix?: boolean;
 		allowedUser?: string;
 		dryRun?: boolean;
+		json?: boolean;
 		runner?: Runner;
 		iterations?: number;
 	} = {},
@@ -220,6 +230,7 @@ const watch = async (
 			index,
 			interval,
 			iterations,
+			json: options.json,
 			repoRoot,
 		});
 	}
@@ -254,6 +265,7 @@ const runWatch = async (
 	const interval = parseInterval(flagArgs);
 	const allowFix = flagArgs.includes("--fix");
 	const dryRun = flagArgs.includes("--dry-run");
+	const json = flagArgs.includes("--json");
 	const allowedUser = findFlag(flagArgs, "--user");
 	await watch(prUrl, {
 		allowFix,
@@ -261,6 +273,7 @@ const runWatch = async (
 		dryRun,
 		interval,
 		iterations: options.iterations,
+		json,
 		runner: options.runner,
 	});
 };
