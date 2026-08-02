@@ -65,6 +65,7 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - **Per-project profiles**: store different provider, model, and default flags per repo in a local or global config.
 - **Custom prompts**: override reply style via `--prompt <text>` flag (per-repo config files TBD).
 - **Watch multiple PRs**: target a list of PRs, or all open PRs in a repo or org, in one command.
+- **Listen to issues alongside PR mentions**: respond to `@pickup` mentions in issue bodies and comments, not just pull request review threads.
 
 ## More docs
 
