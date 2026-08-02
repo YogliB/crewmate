@@ -46,6 +46,7 @@ type Runner = (file: string, args: string[]) => Promise<string>;
 
 type ReplyContext = {
 	commentId: number;
+	dryRun?: boolean;
 	number: string;
 	owner: string;
 	repo: string;
@@ -68,6 +69,12 @@ const stripFences = (content: string): string => {
 
 const postReply = async (ctx: ReplyContext, body: string): Promise<void> => {
 	const prefixedBody = `${PICKUP_PREFIX} ${body}`;
+	if (ctx.dryRun) {
+		process.stdout.write(
+			JSON.stringify({ action: "reply", commentId: ctx.commentId, body: prefixedBody }) + "\n",
+		);
+		return;
+	}
 	await ctx.runner("gh", [
 		"api",
 		"--method",
@@ -150,6 +157,12 @@ const generateFix = async (
 
 const applyFix = async (ctx: ReplyContext, targetPath: string, stripped: string): Promise<void> => {
 	const safePath = await toSafePath(targetPath, ctx.repoRoot);
+	if (ctx.dryRun) {
+		process.stdout.write(
+			JSON.stringify({ action: "fix", content: stripped, path: safePath }) + "\n",
+		);
+		return;
+	}
 	try {
 		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- path validated against the repository root
 		await writeFile(safePath, stripped);

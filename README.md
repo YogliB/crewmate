@@ -30,6 +30,7 @@ pickup watch <pr-url-or-shorthand> [options]
 
 - `--interval <seconds>` — seconds between polls. Default is `60`.
 - `--fix` — try to generate, commit, and push a fix. The review comment must also contain the tag `#fix`.
+- `--dry-run` — preview the reply or fix without posting to GitHub or committing/pushing.
 - `--user <login>` — only reply to comments from this GitHub user.
 
 State (seen comment IDs) is stored in `$XDG_CONFIG_HOME/pickup/state.json`.
@@ -45,6 +46,7 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 
 - Each poll handles the newest unseen `@pickup` mention; the rest wait for the next poll.
 - `gh pr checkout` needs a clean working tree, so commit or stash your own changes first.
+- `--dry-run` still runs `gh pr checkout` and may change the working tree; it only skips posting replies and committing/pushing fixes.
 - If a fix is committed but `git push` fails, the commit stays local. Push it yourself once the problem is fixed.
 
 ## TBD
@@ -59,7 +61,6 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - **`pickup init`**: one-time interactive setup that writes provider, model, and default flags to config.
 - **Model selection**: choose which model a provider uses instead of taking the CLI's default.
 - **Per-project profiles**: store different provider, model, and default flags per repo in a local or global config.
-- **Dry-run mode**: preview the reply or fix without posting it to GitHub or committing.
 - **Custom prompts**: override the system prompt or reply style per repo or via a CLI flag.
 - **Watch multiple PRs**: target a list of PRs, or all open PRs in a repo or org, in one command.
 

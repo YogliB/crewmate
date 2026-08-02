@@ -122,13 +122,21 @@ const preflight = async (prUrl: string, runner: Runner = exec): Promise<string> 
 const respondToMention = async (
 	mention: Record<string, unknown>,
 	prUrl: string,
-	options: { allowFix: boolean; repoRoot: string; runner: Runner },
+	options: { allowFix: boolean; dryRun?: boolean; repoRoot: string; runner: Runner },
 ): Promise<void> => {
 	const { runner } = options;
 	const { owner, repo, number } = parsePrUrl(prUrl);
 	const commentId = mention.id as number;
 	const commentBody = mention.body as string;
-	const ctx = { commentId, number, owner, repo, repoRoot: options.repoRoot, runner };
+	const ctx = {
+		commentId,
+		dryRun: options.dryRun,
+		number,
+		owner,
+		repo,
+		repoRoot: options.repoRoot,
+		runner,
+	};
 	await dispatchMention(mention, ctx, { allowFix: options.allowFix, commentBody });
 };
 
@@ -138,6 +146,7 @@ const pollIteration = async (
 	iteration: {
 		allowFix: boolean;
 		allowedUser?: string;
+		dryRun?: boolean;
 		index: number;
 		interval: number;
 		iterations: number;
@@ -155,10 +164,14 @@ const pollIteration = async (
 	for (const mention of mentions) {
 		// ponytail: persist seen ID before acting so an error does not reprocess the same mention.
 		// If one respondToMention throws, the loop aborts; remaining unseen mentions are handled on the next poll.
-		state.set(prUrl, [...(state.get(prUrl) ?? []), mention.id as number]);
-		await saveState(state);
+		// In dry-run, state is not saved so a later real run can still post.
+		if (!iteration.dryRun) {
+			state.set(prUrl, [...(state.get(prUrl) ?? []), mention.id as number]);
+			await saveState(state);
+		}
 		await respondToMention(mention, prUrl, {
 			allowFix: iteration.allowFix,
+			dryRun: iteration.dryRun,
 			repoRoot: iteration.repoRoot,
 			runner,
 		});
@@ -186,19 +199,24 @@ const watch = async (
 		interval?: number;
 		allowFix?: boolean;
 		allowedUser?: string;
+		dryRun?: boolean;
 		runner?: Runner;
 		iterations?: number;
 	} = {},
 ): Promise<void> => {
 	const runner = options.runner ?? exec;
 	const interval = options.interval ?? DEFAULT_INTERVAL_SECONDS;
-	const iterations = options.iterations ?? Infinity; // Infinity polls until the process is interrupted
+	const iterations = options.iterations ?? (options.dryRun ? 1 : Infinity); // Infinity polls until the process is interrupted; dry-run previews once
+	if (options.dryRun) {
+		process.stderr.write("Dry-run mode: no GitHub comments or git add/commit/push will be made.\n");
+	}
 	const normalizedPrUrl = toPrUrl(parsePrUrl(prUrl));
 	const repoRoot = await preflight(normalizedPrUrl, runner);
 	for (let index = 0; index < iterations; index += 1) {
 		await pollIteration(normalizedPrUrl, runner, {
 			allowFix: options.allowFix ?? false,
 			allowedUser: options.allowedUser,
+			dryRun: options.dryRun,
 			index,
 			interval,
 			iterations,
@@ -235,10 +253,12 @@ const runWatch = async (
 	}
 	const interval = parseInterval(flagArgs);
 	const allowFix = flagArgs.includes("--fix");
+	const dryRun = flagArgs.includes("--dry-run");
 	const allowedUser = findFlag(flagArgs, "--user");
 	await watch(prUrl, {
 		allowFix,
 		allowedUser,
+		dryRun,
 		interval,
 		iterations: options.iterations,
 		runner: options.runner,

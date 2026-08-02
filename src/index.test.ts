@@ -1075,6 +1075,109 @@ describe("watch fix success", () => {
 	});
 });
 
+const dryRunOutput = (write: { mock: { calls: unknown[][] } }): Record<string, unknown> =>
+	JSON.parse((write.mock.calls.at(-1) as [string])[0]);
+
+describe("watch dry-run", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+		process.chdir(tempDir);
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "example");
+	});
+
+	afterEach(async () => {
+		process.chdir(ORIGINAL_CWD);
+		await rm(tempDir, { force: true, recursive: true });
+	});
+
+	it("defaults dry-run to one iteration", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
+		const runner = makeExplainRunner({ claude: "It does something." });
+		await run.watch(PR_URL, { dryRun: true, interval: NO_INTERVAL, runner });
+
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+		expect(write).toHaveBeenCalled();
+		write.mockRestore();
+	});
+
+	it("explain dry-run produces no gh POST and does not persist state", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
+		const runner = makeExplainRunner({ claude: "It does something." });
+		await run.watch(PR_URL, {
+			dryRun: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(
+			countCalls(
+				runner,
+				"gh",
+				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
+			),
+		).toBe(FIRST_CALL);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+
+		const output = dryRunOutput(write);
+		expect(output).toMatchObject({
+			action: "reply",
+			body: "🛻 pickup: It does something.",
+			commentId: FIRST_ID,
+		});
+		write.mockRestore();
+
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toBeUndefined();
+	});
+
+	it("fix dry-run produces no git add/commit/push", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
+		const targetPath = path.join("src", "index.ts");
+		await writeFile(path.resolve(targetPath), "old");
+
+		const runner = makeFixRunner(targetPath);
+		await run.watch(PR_URL, {
+			allowFix: true,
+			dryRun: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
+		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "commit")).toBe(NO_CALLS);
+		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "push")).toBe(NO_CALLS);
+		expect(
+			countCalls(
+				runner,
+				"gh",
+				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
+			),
+		).toBe(FIRST_CALL);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+
+		const content = await readFile(path.resolve(targetPath), "utf8");
+		expect(content).toBe("old");
+
+		const output = dryRunOutput(write);
+		expect(output).toMatchObject({
+			action: "fix",
+			content: "new",
+		});
+		expect(typeof output.path === "string" && (output.path as string).endsWith(targetPath)).toBe(
+			true,
+		);
+		write.mockRestore();
+	});
+});
+
 describe("watch fix missing", () => {
 	let tempDir = "";
 
