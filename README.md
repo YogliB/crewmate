@@ -58,6 +58,10 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - **Listen to repo and org changes**: watch for relevant activity across a repository or organization instead of polling a single PR.
 - **`pickup init`**: one-time interactive setup that writes provider, model, and default flags to config.
 - **Model selection**: choose which model a provider uses instead of taking the CLI's default.
+- **Per-project profiles**: store different provider, model, and default flags per repo in a local or global config.
+- **Dry-run mode**: preview the reply or fix without posting it to GitHub or committing.
+- **Custom prompts**: override the system prompt or reply style per repo or via a CLI flag.
+- **Watch multiple PRs**: target a list of PRs, or all open PRs in a repo or org, in one command.
 
 ## More docs
 
