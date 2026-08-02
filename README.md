@@ -30,6 +30,7 @@ pickup watch <pr-url-or-shorthand> [options]
 
 - `--interval <seconds>` — seconds between polls. Default is `60`.
 - `--fix` — try to generate, commit, and push a fix. The review comment must also contain the tag `#fix`.
+- `--prompt <text>` — prepend custom instructions to the LLM prompt.
 - `--dry-run` — preview the reply or fix on stdout without posting to GitHub or committing/pushing.
 - `--json` — when used with `--dry-run`, output the preview as JSON.
 - `--user <login>` — only reply to comments from this GitHub user.
@@ -62,7 +63,7 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - **`pickup init`**: one-time interactive setup that writes provider, model, and default flags to config.
 - **Model selection**: choose which model a provider uses instead of taking the CLI's default.
 - **Per-project profiles**: store different provider, model, and default flags per repo in a local or global config.
-- **Custom prompts**: override the system prompt or reply style per repo or via a CLI flag.
+- **Custom prompts**: override reply style via `--prompt <text>` flag (per-repo config files TBD).
 - **Watch multiple PRs**: target a list of PRs, or all open PRs in a repo or org, in one command.
 
 ## More docs

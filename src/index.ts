@@ -126,6 +126,7 @@ const respondToMention = async (
 		allowFix: boolean;
 		dryRun?: boolean;
 		json?: boolean;
+		prompt?: string;
 		repoRoot: string;
 		runner: Runner;
 	},
@@ -140,6 +141,7 @@ const respondToMention = async (
 		json: options.json,
 		number,
 		owner,
+		prompt: options.prompt,
 		repo,
 		repoRoot: options.repoRoot,
 		runner,
@@ -158,6 +160,7 @@ const pollIteration = async (
 		interval: number;
 		iterations: number;
 		json?: boolean;
+		prompt?: string;
 		repoRoot: string;
 	},
 ): Promise<void> => {
@@ -181,6 +184,7 @@ const pollIteration = async (
 			allowFix: iteration.allowFix,
 			dryRun: iteration.dryRun,
 			json: iteration.json,
+			prompt: iteration.prompt,
 			repoRoot: iteration.repoRoot,
 			runner,
 		});
@@ -210,6 +214,7 @@ const watch = async (
 		allowedUser?: string;
 		dryRun?: boolean;
 		json?: boolean;
+		prompt?: string;
 		runner?: Runner;
 		iterations?: number;
 	} = {},
@@ -231,6 +236,7 @@ const watch = async (
 			interval,
 			iterations,
 			json: options.json,
+			prompt: options.prompt,
 			repoRoot,
 		});
 	}
@@ -267,6 +273,7 @@ const runWatch = async (
 	const dryRun = flagArgs.includes("--dry-run");
 	const json = flagArgs.includes("--json");
 	const allowedUser = findFlag(flagArgs, "--user");
+	const prompt = findFlag(flagArgs, "--prompt");
 	await watch(prUrl, {
 		allowFix,
 		allowedUser,
@@ -274,6 +281,7 @@ const runWatch = async (
 		interval,
 		iterations: options.iterations,
 		json,
+		prompt,
 		runner: options.runner,
 	});
 };
