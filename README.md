@@ -30,7 +30,7 @@ pickup watch <pr-url-or-shorthand> [options]
 
 - `--interval <seconds>` — seconds between polls. Default is `60`.
 - `--fix` — try to generate, commit, and push a fix. The review comment must also contain the tag `#fix`.
-- `--dry-run` — preview the reply or fix without posting to GitHub or committing/pushing.
+- `--dry-run` — preview the reply or fix as JSON on stdout without posting to GitHub or committing/pushing.
 - `--user <login>` — only reply to comments from this GitHub user.
 
 State (seen comment IDs) is stored in `$XDG_CONFIG_HOME/pickup/state.json`.

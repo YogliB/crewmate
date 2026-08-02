@@ -34,9 +34,11 @@
 - calls `src/fix.ts` to explain the line, or
 - calls `src/fix.ts` to generate and apply a fix when the comment contains `#fix` and `--fix` is enabled.
 
+With `--dry-run`, the generated reply or fix is written as JSON to stdout instead of posting to GitHub or committing/pushing.
+
 ## State
 
-Seen comment IDs are stored in `$XDG_CONFIG_HOME/pickup/state.json` as a JSON map of PR URLs to arrays of comment IDs. The file is read at the start of each poll and written before any reply is posted, so an error does not reprocess the same comment.
+Seen comment IDs are stored in `$XDG_CONFIG_HOME/pickup/state.json` as a JSON map of PR URLs to arrays of comment IDs. The file is read at the start of each poll and written before any reply is posted, so an error does not reprocess the same comment. In `--dry-run` mode, state is not written.
 
 ## External Dependencies
 
