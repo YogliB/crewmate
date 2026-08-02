@@ -39,6 +39,13 @@ const countCalls = (
 		([calledFile, args]) => calledFile === file && argMatcher(args),
 	).length;
 
+const getClaudePrompt = (runner: Runner): string | undefined => {
+	const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
+		([file, args]) => file === "claude" && args.at(FIRST_INDEX) === "-p",
+	);
+	return call?.[1].at(SECOND_INDEX);
+};
+
 const resolveGhExplain = (
 	args: string[],
 	request: { body?: string; path?: string } = {},
@@ -298,6 +305,32 @@ describe("run watch flags", () => {
 		process.exitCode = NO_EXIT_CODE;
 		await expect(run(["watch", PR_URL], { iterations: NO_ITERATIONS })).resolves.toBeUndefined();
 		process.exitCode = previousExitCode;
+	});
+
+	it("passes a custom prompt to claude", async () => {
+		const runner = makeExplainRunner({ claude: "It does something." });
+		await run(["watch", PR_URL, "--prompt", "BE_TERSE"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(getClaudePrompt(runner)?.startsWith("BE_TERSE\n\n")).toBe(true);
+	});
+
+	it("uses the default prompt when --prompt is missing", async () => {
+		const runner = makeExplainRunner({ claude: "It does something." });
+		await run(["watch", PR_URL], { iterations: FIRST_ITERATION, runner });
+		expect(getClaudePrompt(runner)?.startsWith("Review comment:")).toBe(true);
+	});
+
+	it("ignores --prompt when the value is another flag", async () => {
+		const runner = makeExplainRunner({ claude: "It does something." });
+		await run(["watch", PR_URL, "--prompt", "--fix"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const prompt = getClaudePrompt(runner);
+		expect(prompt?.startsWith("Review comment:")).toBe(true);
+		expect(prompt?.startsWith("BE_TERSE\n\n")).toBe(false);
 	});
 });
 
@@ -1072,6 +1105,24 @@ describe("watch fix success", () => {
 
 		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+	});
+
+	it("passes a custom prompt when fixing", async () => {
+		const targetPath = path.join("src", "index.ts");
+		const targetDir = path.resolve("src");
+		await mkdir(targetDir, { recursive: true });
+		await writeFile(path.resolve(targetPath), "old");
+
+		const runner = makeFixRunner(targetPath);
+		await run.watch(PR_URL, {
+			allowFix: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			prompt: "FIX_STYLE",
+			runner,
+		});
+
+		expect(getClaudePrompt(runner)?.startsWith("FIX_STYLE\n\n")).toBe(true);
 	});
 });
 

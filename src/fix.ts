@@ -50,6 +50,7 @@ type ReplyContext = {
 	json?: boolean;
 	number: string;
 	owner: string;
+	prompt?: string;
 	repo: string;
 	repoRoot: string;
 	runner: Runner;
@@ -102,7 +103,8 @@ const handleExplain = async (
 	}
 	const body = mention.body as string;
 	const prompt = `Review comment: ${JSON.stringify(body)}\nTarget file: ${JSON.stringify(targetPath)}\nLine: ${line}\nFile content: ${JSON.stringify(content)}\n\nExplain what the line does in this PR. Return only the explanation.`;
-	const answer = await ctx.runner("claude", ["-p", prompt]);
+	const finalPrompt = ctx.prompt ? `${ctx.prompt}\n\n${prompt}` : prompt;
+	const answer = await ctx.runner("claude", ["-p", finalPrompt]);
 	if (!answer) {
 		process.stderr.write(EMPTY_EXPLANATION_WARNING);
 		return;
@@ -151,7 +153,8 @@ const generateFix = async (
 	const line = mention.line as number;
 	const body = mention.body as string;
 	const prompt = `Fix the issue described in this review comment.\nReview comment: ${JSON.stringify(body)}\nTarget file: ${JSON.stringify(targetPath)}\nLine: ${line}\nFile content: ${JSON.stringify(content)}\n\nReturn only the corrected file content. Do not wrap it in markdown.`;
-	const fixed = await ctx.runner("claude", ["-p", prompt]);
+	const finalPrompt = ctx.prompt ? `${ctx.prompt}\n\n${prompt}` : prompt;
+	const fixed = await ctx.runner("claude", ["-p", finalPrompt]);
 	const stripped = stripFences(fixed);
 	if (!stripped) {
 		await postReply(ctx, NO_FIX_REPLY);
