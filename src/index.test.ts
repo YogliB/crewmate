@@ -1077,6 +1077,8 @@ describe("watch fix success", () => {
 
 const dryRunOutput = (write: { mock: { calls: unknown[][] } }): Record<string, unknown> =>
 	JSON.parse((write.mock.calls.at(-1) as [string])[0]);
+const lastDryRunWrite = (write: { mock: { calls: unknown[][] } }): string =>
+	(write.mock.calls.at(-1) as [string])[0];
 
 describe("watch dry-run", () => {
 	let tempDir = "";
@@ -1104,7 +1106,7 @@ describe("watch dry-run", () => {
 		write.mockRestore();
 	});
 
-	it("explain dry-run produces no gh POST and does not persist state", async () => {
+	it("explain dry-run produces human-readable preview", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
 		const runner = makeExplainRunner({ claude: "It does something." });
 		await run.watch(PR_URL, {
@@ -1124,6 +1126,26 @@ describe("watch dry-run", () => {
 		).toBe(FIRST_CALL);
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 
+		const output = lastDryRunWrite(write);
+		expect(output).toContain("would reply to comment");
+		expect(output).toContain("It does something.");
+		write.mockRestore();
+
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toBeUndefined();
+	});
+
+	it("explain dry-run --json produces JSON preview", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
+		const runner = makeExplainRunner({ claude: "It does something." });
+		await run.watch(PR_URL, {
+			dryRun: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			json: true,
+			runner,
+		});
+
 		const output = dryRunOutput(write);
 		expect(output).toMatchObject({
 			action: "reply",
@@ -1131,12 +1153,9 @@ describe("watch dry-run", () => {
 			commentId: FIRST_ID,
 		});
 		write.mockRestore();
-
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toBeUndefined();
 	});
 
-	it("fix dry-run produces no git add/commit/push", async () => {
+	it("fix dry-run produces human-readable preview", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
 		const targetPath = path.join("src", "index.ts");
 		await writeFile(path.resolve(targetPath), "old");
@@ -1165,6 +1184,28 @@ describe("watch dry-run", () => {
 
 		const content = await readFile(path.resolve(targetPath), "utf8");
 		expect(content).toBe("old");
+
+		const output = lastDryRunWrite(write);
+		expect(output).toContain("would write fix to");
+		expect(output).toContain(targetPath);
+		expect(output).toContain("new");
+		write.mockRestore();
+	});
+
+	it("fix dry-run --json produces JSON preview", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
+		const targetPath = path.join("src", "index.ts");
+		await writeFile(path.resolve(targetPath), "old");
+
+		const runner = makeFixRunner(targetPath);
+		await run.watch(PR_URL, {
+			allowFix: true,
+			dryRun: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			json: true,
+			runner,
+		});
 
 		const output = dryRunOutput(write);
 		expect(output).toMatchObject({

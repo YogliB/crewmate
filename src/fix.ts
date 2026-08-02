@@ -47,6 +47,7 @@ type Runner = (file: string, args: string[]) => Promise<string>;
 type ReplyContext = {
 	commentId: number;
 	dryRun?: boolean;
+	json?: boolean;
 	number: string;
 	owner: string;
 	repo: string;
@@ -70,9 +71,13 @@ const stripFences = (content: string): string => {
 const postReply = async (ctx: ReplyContext, body: string): Promise<void> => {
 	const prefixedBody = `${PICKUP_PREFIX} ${body}`;
 	if (ctx.dryRun) {
-		process.stdout.write(
-			JSON.stringify({ action: "reply", commentId: ctx.commentId, body: prefixedBody }) + "\n",
-		);
+		if (ctx.json) {
+			process.stdout.write(
+				JSON.stringify({ action: "reply", commentId: ctx.commentId, body: prefixedBody }) + "\n",
+			);
+		} else {
+			process.stdout.write(`[dry-run] would reply to comment ${ctx.commentId}:\n${prefixedBody}\n`);
+		}
 		return;
 	}
 	await ctx.runner("gh", [
@@ -158,9 +163,13 @@ const generateFix = async (
 const applyFix = async (ctx: ReplyContext, targetPath: string, stripped: string): Promise<void> => {
 	const safePath = await toSafePath(targetPath, ctx.repoRoot);
 	if (ctx.dryRun) {
-		process.stdout.write(
-			JSON.stringify({ action: "fix", content: stripped, path: safePath }) + "\n",
-		);
+		if (ctx.json) {
+			process.stdout.write(
+				JSON.stringify({ action: "fix", content: stripped, path: safePath }) + "\n",
+			);
+		} else {
+			process.stdout.write(`[dry-run] would write fix to ${safePath}:\n${stripped}\n`);
+		}
 		return;
 	}
 	try {
