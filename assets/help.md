@@ -12,7 +12,7 @@ A CLI that watches GitHub PR review comments for `@pickup` mentions and replies 
 
 - `--interval <seconds>` Seconds between polls (default: 60)
 - `--fix` Attempt to apply a generated fix and push a commit. The review comment body must also contain the tag `#fix` (case-insensitive).
-- `--dry-run` Preview the reply or fix without posting to GitHub or committing/pushing.
+- `--dry-run` Preview the reply or fix as JSON on stdout without posting to GitHub or committing/pushing.
 - `--user <login>` Only respond to comments from this GitHub login
 
 State is persisted in `$XDG_CONFIG_HOME/pickup/state.json`.
