@@ -41,9 +41,10 @@ const countCalls = (
 
 const getClaudePrompt = (runner: Runner): string | undefined => {
 	const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-		([file, args]) => file === "claude" && args.at(FIRST_INDEX) === "-p",
+		([file, args]) => file === "claude" && args.includes("-p"),
 	);
-	return call?.[1].at(SECOND_INDEX);
+	const index = call?.[1].indexOf("-p");
+	return typeof index === "number" && index >= 0 ? call?.[1].at(index + 1) : undefined;
 };
 
 const resolveGhExplain = (
@@ -331,6 +332,52 @@ describe("run watch flags", () => {
 		const prompt = getClaudePrompt(runner);
 		expect(prompt?.startsWith("Review comment:")).toBe(true);
 		expect(prompt?.startsWith("BE_TERSE\n\n")).toBe(false);
+	});
+
+	it("passes a model to claude", async () => {
+		const runner = makeExplainRunner({ claude: "It does something." });
+		await run.watch(PR_URL, {
+			iterations: FIRST_ITERATION,
+			model: "claude-sonnet-4-20250514",
+			runner,
+		});
+		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
+			([file, args]) => file === "claude" && args.includes("-p"),
+		);
+		expect(call?.[1]).toEqual(["--model", "claude-sonnet-4-20250514", "-p", expect.any(String)]);
+	});
+
+	it("passes a model via the CLI", async () => {
+		const runner = makeExplainRunner({ claude: "It does something." });
+		await run(["watch", PR_URL, "--model", "claude-sonnet-4-20250514"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
+			([file, args]) => file === "claude" && args.includes("-p"),
+		);
+		expect(call?.[1]).toEqual(["--model", "claude-sonnet-4-20250514", "-p", expect.any(String)]);
+	});
+
+	it("ignores --model when the value is another flag", async () => {
+		const runner = makeExplainRunner({ claude: "It does something." });
+		await run(["watch", PR_URL, "--model", "--fix"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
+			([file, args]) => file === "claude" && args.includes("-p"),
+		);
+		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
+	});
+
+	it("calls claude without a model when the model option is missing", async () => {
+		const runner = makeExplainRunner({ claude: "It does something." });
+		await run.watch(PR_URL, { iterations: FIRST_ITERATION, runner });
+		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
+			([file, args]) => file === "claude" && args.includes("-p"),
+		);
+		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
 	});
 });
 
@@ -1123,6 +1170,45 @@ describe("watch fix success", () => {
 		});
 
 		expect(getClaudePrompt(runner)?.startsWith("FIX_STYLE\n\n")).toBe(true);
+	});
+
+	it("passes a model when fixing", async () => {
+		const targetPath = path.join("src", "index.ts");
+		const targetDir = path.resolve("src");
+		await mkdir(targetDir, { recursive: true });
+		await writeFile(path.resolve(targetPath), "old");
+
+		const runner = makeFixRunner(targetPath);
+		await run.watch(PR_URL, {
+			allowFix: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			model: "claude-sonnet-4-20250514",
+			runner,
+		});
+
+		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
+			([file, args]) => file === "claude" && args.includes("-p"),
+		);
+		expect(call?.[1]).toEqual(["--model", "claude-sonnet-4-20250514", "-p", expect.any(String)]);
+	});
+
+	it("passes a model via the CLI when fixing", async () => {
+		const targetPath = path.join("src", "index.ts");
+		const targetDir = path.resolve("src");
+		await mkdir(targetDir, { recursive: true });
+		await writeFile(path.resolve(targetPath), "old");
+
+		const runner = makeFixRunner(targetPath);
+		await run(["watch", PR_URL, "--fix", "--model", "claude-sonnet-4-20250514"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+
+		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
+			([file, args]) => file === "claude" && args.includes("-p"),
+		);
+		expect(call?.[1]).toEqual(["--model", "claude-sonnet-4-20250514", "-p", expect.any(String)]);
 	});
 });
 
