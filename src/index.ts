@@ -308,6 +308,8 @@ const watch = async (
 	}
 };
 
+const VALUE_FLAGS = new Set(["--interval", "--user", "--prompt", "--model", "--provider"]);
+
 const parseArgs = (argv: string[]): { booleans: Set<string>; values: Map<string, string> } => {
 	const booleans = new Set<string>();
 	const values = new Map<string, string>();
@@ -322,7 +324,7 @@ const parseArgs = (argv: string[]): { booleans: Set<string>; values: Map<string,
 			values.set(arg.slice(0, eq), arg.slice(eq + 1));
 			continue;
 		}
-		if (i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
+		if (VALUE_FLAGS.has(arg) && i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
 			values.set(arg, argv[i + 1]);
 			i += 1;
 		} else {

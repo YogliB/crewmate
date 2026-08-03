@@ -355,6 +355,26 @@ describe("run watch flags", () => {
 		expect(prompt?.startsWith("BE_TERSE\n\n")).toBe(false);
 	});
 
+	it("does not let an extra word after --dry-run disable dry-run", async () => {
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["watch", PR_URL, "--dry-run", "extra"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+	});
+
+	it("does not let an extra word after --log disable stderr mirroring", async () => {
+		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["watch", PR_URL, "--log", "/tmp/x.log"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(write).toHaveBeenCalledWith(expect.stringContaining('"event":"poll"'));
+		write.mockRestore();
+	});
+
 	it("passes a model to claude", async () => {
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, {
