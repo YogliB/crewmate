@@ -1,10 +1,21 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { homedir } from "node:os";
 
-const statePath = (): string =>
-	path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), ".config"), "pickup", "state.json");
+const homeDir = (): string => {
+	try {
+		return homedir();
+	} catch {
+		return process.cwd();
+	}
+};
+
+const configHome = (): string =>
+	process.env.XDG_CONFIG_HOME ||
+	path.join(process.env.HOME || process.env.USERPROFILE || homeDir(), ".config");
+
+const statePath = (): string => path.join(configHome(), "pickup", "state.json");
 
 const readRawState = async (filePath: string): Promise<string> => {
 	try {
@@ -19,32 +30,38 @@ const readRawState = async (filePath: string): Promise<string> => {
 	}
 };
 
-const loadStateEntries = (state: Map<string, number[]>, raw: string): void => {
+const loadStateEntries = (state: Map<string, number[]>, raw: string): boolean => {
 	let parsed: Record<string, unknown>;
 	try {
 		parsed = JSON.parse(raw) as Record<string, unknown>;
 	} catch {
-		process.stderr.write("Warning: state file is corrupted, resetting.\n");
-		return;
+		return true;
 	}
 	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-		process.stderr.write("Warning: state file is corrupted, resetting.\n");
-		return;
+		return true;
 	}
 	for (const [key, value] of Object.entries(parsed)) {
 		if (Array.isArray(value) && value.every((item) => typeof item === "number")) {
 			state.set(key, value as number[]);
 		}
 	}
+	return false;
 };
 
-const loadState = async (filePath = statePath()): Promise<Map<string, number[]>> => {
+const loadState = async (
+	filePath = statePath(),
+	onCorrupt: () => void | Promise<void> = () => {
+		process.stderr.write("Warning: state file is corrupted, resetting.\n");
+	},
+): Promise<Map<string, number[]>> => {
 	const state = new Map<string, number[]>();
 	const raw = await readRawState(filePath);
 	if (raw === "") {
 		return state;
 	}
-	loadStateEntries(state, raw);
+	if (loadStateEntries(state, raw)) {
+		await onCorrupt();
+	}
 	return state;
 };
 

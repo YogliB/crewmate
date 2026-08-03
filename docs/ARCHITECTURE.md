@@ -10,6 +10,7 @@
 │   ├── index.ts   # CLI and watch loop
 │   ├── bin.ts     # executable entry point
 │   ├── fix.ts     # reply generation and fix application
+│   ├── log.ts     # structured logging
 │   └── state.ts   # persistent seen-comment state
 ├── dist/          # built ESM output from tsdown
 ├── assets/
@@ -27,6 +28,9 @@
 
 ```text
 [review comment on GitHub] --gh api--> [src/index.ts] --claude--> [reply or fix] --gh api--> [posted reply]
+                                                                                  |
+                                                                                  v
+                                                                           [src/log.ts] --> $XDG_CONFIG_HOME/pickup/pickup.log
 ```
 
 `src/index.ts` fetches comments with `gh api`, finds the newest unseen `@pickup` mention, and either:

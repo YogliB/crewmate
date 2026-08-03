@@ -4,6 +4,7 @@ import { setTimeout } from "node:timers/promises";
 import { readFileSync } from "node:fs";
 import process from "node:process";
 import { dispatchMention, getLogin, PICKUP_PREFIX, type Runner, stripFences } from "./fix.js";
+import { createLogger, type Logger } from "./log.js";
 import { loadState, saveState, statePath } from "./state.js";
 
 const CLI_ARGV_OFFSET = 2;
@@ -20,7 +21,7 @@ const exec = async (file: string, args: string[]): Promise<string> => {
 };
 
 function showHelp(): void {
-	// eslint-disable-next-line security/detect-non-literal-fs-filename
+	// oxlint-disable-next-line security/detect-non-literal-fs-filename -- HELP_PATH is a build-time constant
 	process.stdout.write(`\n${readFileSync(HELP_PATH, "utf8")}\n`);
 }
 
@@ -130,11 +131,13 @@ const respondToMention = async (
 		allowFix: boolean;
 		dryRun?: boolean;
 		json?: boolean;
+		logger: Logger;
 		model?: string;
 		prompt?: string;
 		provider?: string;
 		repoRoot: string;
 		runner: Runner;
+		warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
 	},
 ): Promise<void> => {
 	const { runner } = options;
@@ -145,6 +148,7 @@ const respondToMention = async (
 		commentId,
 		dryRun: options.dryRun,
 		json: options.json,
+		logger: options.logger,
 		model: options.model,
 		number,
 		owner,
@@ -153,6 +157,7 @@ const respondToMention = async (
 		repo,
 		repoRoot: options.repoRoot,
 		runner,
+		warn: options.warn,
 	};
 	await dispatchMention(mention, ctx, { allowFix: options.allowFix, commentBody });
 };
@@ -168,13 +173,18 @@ const pollIteration = async (
 		interval: number;
 		iterations: number;
 		json?: boolean;
+		logger: Logger;
 		model?: string;
 		prompt?: string;
 		provider?: string;
 		repoRoot: string;
+		warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
 	},
 ): Promise<void> => {
-	const state = await loadState();
+	await iteration.logger("poll", { url: prUrl });
+	const state = await loadState(undefined, async () =>
+		iteration.warn("state file is corrupted, resetting", { reason: "state-corrupted" }),
+	);
 	const comments = await fetchReviewComments(prUrl, runner);
 	const mentions = findNewMentions(
 		comments,
@@ -183,6 +193,13 @@ const pollIteration = async (
 		state.size === 0,
 	);
 	for (const mention of mentions) {
+		await iteration.logger("mention", {
+			allowFix: iteration.allowFix,
+			commentId: mention.id as number,
+			dryRun: iteration.dryRun,
+			user: getLogin(mention.user),
+			url: prUrl,
+		});
 		if (!iteration.dryRun) {
 			state.set(prUrl, [...(state.get(prUrl) ?? []), mention.id as number]);
 			await saveState(state);
@@ -191,11 +208,13 @@ const pollIteration = async (
 			allowFix: iteration.allowFix,
 			dryRun: iteration.dryRun,
 			json: iteration.json,
+			logger: iteration.logger,
 			model: iteration.model,
 			prompt: iteration.prompt,
 			provider: iteration.provider,
 			repoRoot: iteration.repoRoot,
 			runner,
+			warn: iteration.warn,
 		});
 	}
 	if (iteration.index < iteration.iterations - 1) {
@@ -223,52 +242,103 @@ const watch = async (
 		allowedUser?: string;
 		dryRun?: boolean;
 		json?: boolean;
+		logger?: Logger;
 		model?: string;
 		prompt?: string;
 		provider?: string;
 		runner?: Runner;
 		iterations?: number;
+		toStderr?: boolean;
 	} = {},
 ): Promise<void> => {
 	const runner = options.runner ?? exec;
 	const interval = options.interval ?? DEFAULT_INTERVAL_SECONDS;
 	const iterations = options.iterations ?? (options.dryRun ? 1 : Infinity);
+	const toStderr = options.toStderr ?? false;
+	const logger = options.logger ?? createLogger({ toStderr });
+	const warn = async (message: string, fields: Record<string, unknown> = {}) => {
+		if (!toStderr) {
+			try {
+				process.stderr.write(`Warning: ${message}\n`);
+			} catch {}
+		}
+		await logger("warning", { ...fields, message });
+	};
 	if (options.dryRun) {
-		process.stderr.write("Dry-run mode: no GitHub comments or git add/commit/push will be made.\n");
-	}
-	const normalizedPrUrl = toPrUrl(parsePrUrl(prUrl));
-	const repoRoot = await preflight(normalizedPrUrl, runner, options.provider);
-	for (let index = 0; index < iterations; index += 1) {
-		await pollIteration(normalizedPrUrl, runner, {
-			allowFix: options.allowFix ?? false,
-			allowedUser: options.allowedUser,
-			dryRun: options.dryRun,
-			index,
-			interval,
-			iterations,
-			json: options.json,
-			model: options.model,
-			prompt: options.prompt,
-			provider: options.provider,
-			repoRoot,
+		if (!toStderr) {
+			try {
+				process.stderr.write(
+					"Dry-run mode: no GitHub comments or git add/commit/push will be made.\n",
+				);
+			} catch {}
+		}
+		await logger("info", {
+			message: "Dry-run mode: no GitHub comments or git add/commit/push will be made.",
 		});
 	}
+	let normalizedPrUrl = prUrl;
+	try {
+		normalizedPrUrl = toPrUrl(parsePrUrl(prUrl));
+		const repoRoot = await preflight(normalizedPrUrl, runner, options.provider);
+		for (let index = 0; index < iterations; index += 1) {
+			await pollIteration(normalizedPrUrl, runner, {
+				allowFix: options.allowFix ?? false,
+				allowedUser: options.allowedUser,
+				dryRun: options.dryRun,
+				index,
+				interval,
+				iterations,
+				json: options.json,
+				logger,
+				model: options.model,
+				prompt: options.prompt,
+				provider: options.provider,
+				repoRoot,
+				warn,
+			});
+		}
+	} catch (error) {
+		await logger("error", {
+			errorType: error instanceof Error ? error.name : "unknown",
+			message: error instanceof Error ? error.message : String(error),
+			stack: error instanceof Error ? error.stack : undefined,
+			url: normalizedPrUrl,
+		}).catch(() => {});
+		throw error;
+	}
 };
 
-const findFlag = (argv: string[], flag: string): string | undefined => {
-	const index = argv.indexOf(flag);
-	if (index === -1 || index + 1 >= argv.length) {
-		return;
+const VALUE_FLAGS = new Set(["--interval", "--user", "--prompt", "--model", "--provider"]);
+
+const parseArgs = (argv: string[]): { booleans: Set<string>; values: Map<string, string> } => {
+	const booleans = new Set<string>();
+	const values = new Map<string, string>();
+	for (let i = 0; i < argv.length; i += 1) {
+		// oxlint-disable-next-line security/detect-object-injection -- array index read, not property injection
+		const arg = argv[i];
+		if (!arg.startsWith("--")) {
+			continue;
+		}
+		const eq = arg.indexOf("=");
+		if (eq !== -1) {
+			values.set(arg.slice(0, eq), arg.slice(eq + 1));
+			continue;
+		}
+		if (VALUE_FLAGS.has(arg) && i + 1 < argv.length && !argv[i + 1].startsWith("-")) {
+			values.set(arg, argv[i + 1]);
+			i += 1;
+		} else {
+			booleans.add(arg);
+		}
 	}
-	const value = argv.at(index + 1);
-	if (value === undefined || value.startsWith("-")) {
-		return;
-	}
-	return value;
+	return { booleans, values };
 };
 
-const parseInterval = (flagArgs: string[]): number => {
-	const value = findFlag(flagArgs, "--interval");
+const findFlag = (argv: string[], flag: string): string | undefined =>
+	parseArgs(argv).values.get(flag);
+
+const parseInterval = (input: string | string[] | undefined): number => {
+	const value = Array.isArray(input) ? findFlag(input, "--interval") : input;
 	const parsed = value === undefined ? DEFAULT_INTERVAL_SECONDS : Math.trunc(Number(value));
 	return Number.isNaN(parsed) || parsed <= 0 ? DEFAULT_INTERVAL_SECONDS : parsed;
 };
@@ -281,14 +351,17 @@ const runWatch = async (
 	if (!prUrl || typeof prUrl !== "string") {
 		throw new TypeError("PR reference is required");
 	}
-	const interval = parseInterval(flagArgs);
-	const allowFix = flagArgs.includes("--fix");
-	const dryRun = flagArgs.includes("--dry-run");
-	const json = flagArgs.includes("--json");
-	const allowedUser = findFlag(flagArgs, "--user");
-	const prompt = findFlag(flagArgs, "--prompt");
-	const model = findFlag(flagArgs, "--model");
-	const provider = findFlag(flagArgs, "--provider");
+	const { booleans, values } = parseArgs(flagArgs);
+	const interval = parseInterval(values.get("--interval"));
+	const allowFix = booleans.has("--fix");
+	const dryRun = booleans.has("--dry-run");
+	const json = booleans.has("--json");
+	const toStderr = booleans.has("--log");
+	const logger = createLogger({ toStderr });
+	const allowedUser = values.get("--user");
+	const prompt = values.get("--prompt");
+	const model = values.get("--model");
+	const provider = values.get("--provider");
 	await watch(prUrl, {
 		allowFix,
 		allowedUser,
@@ -296,10 +369,12 @@ const runWatch = async (
 		interval,
 		iterations: options.iterations,
 		json,
+		logger,
 		model,
 		prompt,
 		provider,
 		runner: options.runner,
+		toStderr,
 	});
 };
 
@@ -318,10 +393,9 @@ const run = Object.assign(
 				await runWatch(rest, options);
 				return;
 			}
-			// eslint-disable-next-line no-console
 			console.log("Hello from pickup!", argv);
 		} catch (error) {
-			process.stderr.write(`Error: ${(error as Error).message}\n`);
+			process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
 			process.exitCode = 1;
 		}
 	},
