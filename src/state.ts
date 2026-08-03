@@ -13,7 +13,6 @@ const homeDir = (): string => {
 
 const configHome = (): string =>
 	process.env.XDG_CONFIG_HOME ||
-	// ponytail: fallback to $HOME/.config, then %USERPROFILE%/.config, then os.homedir(), then cwd.
 	path.join(process.env.HOME || process.env.USERPROFILE || homeDir(), ".config");
 
 const statePath = (): string => path.join(configHome(), "pickup", "state.json");

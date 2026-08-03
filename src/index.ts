@@ -21,7 +21,7 @@ const exec = async (file: string, args: string[]): Promise<string> => {
 };
 
 function showHelp(): void {
-	// eslint-disable-next-line security/detect-non-literal-fs-filename
+	// oxlint-disable-next-line security/detect-non-literal-fs-filename -- HELP_PATH is a build-time constant
 	process.stdout.write(`\n${readFileSync(HELP_PATH, "utf8")}\n`);
 }
 
@@ -393,7 +393,6 @@ const run = Object.assign(
 				await runWatch(rest, options);
 				return;
 			}
-			// eslint-disable-next-line no-console
 			console.log("Hello from pickup!", argv);
 		} catch (error) {
 			process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);

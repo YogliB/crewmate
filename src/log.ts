@@ -16,7 +16,6 @@ const createLogger =
 		try {
 			// oxlint-disable-next-line security/detect-non-literal-fs-filename -- filePath is the config dir or an explicit override, not user input
 			await mkdir(path.dirname(filePath), { recursive: true });
-			// ponytail: no rotation, size cap, or truncation; long-lived runs may grow the log unbounded.
 			// oxlint-disable-next-line security/detect-non-literal-fs-filename -- same as above
 			await appendFile(filePath, line, "utf8");
 		} catch (error) {
