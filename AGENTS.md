@@ -4,15 +4,16 @@ Agent-facing entry point for this repo. For the open format, see [agents.md](htt
 
 ## Quick links
 
-| Topic                | Where to look                                 |
-| -------------------- | --------------------------------------------- |
-| User-facing CLI docs | [README.md](../README.md)                     |
-| How to contribute    | [docs/CONTRIBUTING.md](CONTRIBUTING.md)       |
-| Common CLI problems  | [docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
-| Security reporting   | [docs/SECURITY.md](SECURITY.md)               |
-| Release notes        | [docs/CHANGELOG.md](CHANGELOG.md)             |
-| Architecture         | [docs/ARCHITECTURE.md](ARCHITECTURE.md)       |
-| License              | [LICENSE.md](../LICENSE.md)                   |
+| Topic                | Where to look                                      |
+| -------------------- | -------------------------------------------------- |
+| User-facing CLI docs | [README.md](README.md)                             |
+| How to contribute    | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)       |
+| Common CLI problems  | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
+| Security reporting   | [docs/SECURITY.md](docs/SECURITY.md)               |
+| Code of conduct      | [docs/CODE_OF_CONDUCT.md](docs/CODE_OF_CONDUCT.md) |
+| Release notes        | [docs/CHANGELOG.md](docs/CHANGELOG.md)             |
+| Architecture         | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)       |
+| License              | [LICENSE.md](LICENSE.md)                           |
 
 ## Setup
 
@@ -25,6 +26,7 @@ nub run build
 
 ## Common commands
 
+- `nub run dev` — rebuild with tsdown in watch mode.
 - `nub run build` — bundle `src/` into `dist/` with tsdown.
 - `nub run typecheck` — run `tsc --noEmit`.
 - `nub run lint` / `nub run lint:ci` — run oxlint; use `lint` for auto-fix.
@@ -32,6 +34,7 @@ nub run build
 - `nub run duplicates:ci` — run jscpd to detect code duplication.
 - `nub run knip:ci` — find unused dependencies and exports with knip.
 - `nub run test` / `nub run test:ci` — run vitest with or without coverage.
+- `nub run test:watch` — run vitest in watch mode.
 
 ## Project layout
 
@@ -39,12 +42,13 @@ nub run build
 - `src/bin.ts` — executable entry point.
 - `src/fix.ts` — generating replies and applying fixes.
 - `src/state.ts` — persisting seen comment IDs.
+- `src/index.test.ts` — vitest suite.
 - `dist/` — build output.
 - `assets/help.md` — help text shown by `--help`.
 
 ## Lint and format
 
-CI and the pre-commit hook run `oxlint` and `oxfmt`. `nub run format` fixes most issues. CI and the pre-push hook also run `jscpd` (`nub run duplicates:ci`) and `knip` (`nub run knip:ci`) to catch duplication and unused dependencies. A custom `oxlint-repo-guidelines/no-more-docs` rule blocks new Markdown or `docs/` files that are not in the allow-list. Add to [scripts/oxlint-repo-guidelines.js](../scripts/oxlint-repo-guidelines.js) and update this file if a new doc is needed.
+CI and the pre-commit hook run `oxlint` and `oxfmt`. `nub run format` fixes most issues. CI and the pre-push hook also run `jscpd` (`nub run duplicates:ci`) and `knip` (`nub run knip:ci`) to catch duplication and unused dependencies. A custom `oxlint-repo-guidelines/no-more-docs` rule blocks new Markdown or `docs/` files that are not in the allow-list. Add to [scripts/oxlint-repo-guidelines.js](scripts/oxlint-repo-guidelines.js) and update this file if a new doc is needed.
 
 ## Pull requests
 

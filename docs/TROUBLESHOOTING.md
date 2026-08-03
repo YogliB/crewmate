@@ -34,7 +34,7 @@ gh auth login
 
 ## `@pickup` mention is ignored
 
-`pickup` only replies to review comments (not replies) that contain `@pickup` and were not written by `pickup` itself. The newest unseen mention is handled on each poll; older ones wait for the next poll.
+`pickup` only replies to review comments (not replies) that contain `@pickup` and were not written by `pickup` itself. Every unseen mention is handled on each poll, newest first.
 
 ## Fix was not applied
 

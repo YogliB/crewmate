@@ -37,7 +37,7 @@ pickup watch <pr-url-or-shorthand> [options]
 - `--json` — when used with `--dry-run`, output the preview as JSON.
 - `--user <login>` — only reply to comments from this GitHub user.
 
-State (seen comment IDs) is stored in `$XDG_CONFIG_HOME/pickup/state.json`.
+State (seen comment IDs) is stored in `$XDG_CONFIG_HOME/pickup/state.json` (`~/.config/pickup/state.json` when `XDG_CONFIG_HOME` is unset).
 
 ## Example
 
@@ -48,7 +48,7 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 
 ## Notes
 
-- Each poll handles the newest unseen `@pickup` mention; the rest wait for the next poll.
+- Each poll handles every unseen `@pickup` mention, newest first; mentions added later are picked up on the next poll.
 - `gh pr checkout` needs a clean working tree, so commit or stash your own changes first.
 - `--dry-run` still runs `gh pr checkout` and may change the working tree; it only skips posting replies and committing/pushing fixes.
 - If a fix is committed but `git push` fails, the commit stays local. Push it yourself once the problem is fixed.
@@ -64,7 +64,7 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - **Listen to repo and org changes**: watch for relevant activity across a repository or organization instead of polling a single PR.
 - **`pickup init`**: one-time interactive setup that writes provider, model, and default flags to config.
 - **Per-project profiles**: store different provider, model, and default flags per repo in a local or global config.
-- **Custom prompts**: override reply style via `--prompt <text>` flag (per-repo config files TBD).
+- **Custom prompts**: per-repo config files for reply style (the `--prompt <text>` flag already ships).
 - **Watch multiple PRs**: target a list of PRs, or all open PRs in a repo or org, in one command.
 - **Listen to issues alongside PR mentions**: respond to `@pickup` mentions in issue bodies and comments, not just pull request review threads.
 
@@ -73,6 +73,7 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - [Contributing](docs/CONTRIBUTING.md) — build, test, and submit changes.
 - [Troubleshooting](docs/TROUBLESHOOTING.md) — common runtime issues.
 - [Security](docs/SECURITY.md) — how to report vulnerabilities.
+- [Code of Conduct](docs/CODE_OF_CONDUCT.md) — community expectations.
 - [Changelog](docs/CHANGELOG.md) — what changed.
 - [Architecture](docs/ARCHITECTURE.md) — how the code is organized.
 - [AGENTS.md](AGENTS.md) — setup and commands for coding agents.

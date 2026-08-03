@@ -1,11 +1,12 @@
 # pickup
 
-> pickup is a command-line tool. The project is currently a minimal bare-metal scaffold; this file will grow alongside real functionality.
+> pickup is a command-line tool that watches GitHub PR review comments for `@pickup` mentions and replies with an explanation or a generated fix.
 
 Important notes:
 
 - Development of this repository requires [Nub](https://nubjs.com); end users will be able to install the published package with npm once it ships.
-- There is no CLI behavior beyond a placeholder entry point yet.
+- The CLI entry point is `pickup watch <pr-url-or-shorthand>`, with `--interval`, `--fix`, `--model`, `--provider`, `--prompt`, `--dry-run`, `--json`, and `--user` flags.
+- It shells out to `gh`, `git`, and a `claude`-shaped provider CLI; Node.js 24+ is required.
 
 ## User docs
 
@@ -27,4 +28,5 @@ Important notes:
 
 - [docs/ARCHITECTURE.md](https://raw.githubusercontent.com/YogliB/pickup/main/docs/ARCHITECTURE.md): Repository overview and structure.
 - [docs/CODE_OF_CONDUCT.md](https://raw.githubusercontent.com/YogliB/pickup/main/docs/CODE_OF_CONDUCT.md): Community expectations and behavior standards.
+- [docs/TROUBLESHOOTING.md](https://raw.githubusercontent.com/YogliB/pickup/main/docs/TROUBLESHOOTING.md): Common runtime issues and fixes.
 - [package.json](https://raw.githubusercontent.com/YogliB/pickup/main/package.json): Scripts, dependencies, engines, and package metadata.

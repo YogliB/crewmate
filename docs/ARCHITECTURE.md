@@ -10,7 +10,8 @@
 │   ├── index.ts   # CLI and watch loop
 │   ├── bin.ts     # executable entry point
 │   ├── fix.ts     # reply generation and fix application
-│   └── state.ts   # persistent seen-comment state
+│   ├── state.ts   # persistent seen-comment state
+│   └── index.test.ts  # vitest suite
 ├── dist/          # built ESM output from tsdown
 ├── assets/
 │   ├── help.md    # help text shown for --help
@@ -20,6 +21,7 @@
 │   └── oxlint-repo-guidelines.js  # custom oxlint rule guarding doc sprawl
 ├── package.json   # scripts, metadata, and release config
 ├── tsdown.config.ts  # build configuration
+├── vitest.config.ts  # test configuration
 └── .github/workflows/  # CI checks (lint, format, duplicates, knip, typecheck, test, security)
 ```
 
@@ -29,7 +31,7 @@
 [review comment on GitHub] --gh api--> [src/index.ts] --claude--> [reply or fix] --gh api--> [posted reply]
 ```
 
-`src/index.ts` fetches comments with `gh api`, finds the newest unseen `@pickup` mention, and either:
+`src/index.ts` fetches comments with `gh api`, finds every unseen `@pickup` mention (newest first), and for each one either:
 
 - calls `src/fix.ts` to explain the line, or
 - calls `src/fix.ts` to generate and apply a fix when the comment contains `#fix` and `--fix` is enabled.
@@ -38,12 +40,12 @@ With `--dry-run`, the generated reply or fix is written to stdout as a human-rea
 
 ## State
 
-Seen comment IDs are stored in `$XDG_CONFIG_HOME/pickup/state.json` as a JSON map of PR URLs to arrays of comment IDs. The file is read at the start of each poll and written before any reply is posted, so an error does not reprocess the same comment. In `--dry-run` mode, state is not written.
+Seen comment IDs are stored in `$XDG_CONFIG_HOME/pickup/state.json` (`~/.config/pickup/state.json` when `XDG_CONFIG_HOME` is unset) as a JSON map of PR URLs to arrays of comment IDs. The file is read at the start of each poll and written before any reply is posted, so an error does not reprocess the same comment. In `--dry-run` mode, state is not written.
 
 ## External Dependencies
 
 - `gh` — GitHub CLI, used for API calls and `gh pr checkout`.
-- `claude` — Claude CLI, used to generate explanations and fixes.
+- `claude` — Claude CLI, used to generate explanations and fixes; `--provider` swaps in another `claude`-shaped CLI.
 - `git` — used to commit and push fixes.
 
 ## Security Notes
