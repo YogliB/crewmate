@@ -6,6 +6,7 @@ import process from "node:process";
 import { dispatchMention, getLogin, PICKUP_PREFIX, type Runner, stripFences } from "./fix.js";
 import { createLogger, type Logger } from "./log.js";
 import { loadState, saveState, statePath } from "./state.js";
+import { resolveProfile, type Profile } from "./config.js";
 
 const CLI_ARGV_OFFSET = 2;
 const EXPECTED_PATH_PARTS = 4;
@@ -111,26 +112,13 @@ const findNewMention = (
 	...args: Parameters<typeof findNewMentions>
 ): Record<string, unknown> | undefined => findNewMentions(...args).at(0);
 
-const preflight = async (
-	prUrl: string,
-	runner: Runner = exec,
-	provider?: string,
-): Promise<string> => {
-	const { host } = parsePrUrl(prUrl);
-	await runner("gh", ["--version"]);
-	await runner(provider || "claude", ["--version"]);
-	await runner("gh", ["auth", "status", "--hostname", host]);
-	const repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim();
-	return repoRoot;
-};
-
 const respondToMention = async (
 	mention: Record<string, unknown>,
 	prUrl: string,
 	options: {
 		allowFix: boolean;
-		dryRun?: boolean;
-		json?: boolean;
+		dryRun: boolean;
+		json: boolean;
 		logger: Logger;
 		model?: string;
 		prompt?: string;
@@ -168,11 +156,11 @@ const pollIteration = async (
 	iteration: {
 		allowFix: boolean;
 		allowedUser?: string;
-		dryRun?: boolean;
+		dryRun: boolean;
 		index: number;
 		interval: number;
 		iterations: number;
-		json?: boolean;
+		json: boolean;
 		logger: Logger;
 		model?: string;
 		prompt?: string;
@@ -234,12 +222,24 @@ const toPrUrl = ({
 	number: string;
 }): string => `https://${host}/${owner}/${repo}/pull/${number}`;
 
+const makeWarn =
+	(loggerMirrorsToStderr: boolean, log: Logger) =>
+	async (message: string, fields: Record<string, unknown> = {}) => {
+		if (!loggerMirrorsToStderr) {
+			try {
+				process.stderr.write(`Warning: ${message}\n`);
+			} catch {}
+		}
+		await log("warning", { ...fields, message });
+	};
+
 const watch = async (
 	prUrl: string,
 	options: {
 		interval?: number;
 		allowFix?: boolean;
 		allowedUser?: string;
+		config?: Partial<Profile>;
 		dryRun?: boolean;
 		json?: boolean;
 		logger?: Logger;
@@ -252,47 +252,67 @@ const watch = async (
 	} = {},
 ): Promise<void> => {
 	const runner = options.runner ?? exec;
-	const interval = options.interval ?? DEFAULT_INTERVAL_SECONDS;
-	const iterations = options.iterations ?? (options.dryRun ? 1 : Infinity);
-	const toStderr = options.toStderr ?? false;
-	const logger = options.logger ?? createLogger({ toStderr });
-	const warn = async (message: string, fields: Record<string, unknown> = {}) => {
-		if (!toStderr) {
-			try {
-				process.stderr.write(`Warning: ${message}\n`);
-			} catch {}
-		}
-		await logger("warning", { ...fields, message });
-	};
-	if (options.dryRun) {
-		if (!toStderr) {
-			try {
-				process.stderr.write(
-					"Dry-run mode: no GitHub comments or git add/commit/push will be made.\n",
-				);
-			} catch {}
-		}
-		await logger("info", {
-			message: "Dry-run mode: no GitHub comments or git add/commit/push will be made.",
-		});
-	}
+	let toStderr = options.toStderr ?? false;
+	let logger = options.logger ?? createLogger({ toStderr });
+	const configWarn = makeWarn(toStderr, logger);
 	let normalizedPrUrl = prUrl;
 	try {
-		normalizedPrUrl = toPrUrl(parsePrUrl(prUrl));
-		const repoRoot = await preflight(normalizedPrUrl, runner, options.provider);
+		const parsed = parsePrUrl(prUrl);
+		const { host, owner, repo } = parsed;
+		normalizedPrUrl = toPrUrl(parsed);
+		await runner("gh", ["--version"]);
+		await runner("gh", ["auth", "status", "--hostname", host]);
+		const repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim();
+		const profile = options.config ?? (await resolveProfile(owner, repo, repoRoot, configWarn));
+
+		const provider = options.provider ?? profile.provider;
+		const model = options.model ?? profile.model;
+		const interval = options.interval ?? profile.interval ?? DEFAULT_INTERVAL_SECONDS;
+		const allowedUser = options.allowedUser ?? profile.user;
+		const prompt = options.prompt ?? profile.prompt;
+		const allowFix = options.allowFix ?? profile.fix ?? false;
+		const dryRun = options.dryRun ?? profile.dryRun ?? false;
+		const json = options.json ?? profile.json ?? false;
+		toStderr = options.toStderr ?? profile.log ?? false;
+		if (!options.logger) {
+			logger = createLogger({ toStderr });
+		}
+		const warn = makeWarn(toStderr, logger);
+
+		if (json && !dryRun) {
+			await warn("json output only applies in dry-run mode", { json });
+		}
+
+		await runner(provider || "claude", ["--version"]);
+
+		const iterations = options.iterations ?? (dryRun ? 1 : Infinity);
+
+		if (dryRun) {
+			if (!toStderr) {
+				try {
+					process.stderr.write(
+						"Dry-run mode: no GitHub comments or git add/commit/push will be made.\n",
+					);
+				} catch {}
+			}
+			await logger("info", {
+				message: "Dry-run mode: no GitHub comments or git add/commit/push will be made.",
+			});
+		}
+
 		for (let index = 0; index < iterations; index += 1) {
 			await pollIteration(normalizedPrUrl, runner, {
-				allowFix: options.allowFix ?? false,
-				allowedUser: options.allowedUser,
-				dryRun: options.dryRun,
+				allowFix,
+				allowedUser,
+				dryRun,
 				index,
 				interval,
 				iterations,
-				json: options.json,
+				json,
 				logger,
-				model: options.model,
-				prompt: options.prompt,
-				provider: options.provider,
+				model,
+				prompt,
+				provider,
 				repoRoot,
 				warn,
 			});
@@ -337,27 +357,38 @@ const parseArgs = (argv: string[]): { booleans: Set<string>; values: Map<string,
 const findFlag = (argv: string[], flag: string): string | undefined =>
 	parseArgs(argv).values.get(flag);
 
-const parseInterval = (input: string | string[] | undefined): number => {
+const parseInterval = (
+	input: string | string[] | undefined,
+	options: { fallback?: number } = { fallback: DEFAULT_INTERVAL_SECONDS },
+): number | undefined => {
 	const value = Array.isArray(input) ? findFlag(input, "--interval") : input;
-	const parsed = value === undefined ? DEFAULT_INTERVAL_SECONDS : Math.trunc(Number(value));
-	return Number.isNaN(parsed) || parsed <= 0 ? DEFAULT_INTERVAL_SECONDS : parsed;
+	const fallback = options.fallback;
+	if (value === undefined) {
+		return fallback;
+	}
+	const parsed = Math.trunc(Number(value));
+	return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
 };
 
 const runWatch = async (
 	rest: string[],
-	options: { iterations?: number; runner?: Runner },
+	options: {
+		config?: Partial<Profile>;
+		iterations?: number;
+		logger?: Logger;
+		runner?: Runner;
+	},
 ): Promise<void> => {
 	const [prUrl, ...flagArgs] = rest;
 	if (!prUrl || typeof prUrl !== "string") {
 		throw new TypeError("PR reference is required");
 	}
 	const { booleans, values } = parseArgs(flagArgs);
-	const interval = parseInterval(values.get("--interval"));
-	const allowFix = booleans.has("--fix");
-	const dryRun = booleans.has("--dry-run");
-	const json = booleans.has("--json");
-	const toStderr = booleans.has("--log");
-	const logger = createLogger({ toStderr });
+	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
+	const allowFix = booleans.has("--fix") ? true : undefined;
+	const dryRun = booleans.has("--dry-run") ? true : undefined;
+	const json = booleans.has("--json") ? true : undefined;
+	const toStderr = booleans.has("--log") ? true : undefined;
 	const allowedUser = values.get("--user");
 	const prompt = values.get("--prompt");
 	const model = values.get("--model");
@@ -365,11 +396,12 @@ const runWatch = async (
 	await watch(prUrl, {
 		allowFix,
 		allowedUser,
+		config: options.config,
 		dryRun,
 		interval,
 		iterations: options.iterations,
 		json,
-		logger,
+		logger: options.logger,
 		model,
 		prompt,
 		provider,
@@ -381,7 +413,12 @@ const runWatch = async (
 const run = Object.assign(
 	async (
 		argv: string[] = process.argv.slice(CLI_ARGV_OFFSET),
-		options: { iterations?: number; runner?: Runner } = {},
+		options: {
+			config?: Partial<Profile>;
+			iterations?: number;
+			logger?: Logger;
+			runner?: Runner;
+		} = {},
 	): Promise<void> => {
 		try {
 			const [subcommand, ...rest] = argv;

@@ -49,8 +49,8 @@ type Runner = (file: string, args: string[]) => Promise<string>;
 
 type ReplyContext = {
 	commentId: number;
-	dryRun?: boolean;
-	json?: boolean;
+	dryRun: boolean;
+	json: boolean;
 	logger: Logger;
 	model?: string;
 	number: string;
@@ -69,7 +69,7 @@ const logContext = (
 ): Record<string, unknown> => ({
 	...extra,
 	commentId: ctx.commentId,
-	dryRun: ctx.dryRun ?? false,
+	dryRun: ctx.dryRun,
 	number: ctx.number,
 	owner: ctx.owner,
 	repo: ctx.repo,

@@ -16,9 +16,16 @@ A CLI that watches GitHub PR review comments for `@pickup` mentions and replies 
 - `--provider <command>` Use a specific provider CLI instead of `claude`.
 - `--prompt <text>` Prepend custom instructions to the LLM prompt.
 - `--log` Also mirror structured log lines to stderr.
-- `--dry-run` Preview the reply or fix on stdout without posting to GitHub or committing/pushing.
-- `--json` When used with `--dry-run`, output the preview as JSON.
+- `--dry-run` Preview the reply or fix on stdout without posting to GitHub or committing/pushing. Defaults to one iteration.
+- `--json` When used with `--dry-run`, output the preview as JSON. Without `--dry-run` it is ignored and a warning is logged.
 - `--user <login>` Only respond to comments from this GitHub login
+
+Configuration is read from:
+
+- `$XDG_CONFIG_HOME/pickup/config.json` for global defaults and per-repo profiles.
+- `.pickup.json` in the repository root for per-repo overrides.
+
+CLI flags win, then per-repo `.pickup.json`, then the global config. In the global file, `profiles["owner/repo"]` takes precedence over `defaults`.
 
 State is persisted in `$XDG_CONFIG_HOME/pickup/state.json`.
 Structured logs are always appended to `$XDG_CONFIG_HOME/pickup/pickup.log`; use `--log` to also mirror them to stderr.

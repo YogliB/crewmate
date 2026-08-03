@@ -311,15 +311,65 @@ describe("run watch flags", () => {
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 	});
 
+	it("produces JSON dry-run output with --json", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["watch", PR_URL, "--json", "--dry-run"], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"action":"reply"'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("warns when --json is used without --dry-run", async () => {
+		const runner = makeMultiMentionRunner();
+		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		await run(["watch", PR_URL, "--json"], { iterations: FIRST_ITERATION, logger, runner });
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ message: "json output only applies in dry-run mode" }),
+		);
+		expect(write).toHaveBeenCalledWith(
+			expect.stringContaining("json output only applies in dry-run mode"),
+		);
+		write.mockRestore();
+	});
+
 	it("uses default interval when the flag has no value", async () => {
 		const runner = makeExplainRunner();
 		await run(["watch", PR_URL, "--interval"], { iterations: FIRST_ITERATION, runner });
 		expect(run.parseInterval(["--interval"])).toBe(60);
 	});
 
+	it("ignores an invalid CLI interval so config can apply", async () => {
+		const runner = makeExplainRunner();
+		await run(["watch", PR_URL, "--interval", "bad"], { iterations: FIRST_ITERATION, runner });
+		expect(run.parseInterval(["--interval", "bad"], { fallback: undefined })).toBeUndefined();
+	});
+
 	it("uses default watch options", async () => {
 		const runner = vi.fn(() => Promise.reject(new Error("fail"))) as unknown as Runner;
 		await expect(run.watch(PR_URL, { runner })).rejects.toThrow("fail");
+	});
+
+	it("uses Infinity iterations by default and runs the loop", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && args[0] === "api") {
+				return Promise.reject(new Error("api fail"));
+			}
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth" || args[0] === "pr")) {
+				return Promise.resolve("");
+			}
+			if (file === "claude") {
+				return Promise.resolve("");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await expect(run.watch(PR_URL, { runner })).rejects.toThrow("api fail");
+		expect(countCalls(runner, "gh", (args) => args[0] === "api")).toBe(FIRST_CALL);
 	});
 
 	it("uses the default runner when none is provided", async () => {
@@ -458,7 +508,7 @@ describe("run watch flags", () => {
 		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
 	});
 
-	it("calls the provider for --version during preflight", async () => {
+	it("calls the provider for --version during watch initialization", async () => {
 		const runner = makeExplainRunner({ answer: "", provider: "my-llm" });
 		await run.watch(PR_URL, { iterations: FIRST_ITERATION, provider: "my-llm", runner });
 		expect(countCalls(runner, "my-llm", (args) => args.at(FIRST_INDEX) === "--version")).toBe(
@@ -623,6 +673,14 @@ describe("parseInterval", () => {
 
 	it("truncates a float interval", () => {
 		expect(run.parseInterval(["--interval", "5.5"])).toBe(5);
+	});
+
+	it("returns undefined for invalid input when no fallback", () => {
+		expect(run.parseInterval(["--interval", "bad"], { fallback: undefined })).toBeUndefined();
+	});
+
+	it("returns undefined for non-positive input when no fallback", () => {
+		expect(run.parseInterval(["--interval", "0"], { fallback: undefined })).toBeUndefined();
 	});
 });
 
@@ -830,7 +888,7 @@ describe("findNewMention", () => {
 		expect(mention?.id).toBe(FIRST_ID);
 	});
 
-	it("skips a fresh install mention that already has a pickup reply", () => {
+	it("skips a fresh install mention that already has a pickup reply (sync)", () => {
 		const mention = run.findNewMention(
 			[
 				{
@@ -1186,7 +1244,7 @@ describe("watch iterations", () => {
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
 	});
 
-	it("skips a fresh install mention that already has a pickup reply", async () => {
+	it("skips a fresh install mention that already has a pickup reply (async)", async () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
 			if (file === "gh" && command === "api" && args.some((arg) => startsWithRepos(arg))) {
@@ -2016,5 +2074,177 @@ describe("logs", () => {
 
 		const lines = await parseLogFile(tempDir);
 		expect(lines.some((line) => line.event === "reply" && line.failed === true)).toBe(true);
+	});
+});
+
+describe("watch config", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-config-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+		process.chdir(tempDir);
+		await mkdir(path.join(tempDir, "src"), { recursive: true });
+		await writeFile(path.join(tempDir, "src", "index.ts"), "old", "utf8");
+	});
+
+	afterEach(async () => {
+		process.chdir(ORIGINAL_CWD);
+		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
+	});
+
+	it("uses a config provider", async () => {
+		const runner = makeMultiMentionRunner();
+		await run(["watch", PR_URL], {
+			config: { provider: "my-llm" },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "my-llm", (args) => args[0] === "--version")).toBe(FIRST_CALL);
+		expect(countCalls(runner, "claude", (args) => args[0] === "--version")).toBe(NO_CALLS);
+	});
+
+	it("loads config from repo and global config files", async () => {
+		await writeFile(
+			path.join(tempDir, ".pickup.json"),
+			JSON.stringify({ prompt: "repo prompt", provider: "my-llm" }),
+			"utf8",
+		);
+		await mkdir(path.join(tempDir, "pickup"), { recursive: true });
+		await writeFile(
+			path.join(tempDir, "pickup", "config.json"),
+			JSON.stringify({ defaults: { interval: 30 } }),
+			"utf8",
+		);
+		const runner = makeMultiMentionRunner();
+		await run(["watch", PR_URL], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(getPrompt(runner, "my-llm")).toMatch(/^repo prompt/);
+	});
+
+	it("warns on malformed repo config and keeps valid fields", async () => {
+		const runner = makeMultiMentionRunner();
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		await writeFile(
+			path.join(tempDir, ".pickup.json"),
+			JSON.stringify({ prompt: "repo prompt", interval: "fast" }),
+			"utf8",
+		);
+		await run(["watch", PR_URL], { iterations: FIRST_ITERATION, logger, runner });
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ message: "invalid type for interval" }),
+		);
+		expect(getPrompt(runner, "claude")).toMatch(/^repo prompt/);
+	});
+
+	it("uses a config prompt", async () => {
+		const runner = makeMultiMentionRunner();
+		await run.watch(PR_URL, {
+			config: { prompt: "be terse", provider: "my-llm" },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(getPrompt(runner, "my-llm")).toMatch(/^be terse/);
+	});
+
+	it("uses a config user filter", async () => {
+		const runner = makeMultiMentionRunner();
+		await run.watch(PR_URL, {
+			config: { user: "bob" },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+	});
+
+	it("uses a config fix flag", async () => {
+		const targetPath = path.join("src", "index.ts");
+		const runner = makeFixRunner(targetPath, { provider: "my-llm" });
+		await run.watch(PR_URL, {
+			config: { fix: true, provider: "my-llm" },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => args[0] === "pr" && args[1] === "checkout")).toBe(
+			FIRST_CALL,
+		);
+	});
+
+	it("lets CLI flags override config", async () => {
+		const runner = makeMultiMentionRunner();
+		await run(["watch", PR_URL, "--prompt", "cli prompt", "--provider", "claude"], {
+			config: { prompt: "config prompt", provider: "my-llm" },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(getPrompt(runner, "claude")).toMatch(/^cli prompt/);
+		expect(countCalls(runner, "my-llm", (args) => args[0] === "--version")).toBe(NO_CALLS);
+	});
+
+	it("uses a config dry-run flag", async () => {
+		const runner = makeMultiMentionRunner();
+		await run.watch(PR_URL, {
+			config: { dryRun: true },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+	});
+
+	it("uses a config log flag", async () => {
+		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = makeMultiMentionRunner();
+		await run.watch(PR_URL, {
+			config: { log: true, provider: "my-llm" },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(
+			calls.some(
+				(line) =>
+					line.includes('"event":"poll"') ||
+					line.includes('"event":"mention"') ||
+					line.includes('"event":"reply"'),
+			),
+		).toBe(true);
+		write.mockRestore();
+	});
+
+	it("uses a config json flag with dry-run", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeMultiMentionRunner();
+		await run.watch(PR_URL, {
+			config: { dryRun: true, json: true },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"action":"reply"'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("warns when config json is set without dry-run", async () => {
+		const runner = makeMultiMentionRunner();
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		await run.watch(PR_URL, {
+			config: { json: true },
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ message: "json output only applies in dry-run mode" }),
+		);
+		expect(write).toHaveBeenCalledWith(
+			expect.stringContaining("json output only applies in dry-run mode"),
+		);
+		write.mockRestore();
 	});
 });
