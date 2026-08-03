@@ -38,6 +38,7 @@ nub run build
 - `src/index.ts` — CLI and watch loop.
 - `src/bin.ts` — executable entry point.
 - `src/fix.ts` — generating replies and applying fixes.
+- `src/log.ts` — structured logging.
 - `src/state.ts` — persisting seen comment IDs.
 - `dist/` — build output.
 - `assets/help.md` — help text shown by `--help`.

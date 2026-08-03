@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import path from "node:path";
 import run from "./index.js";
 import { PICKUP_PREFIX } from "./fix.js";
+import { createLogger, type Logger } from "./log.js";
 import { tmpdir } from "node:os";
 
 type Runner = (file: string, args: string[]) => Promise<string>;
@@ -255,6 +256,7 @@ describe("run watch missing", () => {
 
 	afterEach(async () => {
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("exits with an error when watch is missing a PR URL", async () => {
@@ -262,6 +264,19 @@ describe("run watch missing", () => {
 		process.exitCode = NO_EXIT_CODE;
 		await run(["watch"]);
 		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+
+	it("exits with an error when watch rejects a non-Error", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = vi.fn(() => Promise.reject("string error")) as unknown as Runner;
+		await run(["watch", PR_URL], { iterations: FIRST_ITERATION, runner });
+
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		expect(write).toHaveBeenCalledWith("Error: string error\n");
+		write.mockRestore();
 		process.exitCode = previousExitCode;
 	});
 
@@ -284,6 +299,7 @@ describe("run watch flags", () => {
 
 	afterEach(async () => {
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("handles watch command with flags", async () => {
@@ -550,6 +566,14 @@ describe("findFlag", () => {
 	it("returns an empty quoted value as-is", () => {
 		expect(run.findFlag(["--user", ""], "--user")).toBe("");
 	});
+
+	it("returns a value passed with --flag=value", () => {
+		expect(run.findFlag(["--user=alice"], "--user")).toBe("alice");
+	});
+
+	it("ignores non-flag tokens", () => {
+		expect(run.findFlag(["foo", "--user", "alice"], "--user")).toBe("alice");
+	});
 });
 
 describe("parseInterval", () => {
@@ -557,8 +581,16 @@ describe("parseInterval", () => {
 		expect(run.parseInterval(["--interval", "5"])).toBe(5);
 	});
 
+	it("parses a string value", () => {
+		expect(run.parseInterval("5")).toBe(5);
+	});
+
 	it("defaults when the flag is missing", () => {
 		expect(run.parseInterval([])).toBe(60);
+	});
+
+	it("defaults when the input is undefined", () => {
+		expect(run.parseInterval(undefined)).toBe(60);
 	});
 
 	it("defaults when the flag value is invalid", () => {
@@ -584,6 +616,7 @@ describe("state load", () => {
 
 	afterEach(async () => {
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("loads an empty state when the file is missing", async () => {
@@ -620,6 +653,7 @@ describe("state errors", () => {
 
 	afterEach(async () => {
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("throws when the state path is not a readable file", async () => {
@@ -634,6 +668,14 @@ describe("state errors", () => {
 		const state = await run.loadState();
 		expect(state).toBeDefined();
 		expect(run.statePath()).toBe(path.join(tempDir, ".config", "pickup", "state.json"));
+	});
+
+	it("falls back to the current directory when HOME is also empty", async () => {
+		vi.stubEnv("XDG_CONFIG_HOME", "");
+		vi.stubEnv("HOME", "");
+		const state = await run.loadState();
+		expect(state).toBeDefined();
+		expect(run.statePath()).toBe(path.join(process.cwd(), ".config", "pickup", "state.json"));
 	});
 
 	it("warns and resets when the state file is corrupted", async () => {
@@ -883,6 +925,7 @@ describe("watch explain", () => {
 
 	afterEach(async () => {
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("polls once and replies to a mention", async () => {
@@ -976,6 +1019,7 @@ describe("watch users missing", () => {
 
 	afterEach(async () => {
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("handles comments without a user object", async () => {
@@ -1019,6 +1063,7 @@ describe("watch users invalid", () => {
 
 	afterEach(async () => {
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("handles comments with an invalid login", async () => {
@@ -1062,6 +1107,7 @@ describe("watch users null", () => {
 
 	afterEach(async () => {
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("handles comments with a null user", async () => {
@@ -1095,6 +1141,7 @@ describe("watch iterations", () => {
 
 	afterEach(async () => {
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("sleeps between iterations", async () => {
@@ -1175,6 +1222,7 @@ describe("watch fix success", () => {
 	afterEach(async () => {
 		process.chdir(ORIGINAL_CWD);
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("can fix a file when requested", async () => {
@@ -1200,6 +1248,9 @@ describe("watch fix success", () => {
 				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
 			),
 		).toBe(FIRST_CALL);
+
+		const lines = await parseLogFile(tempDir);
+		expect(lines.some((line) => line.event === "fix" && line.dryRun === false)).toBe(true);
 	});
 
 	it("explains instead of fixing when the comment body does not contain the #fix tag", async () => {
@@ -1354,6 +1405,7 @@ describe("watch dry-run", () => {
 	afterEach(async () => {
 		process.chdir(ORIGINAL_CWD);
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("defaults dry-run to one iteration", async () => {
@@ -1363,6 +1415,17 @@ describe("watch dry-run", () => {
 
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 		expect(write).toHaveBeenCalled();
+		write.mockRestore();
+	});
+
+	it("logs dry-run info without plain stderr when --log is set", async () => {
+		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["watch", PR_URL, "--dry-run", "--log"], { iterations: FIRST_ITERATION, runner });
+
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"info"'))).toBe(true);
+		expect(calls.some((line) => line.startsWith("Dry-run mode:"))).toBe(false);
 		write.mockRestore();
 	});
 
@@ -1491,6 +1554,7 @@ describe("watch fix missing", () => {
 	afterEach(async () => {
 		process.chdir(ORIGINAL_CWD);
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("reports when the file to fix is missing", async () => {
@@ -1517,6 +1581,7 @@ describe("watch fix empty", () => {
 	afterEach(async () => {
 		process.chdir(ORIGINAL_CWD);
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("reports when claude returns an empty fix", async () => {
@@ -1548,6 +1613,7 @@ describe("watch fix errors", () => {
 	afterEach(async () => {
 		process.chdir(ORIGINAL_CWD);
 		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
 	});
 
 	it("rejects paths outside the repository", async () => {
@@ -1685,5 +1751,197 @@ describe("run help", () => {
 		await run(["-h"]);
 		expect(write).toHaveBeenCalledWith(expect.stringContaining("Usage"));
 		write.mockRestore();
+	});
+});
+
+const logFilePath = (tempDir: string): string => path.join(tempDir, "pickup", "pickup.log");
+
+const parseNdjson = (raw: string): Record<string, unknown>[] =>
+	raw
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as Record<string, unknown>);
+
+const parseLogFile = async (tempDir: string): Promise<Record<string, unknown>[]> =>
+	parseNdjson(await readFile(logFilePath(tempDir), "utf8"));
+
+describe("logs", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-logs-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
+	});
+
+	it("writes structured logs to file", async () => {
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["watch", PR_URL], { iterations: FIRST_ITERATION, runner });
+
+		const lines = await parseLogFile(tempDir);
+		expect(lines.some((line) => line.event === "poll")).toBe(true);
+		expect(lines.some((line) => line.event === "mention" && line.commentId === FIRST_ID)).toBe(
+			true,
+		);
+		expect(lines.some((line) => line.event === "reply" && line.kind === "explain")).toBe(true);
+	});
+
+	it("mirrors logs to stderr with --log", async () => {
+		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["watch", PR_URL, "--log"], { iterations: FIRST_ITERATION, runner });
+
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"poll"'))).toBe(true);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		expect(calls.some((line) => line.includes('"event":"reply"'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("logs a warning when the provider returns an empty explanation", async () => {
+		const runner = makeExplainRunner({ answer: "" });
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+
+		const lines = await parseLogFile(tempDir);
+		expect(lines.some((line) => line.event === "warning" && line.reason === "empty")).toBe(true);
+	});
+
+	it("mirrors warnings to stderr with --log", async () => {
+		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ answer: "" });
+		await run(["watch", PR_URL, "--log"], { iterations: FIRST_ITERATION, runner });
+
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"warning"'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("logs a warning when the state file is corrupted", async () => {
+		await mkdir(path.join(tempDir, "pickup"), { recursive: true });
+		await writeFile(path.join(tempDir, "pickup", "state.json"), "not json");
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+
+		const lines = await parseLogFile(tempDir);
+		expect(
+			lines.some((line) => line.event === "warning" && line.reason === "state-corrupted"),
+		).toBe(true);
+	});
+
+	it("logs errors when the watch loop fails", async () => {
+		const runner = vi.fn(() => Promise.reject(new Error("boom"))) as unknown as Runner;
+		await expect(
+			run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner }),
+		).rejects.toThrow("boom");
+
+		const lines = await parseLogFile(tempDir);
+		expect(
+			lines.some(
+				(line) => line.event === "error" && line.message === "boom" && line.errorType === "Error",
+			),
+		).toBe(true);
+	});
+
+	it("does not mask the original error when the error logger throws", async () => {
+		const runner = vi.fn(() => Promise.reject(new Error("boom"))) as unknown as Runner;
+		const logger = vi.fn(async (event: string) => {
+			if (event === "error") {
+				throw new Error("logger failed");
+			}
+			return undefined;
+		}) as unknown as Logger;
+		await expect(
+			run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, logger, runner }),
+		).rejects.toThrow("boom");
+	});
+
+	it("logs non-Error watch failures", async () => {
+		const runner = vi.fn(() => Promise.reject("string boom")) as unknown as Runner;
+		await expect(
+			run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner }),
+		).rejects.toBe("string boom");
+
+		const lines = await parseLogFile(tempDir);
+		expect(
+			lines.some(
+				(line) =>
+					line.event === "error" && line.message === "string boom" && line.errorType === "unknown",
+			),
+		).toBe(true);
+	});
+
+	it("uses the default logger with toStderr", async () => {
+		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			toStderr: true,
+			runner,
+		});
+
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"poll"'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("uses a provided logger", async () => {
+		const customFile = path.join(tempDir, "custom.log");
+		const logger = createLogger({ filePath: customFile });
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+
+		const raw = await readFile(customFile, "utf8");
+		const lines = parseNdjson(raw);
+		expect(lines.some((line) => line.event === "poll")).toBe(true);
+	});
+
+	it("logs invalid PR reference errors", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const runner = vi.fn(() => Promise.reject(new Error("should not run"))) as unknown as Runner;
+
+		try {
+			await run(["watch", "not-a-pr"], { iterations: NO_ITERATIONS, runner });
+
+			const lines = await parseLogFile(tempDir);
+			expect(lines.some((line) => line.event === "error" && line.url === "not-a-pr")).toBe(true);
+			expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+			expect(runner).not.toHaveBeenCalled();
+		} finally {
+			process.exitCode = previousExitCode;
+		}
+	});
+
+	it("logs failed reply attempts", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			if (file === "gh" && args.includes("POST")) {
+				return Promise.reject(new Error("post failed"));
+			}
+			return resolveGhExplain(args);
+		}) as unknown as Runner;
+
+		await expect(
+			run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner }),
+		).rejects.toThrow("post failed");
+
+		const lines = await parseLogFile(tempDir);
+		expect(lines.some((line) => line.event === "reply" && line.failed === true)).toBe(true);
 	});
 });

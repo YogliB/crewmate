@@ -1,5 +1,6 @@
 import { readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { type Logger } from "./log.js";
 
 const FENCE_MARKER = "```";
 const FIX_MESSAGE = "fix: address pickup comment";
@@ -47,6 +48,7 @@ type ReplyContext = {
 	commentId: number;
 	dryRun?: boolean;
 	json?: boolean;
+	logger: Logger;
 	model?: string;
 	number: string;
 	owner: string;
@@ -55,7 +57,20 @@ type ReplyContext = {
 	repo: string;
 	repoRoot: string;
 	runner: Runner;
+	warn?: (message: string, fields?: Record<string, unknown>) => Promise<void>;
 };
+
+const logContext = (
+	ctx: ReplyContext,
+	extra: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+	...extra,
+	commentId: ctx.commentId,
+	dryRun: ctx.dryRun ?? false,
+	number: ctx.number,
+	owner: ctx.owner,
+	repo: ctx.repo,
+});
 
 const stripFences = (content: string): string => {
 	const trimmed = content.trim();
@@ -70,8 +85,13 @@ const stripFences = (content: string): string => {
 	return trimmed.slice(firstNewline + 1, lastNewline).trim();
 };
 
-const postReply = async (ctx: ReplyContext, body: string): Promise<void> => {
+const postReply = async (
+	ctx: ReplyContext,
+	body: string,
+	kind: "explain" | "error" | "fix" | "nochange",
+): Promise<void> => {
 	const prefixedBody = `${PICKUP_PREFIX} ${body}`;
+	const base = logContext(ctx, { kind });
 	if (ctx.dryRun) {
 		if (ctx.json) {
 			process.stdout.write(
@@ -80,16 +100,23 @@ const postReply = async (ctx: ReplyContext, body: string): Promise<void> => {
 		} else {
 			process.stdout.write(`[dry-run] would reply to comment ${ctx.commentId}:\n${prefixedBody}\n`);
 		}
+		await ctx.logger("reply", { ...base, failed: false });
 		return;
 	}
-	await ctx.runner("gh", [
-		"api",
-		"--method",
-		"POST",
-		`repos/${ctx.owner}/${ctx.repo}/pulls/${ctx.number}/comments/${ctx.commentId}/replies`,
-		"-f",
-		`body=${prefixedBody}`,
-	]);
+	try {
+		await ctx.runner("gh", [
+			"api",
+			"--method",
+			"POST",
+			`repos/${ctx.owner}/${ctx.repo}/pulls/${ctx.number}/comments/${ctx.commentId}/replies`,
+			"-f",
+			`body=${prefixedBody}`,
+		]);
+		await ctx.logger("reply", { ...base, failed: false });
+	} catch (error) {
+		await ctx.logger("reply", { ...base, failed: true, error: String(error) });
+		throw error;
+	}
 };
 
 const callProvider = (ctx: ReplyContext, finalPrompt: string): Promise<string> =>
@@ -113,10 +140,11 @@ const handleExplain = async (
 	const finalPrompt = ctx.prompt ? `${ctx.prompt}\n\n${prompt}` : prompt;
 	const answer = await callProvider(ctx, finalPrompt);
 	if (!answer) {
-		process.stderr.write(`Warning: ${ctx.provider || "claude"} returned empty explanation\n`);
+		const message = `${ctx.provider || "claude"} returned empty explanation`;
+		await ctx.warn(message, logContext(ctx, { kind: "explain", reason: "empty" }));
 		return;
 	}
-	await postReply(ctx, answer);
+	await postReply(ctx, answer, "explain");
 };
 
 const readPrFile = async (
@@ -130,7 +158,7 @@ const readPrFile = async (
 	} catch (error) {
 		const { code } = error as NodeJS.ErrnoException;
 		if (code === "ENOENT") {
-			await postReply(ctx, MISSING_FILE_REPLY);
+			await postReply(ctx, MISSING_FILE_REPLY, "error");
 			return { content: "", found: false };
 		}
 		throw error;
@@ -142,7 +170,7 @@ const readPrFile = async (
 	} catch (error) {
 		const { code } = error as NodeJS.ErrnoException;
 		if (code === "ENOENT") {
-			await postReply(ctx, MISSING_FILE_REPLY);
+			await postReply(ctx, MISSING_FILE_REPLY, "error");
 			return { content: "", found: false };
 		}
 		throw error;
@@ -164,7 +192,7 @@ const generateFix = async (
 	const fixed = await callProvider(ctx, finalPrompt);
 	const stripped = stripFences(fixed);
 	if (!stripped) {
-		await postReply(ctx, NO_FIX_REPLY);
+		await postReply(ctx, NO_FIX_REPLY, "error");
 		return "";
 	}
 	return stripped;
@@ -172,6 +200,8 @@ const generateFix = async (
 
 const applyFix = async (ctx: ReplyContext, targetPath: string, stripped: string): Promise<void> => {
 	const safePath = await toSafePath(targetPath, ctx.repoRoot);
+	const relativePath = path.relative(ctx.repoRoot, safePath);
+	const base = logContext(ctx, { path: relativePath });
 	if (ctx.dryRun) {
 		if (ctx.json) {
 			process.stdout.write(
@@ -180,26 +210,33 @@ const applyFix = async (ctx: ReplyContext, targetPath: string, stripped: string)
 		} else {
 			process.stdout.write(`[dry-run] would write fix to ${safePath}:\n${stripped}\n`);
 		}
+		await ctx.logger("fix", { ...base, sha: null });
+		await ctx.logger("reply", { ...logContext(ctx), kind: "fix", failed: false });
 		return;
 	}
+	let shortHash = "";
 	try {
 		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- path validated against the repository root
 		await writeFile(safePath, stripped);
 		await ctx.runner("git", ["add", safePath]);
 		await ctx.runner("git", ["commit", "-m", FIX_MESSAGE]);
+		shortHash = await ctx.runner("git", ["rev-parse", "--short", "HEAD"]);
 	} catch (error) {
-		const { message } = error as Error;
-		await postReply(ctx, `Fix failed: ${message}`);
+		const message = String(error).replace(/^Error: /u, "");
+		await ctx.logger("fix", { ...base, sha: null, error: message });
+		await postReply(ctx, `Fix failed: ${message}`, "error");
 		throw error;
 	}
 	try {
 		await ctx.runner("git", ["push"]);
-		const shortHash = await ctx.runner("git", ["rev-parse", "--short", "HEAD"]);
-		await postReply(ctx, `Fixed in ${shortHash}.`);
 	} catch (error) {
-		const { message } = error as Error;
-		await postReply(ctx, `Fix failed: ${message}`);
+		const message = String(error).replace(/^Error: /u, "");
+		await ctx.logger("fix", { ...base, sha: shortHash, error: message });
+		await postReply(ctx, `Fix failed: ${message}`, "error");
+		return;
 	}
+	await ctx.logger("fix", { ...base, sha: shortHash });
+	await postReply(ctx, `Fixed in ${shortHash}.`, "fix");
 };
 
 const handleFix = async (mention: Record<string, unknown>, ctx: ReplyContext): Promise<void> => {
@@ -213,7 +250,7 @@ const handleFix = async (mention: Record<string, unknown>, ctx: ReplyContext): P
 		return;
 	}
 	if (fixed === content) {
-		await postReply(ctx, NO_CHANGE_REPLY);
+		await postReply(ctx, NO_CHANGE_REPLY, "nochange");
 		return;
 	}
 	await applyFix(ctx, targetPath, fixed);
