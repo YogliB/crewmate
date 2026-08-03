@@ -1,11 +1,20 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 
+const homeDir = (): string => {
+	try {
+		return homedir();
+	} catch {
+		return process.cwd();
+	}
+};
+
 const configHome = (): string =>
 	process.env.XDG_CONFIG_HOME ||
-	// ponytail: fallback to $HOME/.config, then %USERPROFILE%/.config, then cwd/.config if no home is set.
-	path.join(process.env.HOME || process.env.USERPROFILE || process.cwd(), ".config");
+	// ponytail: fallback to $HOME/.config, then %USERPROFILE%/.config, then os.homedir(), then cwd.
+	path.join(process.env.HOME || process.env.USERPROFILE || homeDir(), ".config");
 
 const statePath = (): string => path.join(configHome(), "pickup", "state.json");
 

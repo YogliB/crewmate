@@ -4,7 +4,7 @@ import path from "node:path";
 import run from "./index.js";
 import { PICKUP_PREFIX } from "./fix.js";
 import { createLogger, type Logger } from "./log.js";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 type Runner = (file: string, args: string[]) => Promise<string>;
 
@@ -670,12 +670,12 @@ describe("state errors", () => {
 		expect(run.statePath()).toBe(path.join(tempDir, ".config", "pickup", "state.json"));
 	});
 
-	it("falls back to the current directory when HOME is also empty", async () => {
+	it("falls back to os.homedir() when HOME is also empty", async () => {
 		vi.stubEnv("XDG_CONFIG_HOME", "");
 		vi.stubEnv("HOME", "");
 		const state = await run.loadState();
 		expect(state).toBeDefined();
-		expect(run.statePath()).toBe(path.join(process.cwd(), ".config", "pickup", "state.json"));
+		expect(run.statePath()).toBe(path.join(homedir(), ".config", "pickup", "state.json"));
 	});
 
 	it("warns and resets when the state file is corrupted", async () => {
@@ -1253,6 +1253,35 @@ describe("watch fix success", () => {
 		expect(lines.some((line) => line.event === "fix" && line.dryRun === false)).toBe(true);
 	});
 
+	it("continues when the short hash cannot be read", async () => {
+		const targetPath = path.join("src", "index.ts");
+		const targetDir = path.resolve("src");
+		await mkdir(targetDir, { recursive: true });
+		await writeFile(path.resolve(targetPath), "old");
+
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "git" && args.at(0) === "rev-parse" && args.at(1) === "--short") {
+				return Promise.reject(new Error("rev-parse failed"));
+			}
+			return resolveFix(file, args, { targetPath, fixed: "```\nnew\n```" });
+		}) as unknown as Runner;
+		await run.watch(PR_URL, {
+			allowFix: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		const postCall = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([file, args]) => file === "gh" && args.includes("POST"));
+		expect(JSON.stringify(postCall?.[1])).toContain("Fixed.");
+		const lines = await parseLogFile(tempDir);
+		const fixLine = lines.find((line) => line.event === "fix" && line.dryRun === false);
+		expect(fixLine?.sha).toBeNull();
+	});
+
 	it("explains instead of fixing when the comment body does not contain the #fix tag", async () => {
 		const targetPath = path.join("src", "index.ts");
 		const targetDir = path.resolve("src");
@@ -1710,6 +1739,30 @@ describe("watch fix errors", () => {
 		await writeFile(path.resolve(targetPath), "old");
 
 		const runner = makeFixRunner(targetPath, { failOn: "git push", fixed: "```\nnew\n```" });
+		await run.watch(PR_URL, {
+			allowFix: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+	});
+
+	it("reports when the fix cannot be pushed and the short hash is missing", async () => {
+		const targetPath = path.join("src", "index.ts");
+		const targetDir = path.resolve("src");
+		await mkdir(targetDir, { recursive: true });
+		await writeFile(path.resolve(targetPath), "old");
+
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "git" && args.at(0) === "rev-parse" && args.at(1) === "--short") {
+				return Promise.reject("rev-parse failed");
+			}
+			if (file === "git" && args.at(0) === "push") {
+				return Promise.reject("git push failed");
+			}
+			return resolveFix(file, args, { targetPath, fixed: "```\nnew\n```" });
+		}) as unknown as Runner;
 		await run.watch(PR_URL, {
 			allowFix: true,
 			interval: NO_INTERVAL,

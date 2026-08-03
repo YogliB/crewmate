@@ -9,6 +9,9 @@ const PICKUP_PREFIX = "🛻 pickup:";
 const NO_CHANGE_REPLY = "No changes needed.";
 const NO_FIX_REPLY = "Could not generate a fix.";
 
+const errorMessage = (error: unknown): string =>
+	error instanceof Error ? error.message : String(error);
+
 const isOutsideRepo = (repoRoot: string, resolved: string): boolean => {
 	const relative = path.relative(repoRoot, resolved);
 	return relative.startsWith("..") || path.isAbsolute(relative) || resolved === repoRoot;
@@ -114,7 +117,7 @@ const postReply = async (
 		]);
 		await ctx.logger("reply", { ...base, failed: false });
 	} catch (error) {
-		await ctx.logger("reply", { ...base, failed: true, error: String(error) });
+		await ctx.logger("reply", { ...base, failed: true, error: errorMessage(error) });
 		throw error;
 	}
 };
@@ -214,29 +217,33 @@ const applyFix = async (ctx: ReplyContext, targetPath: string, stripped: string)
 		await ctx.logger("reply", { ...logContext(ctx), kind: "fix", failed: false });
 		return;
 	}
-	let shortHash = "";
 	try {
 		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- path validated against the repository root
 		await writeFile(safePath, stripped);
 		await ctx.runner("git", ["add", safePath]);
 		await ctx.runner("git", ["commit", "-m", FIX_MESSAGE]);
-		shortHash = await ctx.runner("git", ["rev-parse", "--short", "HEAD"]);
 	} catch (error) {
-		const message = String(error).replace(/^Error: /u, "");
+		const message = errorMessage(error);
 		await ctx.logger("fix", { ...base, sha: null, error: message });
 		await postReply(ctx, `Fix failed: ${message}`, "error");
 		throw error;
 	}
+	let shortHash = "";
+	try {
+		shortHash = await ctx.runner("git", ["rev-parse", "--short", "HEAD"]);
+	} catch {
+		shortHash = "";
+	}
 	try {
 		await ctx.runner("git", ["push"]);
 	} catch (error) {
-		const message = String(error).replace(/^Error: /u, "");
-		await ctx.logger("fix", { ...base, sha: shortHash, error: message });
+		const message = errorMessage(error);
+		await ctx.logger("fix", { ...base, sha: shortHash || null, error: message });
 		await postReply(ctx, `Fix failed: ${message}`, "error");
 		return;
 	}
-	await ctx.logger("fix", { ...base, sha: shortHash });
-	await postReply(ctx, `Fixed in ${shortHash}.`, "fix");
+	await ctx.logger("fix", { ...base, sha: shortHash || null });
+	await postReply(ctx, shortHash ? `Fixed in ${shortHash}.` : "Fixed.", "fix");
 };
 
 const handleFix = async (mention: Record<string, unknown>, ctx: ReplyContext): Promise<void> => {
