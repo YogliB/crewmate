@@ -34,12 +34,47 @@ pickup watch <pr-url-or-shorthand> [options]
 - `--provider <command>` — use a specific provider CLI instead of `claude`.
 - `--prompt <text>` — prepend custom instructions to the LLM prompt.
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
-- `--dry-run` — preview the reply or fix on stdout without posting to GitHub or committing/pushing.
-- `--json` — when used with `--dry-run`, output the preview as JSON.
+- `--dry-run` — preview the reply or fix on stdout without posting to GitHub or committing/pushing. Dry-run defaults to one iteration.
+- `--json` — when used with `--dry-run`, output the preview as JSON. Without `--dry-run` it is ignored and a warning is logged.
 - `--user <login>` — only reply to comments from this GitHub user.
 
 State (seen comment IDs) is stored in `<config>/pickup/state.json` and logs in `<config>/pickup/pickup.log`, where `<config>` is `$XDG_CONFIG_HOME`, `$HOME/.config` (or `%USERPROFILE%/.config` on Windows), or the current working directory if none of those are set.
 Structured logs are appended on a best-effort basis; the file is not rotated or truncated. Use `--log` to also mirror each log line to stderr.
+
+## Configuration
+
+Set defaults and per-repo overrides in two JSON files.
+
+- Global config: `<config>/pickup/config.json` — global `defaults` plus `profiles` keyed by `owner/repo`.
+- Per-repo config: `.pickup.json` in the repository root.
+
+Precedence, strongest first:
+
+1. CLI flags.
+2. Per-repo `.pickup.json`.
+3. Global config (defaults are merged first, then the matching `profiles["owner/repo"]` overrides any overlapping fields).
+
+Both files use the same profile keys: `provider`, `model`, `interval`, `user`, `prompt`, `fix`, `dryRun`, `log`, and `json`. Unknown keys are ignored. Invalid types for known keys are warned and ignored. In the global file, the `profiles` map keys (owner/repo) are matched case-insensitively. See `assets/config.schema.json` for the full schema; point your IDE at it for validation and autocomplete.
+
+Example `.pickup.json`:
+
+```json
+{
+	"$schema": "https://raw.githubusercontent.com/YogliB/pickup/main/assets/config.schema.json",
+	"provider": "my-llm",
+	"prompt": "Be terse"
+}
+```
+
+Example global `config.json`:
+
+```json
+{
+	"$schema": "https://raw.githubusercontent.com/YogliB/pickup/main/assets/config.schema.json",
+	"defaults": { "interval": 120 },
+	"profiles": { "myorg/myrepo": { "provider": "my-llm" } }
+}
+```
 
 ## Log events
 
@@ -78,8 +113,7 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - **General PR comments**: right now only review comments on diff lines are handled; conversation comments should be supported too.
 - **Listen to repo and org changes**: watch for relevant activity across a repository or organization instead of polling a single PR.
 - **`pickup init`**: one-time interactive setup that writes provider, model, and default flags to config.
-- **Per-project profiles**: store different provider, model, and default flags per repo in a local or global config.
-- **Custom prompts**: override reply style via `--prompt <text>` flag (per-repo config files TBD).
+
 - **Watch multiple PRs**: target a list of PRs, or all open PRs in a repo or org, in one command.
 - **Listen to issues alongside PR mentions**: respond to `@pickup` mentions in issue bodies and comments, not just pull request review threads.
 

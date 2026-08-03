@@ -1,0 +1,70 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/YogliB/pickup/main/assets/config.schema.json",
+	"anyOf": [
+		{
+			"$ref": "#/$defs/globalConfig"
+		},
+		{
+			"$ref": "#/$defs/profile"
+		}
+	],
+	"$defs": {
+		"profile": {
+			"$comment": "Unknown keys are ignored by the runtime; additionalProperties is true for forward compatibility.",
+			"type": "object",
+			"not": {
+				"anyOf": [{ "required": ["defaults"] }, { "required": ["profiles"] }]
+			},
+			"properties": {
+				"provider": {
+					"type": "string"
+				},
+				"model": {
+					"type": "string"
+				},
+				"interval": {
+					"type": "integer",
+					"minimum": 1
+				},
+				"user": {
+					"type": "string"
+				},
+				"prompt": {
+					"type": "string"
+				},
+				"fix": {
+					"type": "boolean"
+				},
+				"dryRun": {
+					"type": "boolean"
+				},
+				"log": {
+					"type": "boolean"
+				},
+				"json": {
+					"type": "boolean"
+				}
+			},
+			"additionalProperties": true
+		},
+		"globalConfig": {
+			"$comment": "Unknown keys are ignored by the runtime; additionalProperties is true for forward compatibility.",
+			"type": "object",
+			"properties": {
+				"defaults": {
+					"$ref": "#/$defs/profile"
+				},
+				"profiles": {
+					"$comment": "Keys are owner/repo strings matched case-insensitively.",
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/profile"
+					}
+				}
+			},
+			"anyOf": [{ "required": ["defaults"] }, { "required": ["profiles"] }],
+			"additionalProperties": true
+		}
+	}
+}
