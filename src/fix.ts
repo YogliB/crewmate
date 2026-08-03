@@ -57,7 +57,7 @@ type ReplyContext = {
 	repo: string;
 	repoRoot: string;
 	runner: Runner;
-	warn?: (message: string, fields?: Record<string, unknown>) => Promise<void>;
+	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
 };
 
 const logContext = (
