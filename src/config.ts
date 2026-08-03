@@ -237,7 +237,9 @@ const resolveProfile = async (
 };
 
 export {
+	errorMessage,
 	globalConfigPath,
+	isPlainObject,
 	loadGlobalConfig,
 	loadRepoConfig,
 	type Profile,

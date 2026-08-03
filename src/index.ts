@@ -7,6 +7,7 @@ import { dispatchMention, getLogin, PICKUP_PREFIX, type Runner, stripFences } fr
 import { createLogger, type Logger } from "./log.js";
 import { loadState, saveState, statePath } from "./state.js";
 import { resolveProfile, type Profile } from "./config.js";
+import { runInit } from "./init.js";
 
 const CLI_ARGV_OFFSET = 2;
 const EXPECTED_PATH_PARTS = 4;
@@ -428,6 +429,10 @@ const run = Object.assign(
 			}
 			if (subcommand === "watch") {
 				await runWatch(rest, options);
+				return;
+			}
+			if (subcommand === "init") {
+				await runInit();
 				return;
 			}
 			console.log("Hello from pickup!", argv);

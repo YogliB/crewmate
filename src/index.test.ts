@@ -246,6 +246,22 @@ describe("run default", () => {
 	});
 });
 
+describe("run init", () => {
+	it("dispatches to init and exits when not in a TTY", async () => {
+		const previousExitCode = process.exitCode;
+		const previousIsTTY = process.stdin.isTTY;
+		process.exitCode = NO_EXIT_CODE;
+		process.stdin.isTTY = false;
+		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		await run(["init"]);
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		expect(write).toHaveBeenCalledWith("init requires an interactive terminal\n");
+		process.exitCode = previousExitCode;
+		process.stdin.isTTY = previousIsTTY;
+		write.mockRestore();
+	});
+});
+
 describe("run watch missing", () => {
 	let tempDir = "";
 
@@ -1873,14 +1889,14 @@ describe("run help", () => {
 	it("prints help when --help is requested", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		await run(["--help"]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("Usage"));
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
 		write.mockRestore();
 	});
 
 	it("prints help when -h is requested", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		await run(["-h"]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("Usage"));
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
 		write.mockRestore();
 	});
 });
