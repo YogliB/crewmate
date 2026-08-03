@@ -2,13 +2,13 @@
 
 A CLI that watches GitHub PR review comments for `@pickup` mentions and replies with explanations or generated fixes.
 
-## Usage
+## Commands
 
-`pickup watch <pr-url-or-shorthand> [options]`
+### `pickup watch <pr-url-or-shorthand> [options]`
 
 `<pr-url-or-shorthand>` can be a full URL (`https://github.com/owner/repo/pull/4`) or a shorthand (`owner/repo/pull/4`).
 
-## Options
+#### Options
 
 - `--interval <seconds>` Seconds between polls (default: 60)
 - `--fix` Attempt to apply a generated fix and push a commit. The review comment body must also contain the tag `#fix` (case-insensitive).
@@ -19,6 +19,12 @@ A CLI that watches GitHub PR review comments for `@pickup` mentions and replies 
 - `--dry-run` Preview the reply or fix on stdout without posting to GitHub or committing/pushing. Defaults to one iteration.
 - `--json` When used with `--dry-run`, output the preview as JSON. Without `--dry-run` it is ignored and a warning is logged.
 - `--user <login>` Only respond to comments from this GitHub login
+
+### `pickup init`
+
+Interactive one-time setup that prompts for `provider`, `model`, `interval`, `user`, `prompt`, and `fix` defaults, then writes them to `$XDG_CONFIG_HOME/pickup/config.json`.
+
+## Configuration
 
 Configuration is read from:
 
