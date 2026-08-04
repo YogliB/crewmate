@@ -119,5 +119,18 @@ describe("state", () => {
 			const loaded = await loadState(testStatePath);
 			expect(loaded.size).toBe(0);
 		});
+
+		it("ignores non-array state values", async () => {
+			const testStatePath = path.join(tempDir, "state.json");
+			await writeFile(
+				testStatePath,
+				JSON.stringify({
+					"https://github.com/owner/repo/pull/1": 123,
+					"https://github.com/owner/repo/pull/2": { not: "an array" },
+				}),
+			);
+			const loaded = await loadState(testStatePath);
+			expect(loaded.size).toBe(0);
+		});
 	});
 });

@@ -2263,6 +2263,129 @@ describe("conversation comments", () => {
 			true,
 		);
 	});
+
+	it("passes a custom prompt to a conversation mention", async () => {
+		const runner = makeExplainRunner({
+			answer: "It does something.",
+			body: "",
+			conversationBody: "@pickup hello",
+		});
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			prompt: "CUSTOM",
+			runner,
+		});
+		expect(getPrompt(runner)?.startsWith("CUSTOM\n\n")).toBe(true);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+	});
+
+	it("warns when the provider returns an empty conversation response", async () => {
+		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const runner = makeExplainRunner({
+			answer: "",
+			body: "",
+			conversationBody: "@pickup hello",
+		});
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(warn).toHaveBeenCalledWith("Warning: claude returned empty conversation response\n");
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		warn.mockRestore();
+	});
+
+	it("warns when a custom provider returns an empty conversation response", async () => {
+		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const runner = makeExplainRunner({
+			answer: "",
+			body: "",
+			conversationBody: "@pickup hello",
+			provider: "my-llm",
+		});
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			provider: "my-llm",
+			runner,
+		});
+		expect(warn).toHaveBeenCalledWith("Warning: my-llm returned empty conversation response\n");
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		warn.mockRestore();
+	});
+
+	it("filters malformed conversation comments", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			const [command] = args;
+			const endpoint = findEndpoint(args);
+			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
+				return Promise.resolve(JSON.stringify([[]]));
+			}
+			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
+				return Promise.resolve(
+					JSON.stringify([[[{ body: "@pickup hello", id: "3", user: { login: "alice" } }]]]),
+				);
+			}
+			if (file === "gh" && (command === "--version" || command === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "claude" && command === "--version") {
+				return Promise.resolve("");
+			}
+			if (file === "git" && command === "rev-parse") {
+				return resolveGit(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toBeUndefined();
+	});
+
+	it("filters malformed review comments", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			const [command] = args;
+			const endpoint = findEndpoint(args);
+			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
+				return Promise.resolve(
+					JSON.stringify([
+						[
+							{
+								body: "@pickup hello",
+								id: FIRST_ID,
+								in_reply_to_id: null,
+								line: FIRST_LINE,
+								path: 123,
+								user: { login: "alice" },
+							},
+						],
+					]),
+				);
+			}
+			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
+				return Promise.resolve(JSON.stringify([[]]));
+			}
+			if (file === "gh" && (command === "--version" || command === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "claude" && command === "--version") {
+				return Promise.resolve("");
+			}
+			if (file === "git" && command === "rev-parse") {
+				return resolveGit(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toBeUndefined();
+	});
 });
 
 describe("run help", () => {
