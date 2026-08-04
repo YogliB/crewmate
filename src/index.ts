@@ -3,11 +3,21 @@ import { promisify } from "node:util";
 import { setTimeout } from "node:timers/promises";
 import { readFileSync } from "node:fs";
 import process from "node:process";
-import { dispatchMention, getLogin, PICKUP_PREFIX, type Runner, stripFences } from "./fix.js";
+import {
+	dispatchMention,
+	getLogin,
+	PICKUP_PREFIX,
+	type Mention,
+	type Runner,
+	stripFences,
+} from "./fix.js";
+
 import { createLogger, type Logger } from "./log.js";
 import { loadState, saveState, statePath } from "./state.js";
 import { resolveProfile, type Profile } from "./config.js";
 import { runInit } from "./init.js";
+
+export type { Mention };
 
 const CLI_ARGV_OFFSET = 2;
 const EXPECTED_PATH_PARTS = 4;
@@ -60,61 +70,93 @@ const parsePrUrl = (
 	throw new TypeError(`Invalid PR reference: ${prUrl}`);
 };
 
-const fetchReviewComments = async (
-	prUrl: string,
-	runner: Runner = exec,
-): Promise<Record<string, unknown>[]> => {
+const toMention = (raw: Record<string, unknown>, kind: Mention["kind"]): Mention | undefined => {
+	if (typeof raw.id !== "number" || typeof raw.body !== "string") return undefined;
+	const inReplyToId = typeof raw.in_reply_to_id === "number" ? raw.in_reply_to_id : undefined;
+	if (kind === "conversation") {
+		return { id: raw.id, body: raw.body, user: raw.user, kind: "conversation", inReplyToId };
+	}
+	if (typeof raw.path !== "string" || typeof raw.line !== "number") return undefined;
+	return {
+		id: raw.id,
+		body: raw.body,
+		user: raw.user,
+		kind: "review",
+		path: raw.path,
+		line: raw.line,
+		inReplyToId,
+	};
+};
+
+const fetchKind = async (
+	owner: string,
+	repo: string,
+	number: string,
+	kind: Mention["kind"],
+	runner: Runner,
+): Promise<Mention[]> => {
+	const endpoint =
+		kind === "conversation"
+			? `repos/${owner}/${repo}/issues/${number}/comments`
+			: `repos/${owner}/${repo}/pulls/${number}/comments`;
+	const output = await runner("gh", ["api", "--paginate", "--slurp", endpoint]);
+	return (JSON.parse(output) as Record<string, unknown>[][])
+		.flat()
+		.map((c) => toMention(c, kind))
+		.filter((m): m is Mention => m !== undefined);
+};
+
+const fetchMentions = async (prUrl: string, runner: Runner = exec): Promise<Mention[]> => {
 	const { owner, repo, number } = parsePrUrl(prUrl);
-	const out = await runner("gh", [
-		"api",
-		"--paginate",
-		"--slurp",
-		`repos/${owner}/${repo}/pulls/${number}/comments`,
+	const [review, conversation] = await Promise.all([
+		fetchKind(owner, repo, number, "review", runner),
+		fetchKind(owner, repo, number, "conversation", runner),
 	]);
-	return (JSON.parse(out) as Record<string, unknown>[][]).flat();
+	return [...review, ...conversation];
 };
 
 const findNewMentions = (
-	comments: Record<string, unknown>[],
-	seenIds: number[],
+	comments: Mention[],
+	seenIds: string[],
 	allowedUser?: string,
 	isFresh = false,
-): Record<string, unknown>[] => {
+): Mention[] => {
 	const seen = new Set(seenIds);
+	// ponytail: conversation comments do not expose a parent id, so a fresh state cannot
+	// suppress already-answered conversation mentions. Scope the fallback to review threads only.
 	const pickupRepliedIds = isFresh
 		? new Set(
-				comments
-					.filter(
-						(comment) =>
-							typeof comment.body === "string" &&
-							comment.body.startsWith(PICKUP_PREFIX) &&
-							typeof comment.in_reply_to_id === "number",
-					)
-					.map((comment) => comment.in_reply_to_id as number),
+				comments.flatMap((comment) =>
+					comment.kind === "review" &&
+					comment.body.startsWith(PICKUP_PREFIX) &&
+					typeof comment.inReplyToId === "number"
+						? [`${comment.kind}:${comment.inReplyToId}`]
+						: [],
+				),
 			)
-		: new Set<number>();
-	return comments
-		.filter(
-			(comment) =>
-				typeof comment.body === "string" &&
-				/(?:^|\W)@pickup\b/i.test(comment.body) &&
-				typeof comment.id === "number" &&
-				(comment.in_reply_to_id === undefined || comment.in_reply_to_id === null) &&
-				typeof comment.path === "string" &&
-				typeof comment.line === "number" &&
-				!seen.has(comment.id) &&
-				!pickupRepliedIds.has(comment.id) &&
-				(allowedUser === undefined || getLogin(comment.user) === allowedUser),
-		)
-		.toSorted((first, second) => (second.id as number) - (first.id as number));
+		: new Set<string>();
+	return (
+		comments
+			.filter(
+				(comment) =>
+					!comment.body.startsWith(PICKUP_PREFIX) &&
+					/(?:^|\W)@pickup\b/i.test(comment.body) &&
+					comment.inReplyToId === undefined &&
+					!seen.has(`${comment.kind}:${comment.id}`) &&
+					!pickupRepliedIds.has(`${comment.kind}:${comment.id}`) &&
+					(allowedUser === undefined || getLogin(comment.user) === allowedUser),
+			)
+			// ponytail: review and issue comment ids may come from different sequences; sorting by id is
+			// a coarse proxy for newest-first. Per-kind ordering is preserved by creation time in practice.
+			.toSorted((first, second) => second.id - first.id)
+	);
 };
 
-const findNewMention = (
-	...args: Parameters<typeof findNewMentions>
-): Record<string, unknown> | undefined => findNewMentions(...args).at(0);
+const findNewMention = (...args: Parameters<typeof findNewMentions>): Mention | undefined =>
+	findNewMentions(...args).at(0);
 
 const respondToMention = async (
-	mention: Record<string, unknown>,
+	mention: Mention,
 	prUrl: string,
 	options: {
 		allowFix: boolean;
@@ -131,12 +173,12 @@ const respondToMention = async (
 ): Promise<void> => {
 	const { runner } = options;
 	const { owner, repo, number } = parsePrUrl(prUrl);
-	const commentId = mention.id as number;
-	const commentBody = mention.body as string;
+	const commentId = mention.id;
 	const ctx = {
 		commentId,
 		dryRun: options.dryRun,
 		json: options.json,
+		kind: mention.kind,
 		logger: options.logger,
 		model: options.model,
 		number,
@@ -148,7 +190,7 @@ const respondToMention = async (
 		runner,
 		warn: options.warn,
 	};
-	await dispatchMention(mention, ctx, { allowFix: options.allowFix, commentBody });
+	await dispatchMention(mention, ctx, { allowFix: options.allowFix });
 };
 
 const pollIteration = async (
@@ -174,23 +216,25 @@ const pollIteration = async (
 	const state = await loadState(undefined, async () =>
 		iteration.warn("state file is corrupted, resetting", { reason: "state-corrupted" }),
 	);
-	const comments = await fetchReviewComments(prUrl, runner);
+	const comments = await fetchMentions(prUrl, runner);
 	const mentions = findNewMentions(
 		comments,
 		state.get(prUrl) ?? [],
 		iteration.allowedUser,
-		state.size === 0,
+		(state.get(prUrl)?.length ?? 0) === 0,
 	);
 	for (const mention of mentions) {
 		await iteration.logger("mention", {
 			allowFix: iteration.allowFix,
-			commentId: mention.id as number,
+			commentId: mention.id,
 			dryRun: iteration.dryRun,
+			kind: mention.kind,
 			user: getLogin(mention.user),
 			url: prUrl,
 		});
 		if (!iteration.dryRun) {
-			state.set(prUrl, [...(state.get(prUrl) ?? []), mention.id as number]);
+			const stateKey = `${mention.kind}:${mention.id}`;
+			state.set(prUrl, [...(state.get(prUrl) ?? []), stateKey]);
 			await saveState(state);
 		}
 		await respondToMention(mention, prUrl, {

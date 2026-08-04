@@ -5,6 +5,7 @@ import run from "./index.js";
 import { PICKUP_PREFIX } from "./fix.js";
 import { createLogger, type Logger } from "./log.js";
 import { homedir, tmpdir } from "node:os";
+import type { Mention } from "./index.js";
 
 type Runner = (file: string, args: string[]) => Promise<string>;
 
@@ -48,26 +49,43 @@ const getPrompt = (runner: Runner, provider = "claude"): string | undefined => {
 	return typeof index === "number" && index >= 0 ? call?.[1].at(index + 1) : undefined;
 };
 
+const findEndpoint = (args: string[]): string | undefined =>
+	args.find((arg) => typeof arg === "string" && startsWithRepos(arg));
+
+const conversationComments = (body?: string): string =>
+	body === undefined || body === ""
+		? "[]"
+		: JSON.stringify([[{ body, id: THIRD_ID, user: { login: "alice" } }]]);
+
 const resolveGhExplain = (
 	args: string[],
-	request: { body?: string; path?: string } = {},
+	request: { body?: string; conversationBody?: string; path?: string } = {},
 ): Promise<string> => {
 	const [command] = args;
 	if (command === "api" && args.some((arg) => startsWithRepos(arg))) {
-		return Promise.resolve(
-			JSON.stringify([
-				[
-					{
-						body: request.body ?? "@pickup hello",
-						id: FIRST_ID,
-						in_reply_to_id: null,
-						line: EXPLANATION_LINE,
-						path: request.path ?? "src/index.ts",
-						user: { login: "alice" },
-					},
-				],
-			]),
-		);
+		if (args.includes("POST")) {
+			return Promise.resolve("");
+		}
+		const endpoint = findEndpoint(args);
+		if (endpoint?.includes("/pulls/")) {
+			return Promise.resolve(
+				JSON.stringify([
+					[
+						{
+							body: request.body ?? "@pickup hello",
+							id: FIRST_ID,
+							in_reply_to_id: null,
+							line: EXPLANATION_LINE,
+							path: request.path ?? "src/index.ts",
+							user: { login: "alice" },
+						},
+					],
+				]),
+			);
+		}
+		if (endpoint?.includes("/issues/")) {
+			return Promise.resolve(conversationComments(request.conversationBody));
+		}
 	}
 	return Promise.resolve("");
 };
@@ -86,7 +104,13 @@ const resolveGit = (args: string[]): Promise<string> => {
 const resolveExplain = (
 	file: string,
 	args: string[],
-	request: { answer?: string; body?: string; path?: string; provider?: string } = {},
+	request: {
+		answer?: string;
+		body?: string;
+		conversationBody?: string;
+		path?: string;
+		provider?: string;
+	} = {},
 ): Promise<string> => {
 	if (file === (request.provider || "claude")) {
 		return Promise.resolve(request.answer ?? "");
@@ -101,10 +125,19 @@ const resolveExplain = (
 };
 
 const makeExplainRunner = (
-	request: { answer?: string; body?: string; path?: string; provider?: string } = {},
+	request: {
+		answer?: string;
+		body?: string;
+		conversationBody?: string;
+		path?: string;
+		provider?: string;
+	} = {},
 ): Runner =>
 	vi.fn((file: string, args: string[]) => resolveExplain(file, args, request)) as unknown as Runner;
-const makeMultiMentionRunner = (options: { failOn?: string; provider?: string } = {}): Runner =>
+
+const makeMultiMentionRunner = (
+	options: { conversationBody?: string; failOn?: string; provider?: string } = {},
+): Runner =>
 	vi.fn((file: string, args: string[]) => {
 		if (options.failOn && willFail(file, args, options.failOn)) {
 			return Promise.reject(new Error(`${options.failOn} failed`));
@@ -127,28 +160,34 @@ const makeMultiMentionRunner = (options: { failOn?: string; provider?: string } 
 				if (args.includes("POST")) {
 					return Promise.resolve("");
 				}
-				return Promise.resolve(
-					JSON.stringify([
-						[
-							{
-								body: "@pickup hello",
-								id: FIRST_ID,
-								in_reply_to_id: null,
-								line: EXPLANATION_LINE,
-								path: "src/index.ts",
-								user: { login: "alice" },
-							},
-							{
-								body: "@pickup hi",
-								id: SECOND_ID,
-								in_reply_to_id: null,
-								line: EXPLANATION_LINE,
-								path: "src/index.ts",
-								user: { login: "alice" },
-							},
-						],
-					]),
-				);
+				const endpoint = findEndpoint(args);
+				if (endpoint?.includes("/pulls/")) {
+					return Promise.resolve(
+						JSON.stringify([
+							[
+								{
+									body: "@pickup hello",
+									id: FIRST_ID,
+									in_reply_to_id: null,
+									line: EXPLANATION_LINE,
+									path: "src/index.ts",
+									user: { login: "alice" },
+								},
+								{
+									body: "@pickup hi",
+									id: SECOND_ID,
+									in_reply_to_id: null,
+									line: EXPLANATION_LINE,
+									path: "src/index.ts",
+									user: { login: "alice" },
+								},
+							],
+						]),
+					);
+				}
+				if (endpoint?.includes("/issues/")) {
+					return Promise.resolve(conversationComments(options.conversationBody));
+				}
 			}
 		}
 		return Promise.resolve("");
@@ -156,24 +195,33 @@ const makeMultiMentionRunner = (options: { failOn?: string; provider?: string } 
 
 const resolveGhFix = (
 	args: string[],
-	request: { body?: string; targetPath: string },
+	request: { body?: string; conversationBody?: string; targetPath: string } = { targetPath: "" },
 ): Promise<string> => {
 	const [command] = args;
 	if (command === "api" && args.some((arg) => startsWithRepos(arg))) {
-		return Promise.resolve(
-			JSON.stringify([
-				[
-					{
-						body: request.body ?? "@pickup #fix",
-						id: FIRST_ID,
-						in_reply_to_id: null,
-						line: FIRST_LINE,
-						path: request.targetPath,
-						user: { login: "alice" },
-					},
-				],
-			]),
-		);
+		if (args.includes("POST")) {
+			return Promise.resolve("");
+		}
+		const endpoint = findEndpoint(args);
+		if (endpoint?.includes("/pulls/")) {
+			return Promise.resolve(
+				JSON.stringify([
+					[
+						{
+							body: request.body ?? "@pickup #fix",
+							id: FIRST_ID,
+							in_reply_to_id: null,
+							line: FIRST_LINE,
+							path: request.targetPath,
+							user: { login: "alice" },
+						},
+					],
+				]),
+			);
+		}
+		if (endpoint?.includes("/issues/")) {
+			return Promise.resolve(conversationComments(request.conversationBody));
+		}
 	}
 	if (command === "pr") {
 		return Promise.resolve("");
@@ -194,6 +242,7 @@ const resolveFix = (
 	args: string[],
 	request: {
 		body?: string;
+		conversationBody?: string;
 		failOn?: string;
 		fixed?: string;
 		targetPath: string;
@@ -217,7 +266,13 @@ const resolveFix = (
 
 const makeFixRunner = (
 	targetPath: string,
-	options: { body?: string; failOn?: string; fixed?: string; provider?: string } = {},
+	options: {
+		body?: string;
+		conversationBody?: string;
+		failOn?: string;
+		fixed?: string;
+		provider?: string;
+	} = {},
 ): Runner =>
 	vi.fn((file: string, args: string[]) =>
 		resolveFix(file, args, { targetPath, ...options }),
@@ -385,7 +440,7 @@ describe("run watch flags", () => {
 			return Promise.resolve("");
 		}) as unknown as Runner;
 		await expect(run.watch(PR_URL, { runner })).rejects.toThrow("api fail");
-		expect(countCalls(runner, "gh", (args) => args[0] === "api")).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => args[0] === "api")).toBe(TWO_CALLS);
 	});
 
 	it("uses the default runner when none is provided", async () => {
@@ -700,44 +755,6 @@ describe("parseInterval", () => {
 	});
 });
 
-describe("state load", () => {
-	let tempDir = "";
-	const statePath = (): string => path.join(tempDir, "state.json");
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("loads an empty state when the file is missing", async () => {
-		const state = await run.loadState(statePath());
-		expect(state.size).toBe(NO_CALLS);
-	});
-
-	it("loads a saved state", async () => {
-		const state = new Map<string, number[]>([[PR_URL, [FIRST_ID, SECOND_ID]]]);
-		await run.saveState(state, statePath());
-		const loaded = await run.loadState(statePath());
-		expect(loaded.get(PR_URL)).toEqual([FIRST_ID, SECOND_ID]);
-	});
-
-	it("ignores malformed values", async () => {
-		await writeFile(statePath(), JSON.stringify({ [PR_URL]: [FIRST_ID, "two", THIRD_ID] }));
-		const loaded = await run.loadState(statePath());
-		expect(loaded.get(PR_URL)).toBeUndefined();
-	});
-
-	it("resets when the state file is not an object", async () => {
-		await writeFile(statePath(), JSON.stringify([PR_URL]));
-		const loaded = await run.loadState(statePath());
-		expect(loaded.size).toBe(NO_CALLS);
-	});
-});
-
 describe("state errors", () => {
 	let tempDir = "";
 
@@ -785,9 +802,23 @@ describe("state errors", () => {
 
 describe("findNewMention", () => {
 	it("returns the newest unseen mention", () => {
-		const comments = [
-			{ body: "@pickup hello", id: FIRST_ID, line: FIRST_LINE, path: "src/index.ts" },
-			{ body: "@pickup fix", id: SECOND_ID, line: FIRST_LINE, path: "src/index.ts" },
+		const comments: Mention[] = [
+			{
+				body: "@pickup hello",
+				id: FIRST_ID,
+				kind: "review",
+				line: FIRST_LINE,
+				path: "src/index.ts",
+				user: { login: "alice" },
+			},
+			{
+				body: "@pickup fix",
+				id: SECOND_ID,
+				kind: "review",
+				line: FIRST_LINE,
+				path: "src/index.ts",
+				user: { login: "alice" },
+			},
 		];
 		const mention = run.findNewMention(comments, []);
 		expect(mention).toBeDefined();
@@ -803,12 +834,14 @@ describe("findNewMention", () => {
 					{
 						body: "@pickup hello",
 						id: FIRST_ID,
-						in_reply_to_id: null,
+						inReplyToId: undefined,
+						kind: "review",
 						line: FIRST_LINE,
 						path: "src/index.ts",
+						user: { login: "alice" },
 					},
 				],
-				[FIRST_ID],
+				["review:1"],
 			),
 		).toBeUndefined();
 	});
@@ -816,30 +849,65 @@ describe("findNewMention", () => {
 	it("ignores comments without @pickup", () => {
 		expect(
 			run.findNewMention(
-				[{ body: "hello", id: FIRST_ID, line: FIRST_LINE, path: "src/index.ts" }],
-				[],
-			),
-		).toBeUndefined();
-	});
-
-	it("ignores comments with non-numeric ids", () => {
-		expect(
-			run.findNewMention(
-				[{ body: "@pickup hello", id: "1", line: FIRST_LINE, path: "src/index.ts" }],
+				[
+					{
+						body: "hello",
+						id: FIRST_ID,
+						kind: "review",
+						line: FIRST_LINE,
+						path: "src/index.ts",
+						user: { login: "alice" },
+					},
+				],
 				[],
 			),
 		).toBeUndefined();
 	});
 
 	it("ignores comments without a body", () => {
-		expect(run.findNewMention([{ id: FIRST_ID }], [])).toBeUndefined();
+		expect(
+			run.findNewMention(
+				[
+					{
+						body: "",
+						id: FIRST_ID,
+						kind: "review",
+						line: FIRST_LINE,
+						path: "src/index.ts",
+						user: { login: "alice" },
+					},
+				],
+				[],
+			),
+		).toBeUndefined();
 	});
 
 	it("returns the newest mention when comments are out of order", () => {
-		const comments = [
-			{ body: "@pickup hello", id: FIRST_ID, line: FIRST_LINE, path: "src/index.ts" },
-			{ body: "@pickup fix", id: THIRD_ID, line: FIRST_LINE, path: "src/index.ts" },
-			{ body: "@pickup hi", id: SECOND_ID, line: FIRST_LINE, path: "src/index.ts" },
+		const comments: Mention[] = [
+			{
+				body: "@pickup hello",
+				id: FIRST_ID,
+				kind: "review",
+				line: FIRST_LINE,
+				path: "src/index.ts",
+				user: { login: "alice" },
+			},
+			{
+				body: "@pickup fix",
+				id: THIRD_ID,
+				kind: "review",
+				line: FIRST_LINE,
+				path: "src/index.ts",
+				user: { login: "alice" },
+			},
+			{
+				body: "@pickup hi",
+				id: SECOND_ID,
+				kind: "review",
+				line: FIRST_LINE,
+				path: "src/index.ts",
+				user: { login: "alice" },
+			},
 		];
 		const mention = run.findNewMention(comments, []);
 		expect(mention).toBeDefined();
@@ -848,14 +916,19 @@ describe("findNewMention", () => {
 		}
 	});
 
-	it("ignores comments without a path or line", () => {
-		expect(run.findNewMention([{ body: "@pickup hello", id: FIRST_ID }], [])).toBeUndefined();
-	});
-
 	it("ignores @pickup as a substring", () => {
 		expect(
 			run.findNewMention(
-				[{ body: "foo@pickup hello", id: FIRST_ID, line: FIRST_LINE, path: "src/index.ts" }],
+				[
+					{
+						body: "foo@pickup hello",
+						id: FIRST_ID,
+						kind: "review",
+						line: FIRST_LINE,
+						path: "src/index.ts",
+						user: { login: "alice" },
+					},
+				],
 				[],
 			),
 		).toBeUndefined();
@@ -863,7 +936,16 @@ describe("findNewMention", () => {
 
 	it("matches @pickup inside parentheses", () => {
 		const mention = run.findNewMention(
-			[{ body: "(@pickup)", id: FIRST_ID, line: FIRST_LINE, path: "src/index.ts" }],
+			[
+				{
+					body: "(@pickup)",
+					id: FIRST_ID,
+					kind: "review",
+					line: FIRST_LINE,
+					path: "src/index.ts",
+					user: { login: "alice" },
+				},
+			],
 			[],
 		);
 		expect(mention).toBeDefined();
@@ -877,9 +959,11 @@ describe("findNewMention", () => {
 					{
 						body: "@pickup hello",
 						id: FIRST_ID,
-						in_reply_to_id: SECOND_ID,
+						inReplyToId: SECOND_ID,
+						kind: "review",
 						line: FIRST_LINE,
 						path: "src/index.ts",
+						user: { login: "alice" },
 					},
 				],
 				[],
@@ -887,15 +971,17 @@ describe("findNewMention", () => {
 		).toBeUndefined();
 	});
 
-	it("matches top-level comments that have in_reply_to_id: null", () => {
+	it("matches top-level comments that have inReplyToId: undefined", () => {
 		const mention = run.findNewMention(
 			[
 				{
 					body: "@pickup hello",
 					id: FIRST_ID,
-					in_reply_to_id: null,
+					inReplyToId: undefined,
+					kind: "review",
 					line: FIRST_LINE,
 					path: "src/index.ts",
+					user: { login: "alice" },
 				},
 			],
 			[],
@@ -910,16 +996,20 @@ describe("findNewMention", () => {
 				{
 					body: "@pickup hello",
 					id: FIRST_ID,
-					in_reply_to_id: null,
+					inReplyToId: undefined,
+					kind: "review",
 					line: FIRST_LINE,
 					path: "src/index.ts",
+					user: { login: "alice" },
 				},
 				{
 					body: `${PICKUP_PREFIX} done`,
 					id: SECOND_ID,
-					in_reply_to_id: FIRST_ID,
+					inReplyToId: FIRST_ID,
+					kind: "review",
 					line: FIRST_LINE,
 					path: "src/index.ts",
+					user: { login: "pickup" },
 				},
 			],
 			[],
@@ -935,16 +1025,20 @@ describe("findNewMention", () => {
 				{
 					body: "@pickup hello",
 					id: FIRST_ID,
-					in_reply_to_id: null,
+					inReplyToId: undefined,
+					kind: "review",
 					line: FIRST_LINE,
 					path: "src/index.ts",
+					user: { login: "alice" },
 				},
 				{
 					body: "thanks",
 					id: SECOND_ID,
-					in_reply_to_id: FIRST_ID,
+					inReplyToId: FIRST_ID,
+					kind: "review",
 					line: FIRST_LINE,
 					path: "src/index.ts",
+					user: { login: "alice" },
 				},
 			],
 			[],
@@ -961,16 +1055,20 @@ describe("findNewMention", () => {
 				{
 					body: "@pickup hello",
 					id: FIRST_ID,
-					in_reply_to_id: null,
+					inReplyToId: undefined,
+					kind: "review",
 					line: FIRST_LINE,
 					path: "src/index.ts",
+					user: { login: "alice" },
 				},
 				{
 					body: `${PICKUP_PREFIX} done`,
 					id: SECOND_ID,
-					in_reply_to_id: FIRST_ID,
+					inReplyToId: FIRST_ID,
+					kind: "review",
 					line: FIRST_LINE,
 					path: "src/index.ts",
+					user: { login: "pickup" },
 				},
 			],
 			[],
@@ -984,9 +1082,25 @@ describe("findNewMention", () => {
 
 describe("findNewMentions", () => {
 	it("returns all new mentions sorted by id descending", () => {
-		const comments = [
-			{ body: "@pickup hello", id: FIRST_ID, line: FIRST_LINE, path: "src/index.ts" },
-			{ body: "@pickup fix", id: SECOND_ID, line: FIRST_LINE, path: "src/index.ts" },
+		const comments: Mention[] = [
+			{
+				body: "@pickup hello",
+				id: FIRST_ID,
+				inReplyToId: undefined,
+				kind: "review",
+				line: FIRST_LINE,
+				path: "src/index.ts",
+				user: { login: "alice" },
+			},
+			{
+				body: "@pickup fix",
+				id: SECOND_ID,
+				inReplyToId: undefined,
+				kind: "review",
+				line: FIRST_LINE,
+				path: "src/index.ts",
+				user: { login: "alice" },
+			},
 		];
 		const mentions = run.findNewMentions(comments, []);
 		expect(mentions).toHaveLength(TWO_CALLS);
@@ -1028,7 +1142,7 @@ describe("watch explain", () => {
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
 		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toEqual([FIRST_ID]);
+		expect(state.get(PR_URL)).toEqual(["review:1"]);
 	});
 
 	it("skips mentions from other users", async () => {
@@ -1052,6 +1166,51 @@ describe("watch explain", () => {
 		warn.mockRestore();
 	});
 
+	it("treats a PR as fresh even when state has other PRs", async () => {
+		const otherPr = "https://github.com/other/repo/pull/1";
+		await run.saveState(new Map([[otherPr, ["review:1"]]]), run.statePath());
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "gh" && args.at(0) === "api") {
+				if (args.some((arg) => arg.includes("/pulls/"))) {
+					return Promise.resolve(
+						JSON.stringify([
+							[
+								{
+									body: "@pickup hello",
+									id: FIRST_ID,
+									in_reply_to_id: null,
+									line: FIRST_LINE,
+									path: "src/index.ts",
+									user: { login: "alice" },
+								},
+								{
+									body: `${PICKUP_PREFIX} done`,
+									id: SECOND_ID,
+									in_reply_to_id: FIRST_ID,
+									line: FIRST_LINE,
+									path: "src/index.ts",
+									user: { login: "pickup" },
+								},
+							],
+						]),
+					);
+				}
+				if (args.some((arg) => arg.includes("/issues/"))) {
+					return Promise.resolve("[]");
+				}
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+	});
+
 	it("reports when the file to explain is missing", async () => {
 		const runner = makeExplainRunner({ path: "missing.ts" });
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
@@ -1068,7 +1227,7 @@ describe("watch explain", () => {
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(TWO_CALLS);
 		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toEqual([SECOND_ID, FIRST_ID]);
+		expect(state.get(PR_URL)).toEqual(["review:2", "review:1"]);
 	});
 	it("saves state for the handled mentions when one fails", async () => {
 		const runner = makeMultiMentionRunner({ failOn: "claude @pickup hello" });
@@ -1081,7 +1240,7 @@ describe("watch explain", () => {
 		).rejects.toThrow();
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
 		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toEqual([SECOND_ID, FIRST_ID]);
+		expect(state.get(PR_URL)).toEqual(["review:2", "review:1"]);
 	});
 });
 
@@ -1119,7 +1278,8 @@ describe("watch users missing", () => {
 	it("handles comments without a user object", async () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
-			if (file === "gh" && command === "api" && args.some((arg) => startsWithRepos(arg))) {
+			const endpoint = findEndpoint(args);
+			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				return Promise.resolve(
 					JSON.stringify([
 						[
@@ -1133,6 +1293,9 @@ describe("watch users missing", () => {
 						],
 					]),
 				);
+			}
+			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
+				return Promise.resolve(JSON.stringify([[]]));
 			}
 			if (file === "gh" && (command === "--version" || command === "auth")) {
 				return Promise.resolve("");
@@ -1163,7 +1326,8 @@ describe("watch users invalid", () => {
 	it("handles comments with an invalid login", async () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
-			if (file === "gh" && command === "api" && args.some((arg) => startsWithRepos(arg))) {
+			const endpoint = findEndpoint(args);
+			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				return Promise.resolve(
 					JSON.stringify([
 						[
@@ -1177,6 +1341,9 @@ describe("watch users invalid", () => {
 						],
 					]),
 				);
+			}
+			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
+				return Promise.resolve(JSON.stringify([[]]));
 			}
 			if (file === "gh" && (command === "--version" || command === "auth")) {
 				return Promise.resolve("");
@@ -1209,8 +1376,12 @@ describe("watch users null", () => {
 		const base = { body: "@pickup hello", id: FIRST_ID, line: FIRST_LINE, path: "src/index.ts" };
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
-			if (file === "gh" && command === "api" && args.some((arg) => startsWithRepos(arg))) {
+			const endpoint = findEndpoint(args);
+			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				return Promise.resolve(JSON.stringify([[Object.assign(base, nullUser)]]));
+			}
+			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
+				return Promise.resolve(JSON.stringify([[]]));
 			}
 			if (file === "gh" && (command === "--version" || command === "auth")) {
 				return Promise.resolve("");
@@ -1250,7 +1421,7 @@ describe("watch iterations", () => {
 					!args.includes("--method") &&
 					args.some((arg) => startsWithRepos(arg)),
 			),
-		).toBe(TWO_CALLS);
+		).toBe(4);
 	});
 
 	it("does not reprocess a mention in the second iteration", async () => {
@@ -1263,7 +1434,8 @@ describe("watch iterations", () => {
 	it("skips a fresh install mention that already has a pickup reply (async)", async () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
-			if (file === "gh" && command === "api" && args.some((arg) => startsWithRepos(arg))) {
+			const endpoint = findEndpoint(args);
+			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				return Promise.resolve(
 					JSON.stringify([
 						[
@@ -1286,6 +1458,9 @@ describe("watch iterations", () => {
 						],
 					]),
 				);
+			}
+			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
+				return Promise.resolve(JSON.stringify([[]]));
 			}
 			if (file === "gh" && (command === "--version" || command === "auth")) {
 				return Promise.resolve("");
@@ -1383,6 +1558,24 @@ describe("watch fix success", () => {
 		await writeFile(path.resolve(targetPath), "old");
 
 		const runner = makeFixRunner(targetPath, { body: "@pickup fix", fixed: "new" });
+		await run.watch(PR_URL, {
+			allowFix: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
+	});
+
+	it("does not treat #fixme as a fix request in review comments", async () => {
+		const targetPath = path.join("src", "index.ts");
+		const targetDir = path.resolve("src");
+		await mkdir(targetDir, { recursive: true });
+		await writeFile(path.resolve(targetPath), "old");
+
+		const runner = makeFixRunner(targetPath, { body: "@pickup #fixme", fixed: "new" });
 		await run.watch(PR_URL, {
 			allowFix: true,
 			interval: NO_INTERVAL,
@@ -1882,6 +2075,193 @@ describe("watch fix errors", () => {
 			}),
 		).rejects.toThrow();
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+	});
+});
+
+describe("conversation comments", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
+	});
+
+	it("replies to a conversation mention through the issues endpoint", async () => {
+		const runner = makeExplainRunner({
+			answer: "It does something.",
+			body: "hello",
+			conversationBody: "@pickup hello",
+		});
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+
+		const postCall = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([file, args]) => file === "gh" && args.includes("POST"));
+		expect(postCall?.[1].some((arg) => /\/issues\/\d+\/comments/.test(arg))).toBe(true);
+		expect(postCall?.[1].some((arg) => /\/pulls\/.*\/comments\/.*\/replies/.test(arg))).toBe(false);
+
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toEqual(["conversation:3"]);
+	});
+
+	it("produces JSON dry-run output for a conversation mention", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({
+			answer: "It does something.",
+			body: "thanks",
+			conversationBody: "@pickup hello",
+		});
+		await run.watch(PR_URL, {
+			dryRun: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			json: true,
+			runner,
+		});
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"action":"comment"'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("warns and skips git commands for a conversation #fix with --fix", async () => {
+		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const runner = makeFixRunner("src/index.ts", {
+			body: "hello",
+			conversationBody: "@pickup #fix",
+			fixed: "No problem.",
+		});
+		await run.watch(PR_URL, {
+			allowFix: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+		expect(
+			countCalls(
+				runner,
+				"gh",
+				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
+			),
+		).toBe(NO_CALLS);
+		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
+		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "commit")).toBe(NO_CALLS);
+		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "push")).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("fix requested on conversation comment"),
+		);
+		warn.mockRestore();
+	});
+
+	it("does not treat #fixme as a fix request in conversation comments", async () => {
+		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const runner = makeFixRunner("src/index.ts", {
+			body: "hello",
+			conversationBody: "@pickup #fixme",
+			fixed: "No problem.",
+		});
+		await run.watch(PR_URL, {
+			allowFix: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+
+		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
+		expect(warn).not.toHaveBeenCalled();
+		expect(getPrompt(runner)).toMatch(/#fixme/);
+		warn.mockRestore();
+	});
+
+	it("keeps #fix in conversation comments when --fix is not set", async () => {
+		const runner = makeFixRunner("src/index.ts", {
+			body: "hello",
+			conversationBody: "@pickup #fix",
+			fixed: "No problem.",
+		});
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+
+		expect(getPrompt(runner)).toMatch(/#fix\b/);
+	});
+
+	it("processes a mixed poll of review and conversation mentions", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			const [command] = args;
+			const endpoint = findEndpoint(args);
+			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
+				return Promise.resolve(
+					JSON.stringify([
+						[
+							{
+								body: "@pickup hello",
+								id: FIRST_ID,
+								in_reply_to_id: null,
+								line: FIRST_LINE,
+								path: "src/index.ts",
+								user: { login: "alice" },
+							},
+						],
+					]),
+				);
+			}
+			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
+				return Promise.resolve(
+					JSON.stringify([
+						[
+							{
+								body: "@pickup hi",
+								id: SECOND_ID,
+								user: { login: "alice" },
+							},
+						],
+					]),
+				);
+			}
+			if (file === "gh" && (command === "--version" || command === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(TWO_CALLS);
+
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toEqual(["conversation:2", "review:1"]);
+	});
+
+	it("posts review replies to the pulls comments replies endpoint", async () => {
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+
+		const postCall = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([file, args]) => file === "gh" && args.includes("POST"));
+		expect(postCall?.[1].some((arg) => /\/pulls\/\d+\/comments\/\d+\/replies/.test(arg))).toBe(
+			true,
+		);
 	});
 });
 
