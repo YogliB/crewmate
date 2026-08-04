@@ -115,16 +115,10 @@ const fetchMentions = async (prUrl: string, runner: Runner = exec): Promise<Ment
 	return [...review, ...conversation];
 };
 
-const findNewMentions = (
-	comments: Mention[],
-	seenIds: string[],
-	allowedUser?: string,
-	isFresh = false,
-): Mention[] => {
-	const seen = new Set(seenIds);
-	// ponytail: conversation comments do not expose a parent id, so a fresh state cannot
-	// suppress already-answered conversation mentions. Scope the fallback to review threads only.
-	const pickupRepliedIds = isFresh
+// ponytail: conversation comments do not expose a parent id, so a fresh state cannot
+// suppress already-answered conversation mentions. Scope the fallback to review threads only.
+const findPickupRepliedIds = (comments: Mention[], isFresh: boolean): Set<string> =>
+	isFresh
 		? new Set(
 				comments.flatMap((comment) =>
 					comment.kind === "review" &&
@@ -135,6 +129,15 @@ const findNewMentions = (
 				),
 			)
 		: new Set<string>();
+
+const findNewMentions = (
+	comments: Mention[],
+	seenIds: string[],
+	allowedUser?: string,
+	isFresh = false,
+): Mention[] => {
+	const seen = new Set(seenIds);
+	const pickupRepliedIds = findPickupRepliedIds(comments, isFresh);
 	return (
 		comments
 			.filter(
@@ -217,11 +220,13 @@ const pollIteration = async (
 		iteration.warn("state file is corrupted, resetting", { reason: "state-corrupted" }),
 	);
 	const comments = await fetchMentions(prUrl, runner);
+	const isFresh = (state.get(prUrl)?.length ?? 0) === 0;
+	const pickupRepliedIds = findPickupRepliedIds(comments, isFresh);
 	const mentions = findNewMentions(
 		comments,
 		state.get(prUrl) ?? [],
 		iteration.allowedUser,
-		(state.get(prUrl)?.length ?? 0) === 0,
+		isFresh,
 	);
 	for (const mention of mentions) {
 		await iteration.logger("mention", {
@@ -249,6 +254,14 @@ const pollIteration = async (
 			runner,
 			warn: iteration.warn,
 		});
+	}
+	if (!iteration.dryRun && isFresh) {
+		const existing = new Set(state.get(prUrl) ?? []);
+		for (const id of pickupRepliedIds) {
+			existing.add(id);
+		}
+		state.set(prUrl, [...existing]);
+		await saveState(state);
 	}
 	if (iteration.index < iteration.iterations - 1) {
 		await setTimeout(iteration.interval * MILLISECONDS_PER_SECOND);

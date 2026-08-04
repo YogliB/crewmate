@@ -1211,6 +1211,71 @@ describe("watch explain", () => {
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
 	});
 
+	it("keeps suppressed pickup replies out of the next poll", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "gh" && args.at(0) === "api") {
+				const endpoint = findEndpoint(args);
+				if (endpoint?.includes("/pulls/")) {
+					return Promise.resolve(
+						JSON.stringify([
+							[
+								{
+									body: "@pickup hello",
+									id: FIRST_ID,
+									in_reply_to_id: null,
+									line: FIRST_LINE,
+									path: "src/index.ts",
+									user: { login: "alice" },
+								},
+								{
+									body: `${PICKUP_PREFIX} done`,
+									id: SECOND_ID,
+									in_reply_to_id: FIRST_ID,
+									line: FIRST_LINE,
+									path: "src/index.ts",
+									user: { login: "pickup" },
+								},
+							],
+						]),
+					);
+				}
+				if (endpoint?.includes("/issues/")) {
+					return Promise.resolve(
+						JSON.stringify([
+							[
+								{
+									body: "@pickup hi",
+									id: THIRD_ID,
+									user: { login: "alice" },
+								},
+							],
+						]),
+					);
+				}
+			}
+			if (file === "gh" && (args.at(0) === "--version" || args.at(0) === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: TWO_ITERATIONS,
+			runner,
+		});
+
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toEqual(expect.arrayContaining(["conversation:3", "review:1"]));
+	});
+
 	it("reports when the file to explain is missing", async () => {
 		const runner = makeExplainRunner({ path: "missing.ts" });
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
