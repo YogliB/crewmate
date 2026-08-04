@@ -4,15 +4,16 @@ Agent-facing entry point for this repo. For the open format, see [agents.md](htt
 
 ## Quick links
 
-| Topic                | Where to look                                 |
-| -------------------- | --------------------------------------------- |
-| User-facing CLI docs | [README.md](../README.md)                     |
-| How to contribute    | [docs/CONTRIBUTING.md](CONTRIBUTING.md)       |
-| Common CLI problems  | [docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
-| Security reporting   | [docs/SECURITY.md](SECURITY.md)               |
-| Release notes        | [docs/CHANGELOG.md](CHANGELOG.md)             |
-| Architecture         | [docs/ARCHITECTURE.md](ARCHITECTURE.md)       |
-| License              | [LICENSE.md](../LICENSE.md)                   |
+| Topic                | Where to look                                                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Agent rules          | [@caveman.md](.agents/rules/caveman.md), [@ponytail.md](.agents/rules/ponytail.md), [@rtk.md](.agents/rules/rtk.md) |
+| User-facing CLI docs | [README.md](../README.md)                                                                                           |
+| How to contribute    | [docs/CONTRIBUTING.md](CONTRIBUTING.md)                                                                             |
+| Common CLI problems  | [docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md)                                                                       |
+| Security reporting   | [docs/SECURITY.md](SECURITY.md)                                                                                     |
+| Release notes        | [docs/CHANGELOG.md](CHANGELOG.md)                                                                                   |
+| Architecture         | [docs/ARCHITECTURE.md](ARCHITECTURE.md)                                                                             |
+| License              | [LICENSE.md](../LICENSE.md)                                                                                         |
 
 ## Setup
 
