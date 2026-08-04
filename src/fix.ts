@@ -9,6 +9,20 @@ const PICKUP_PREFIX = "🛻 pickup:";
 const NO_CHANGE_REPLY = "No changes needed.";
 const NO_FIX_REPLY = "Could not generate a fix.";
 
+const NO_FIX_IN_CONVERSATION =
+	"I can't apply fixes to conversation comments; only review comments on diff lines support #fix.";
+
+type MentionBase = {
+	id: number;
+	body: string;
+	user?: unknown;
+	inReplyToId?: number;
+};
+
+export type Mention =
+	| (MentionBase & { kind: "conversation" })
+	| (MentionBase & { kind: "review"; path: string; line: number });
+
 const errorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
 
@@ -51,6 +65,7 @@ type ReplyContext = {
 	commentId: number;
 	dryRun: boolean;
 	json: boolean;
+	kind: Mention["kind"];
 	logger: Logger;
 	model?: string;
 	number: string;
@@ -95,26 +110,30 @@ const postReply = async (
 ): Promise<void> => {
 	const prefixedBody = `${PICKUP_PREFIX} ${body}`;
 	const base = logContext(ctx, { kind });
+	const action = ctx.kind === "conversation" ? "comment" : "reply";
+	const dryRunLabel =
+		ctx.kind === "conversation"
+			? `post a comment on pull request ${ctx.number}`
+			: `reply to comment ${ctx.commentId}`;
 	if (ctx.dryRun) {
 		if (ctx.json) {
-			process.stdout.write(
-				JSON.stringify({ action: "reply", commentId: ctx.commentId, body: prefixedBody }) + "\n",
-			);
+			const json =
+				ctx.kind === "conversation"
+					? { action, number: Number(ctx.number), body: prefixedBody }
+					: { action, commentId: ctx.commentId, body: prefixedBody };
+			process.stdout.write(JSON.stringify(json) + "\n");
 		} else {
-			process.stdout.write(`[dry-run] would reply to comment ${ctx.commentId}:\n${prefixedBody}\n`);
+			process.stdout.write(`[dry-run] would ${dryRunLabel}:\n${prefixedBody}\n`);
 		}
 		await ctx.logger("reply", { ...base, failed: false });
 		return;
 	}
+	const endpoint =
+		ctx.kind === "conversation"
+			? `repos/${ctx.owner}/${ctx.repo}/issues/${ctx.number}/comments`
+			: `repos/${ctx.owner}/${ctx.repo}/pulls/${ctx.number}/comments/${ctx.commentId}/replies`;
 	try {
-		await ctx.runner("gh", [
-			"api",
-			"--method",
-			"POST",
-			`repos/${ctx.owner}/${ctx.repo}/pulls/${ctx.number}/comments/${ctx.commentId}/replies`,
-			"-f",
-			`body=${prefixedBody}`,
-		]);
+		await ctx.runner("gh", ["api", "--method", "POST", endpoint, "-f", `body=${prefixedBody}`]);
 		await ctx.logger("reply", { ...base, failed: false });
 	} catch (error) {
 		await ctx.logger("reply", { ...base, failed: true, error: errorMessage(error) });
@@ -128,18 +147,15 @@ const callProvider = (ctx: ReplyContext, finalPrompt: string): Promise<string> =
 		ctx.model ? ["--model", ctx.model, "-p", finalPrompt] : ["-p", finalPrompt],
 	);
 
-const handleExplain = async (
-	mention: Record<string, unknown>,
-	ctx: ReplyContext,
-): Promise<void> => {
-	const targetPath = mention.path as string;
-	const line = mention.line as number;
-	const { content, found } = await readPrFile(ctx, targetPath);
+type ReviewMention = Extract<Mention, { kind: "review" }>;
+
+const handleExplain = async (mention: ReviewMention, ctx: ReplyContext): Promise<void> => {
+	const { content, found } = await readPrFile(ctx, mention.path);
 	if (!found) {
 		return;
 	}
-	const body = mention.body as string;
-	const prompt = `Review comment: ${JSON.stringify(body)}\nTarget file: ${JSON.stringify(targetPath)}\nLine: ${line}\nFile content: ${JSON.stringify(content)}\n\nExplain what the line does in this PR. Return only the explanation.`;
+	const body = mention.body;
+	const prompt = `Review comment: ${JSON.stringify(body)}\nTarget file: ${JSON.stringify(mention.path)}\nLine: ${mention.line}\nFile content: ${JSON.stringify(content)}\n\nExplain what the line does in this PR. Return only the explanation.`;
 	const finalPrompt = ctx.prompt ? `${ctx.prompt}\n\n${prompt}` : prompt;
 	const answer = await callProvider(ctx, finalPrompt);
 	if (!answer) {
@@ -182,15 +198,10 @@ const readPrFile = async (
 
 const generateFix = async (
 	ctx: ReplyContext,
-	{
-		mention,
-		targetPath,
-		content,
-	}: { content: string; mention: Record<string, unknown>; targetPath: string },
+	{ content, mention }: { content: string; mention: ReviewMention },
 ): Promise<string> => {
-	const line = mention.line as number;
-	const body = mention.body as string;
-	const prompt = `Fix the issue described in this review comment.\nReview comment: ${JSON.stringify(body)}\nTarget file: ${JSON.stringify(targetPath)}\nLine: ${line}\nFile content: ${JSON.stringify(content)}\n\nReturn only the corrected file content. Do not wrap it in markdown.`;
+	const body = mention.body;
+	const prompt = `Fix the issue described in this review comment.\nReview comment: ${JSON.stringify(body)}\nTarget file: ${JSON.stringify(mention.path)}\nLine: ${mention.line}\nFile content: ${JSON.stringify(content)}\n\nReturn only the corrected file content. Do not wrap it in markdown.`;
 	const finalPrompt = ctx.prompt ? `${ctx.prompt}\n\n${prompt}` : prompt;
 	const fixed = await callProvider(ctx, finalPrompt);
 	const stripped = stripFences(fixed);
@@ -246,13 +257,12 @@ const applyFix = async (ctx: ReplyContext, targetPath: string, stripped: string)
 	await postReply(ctx, shortHash ? `Fixed in ${shortHash}.` : "Fixed.", "fix");
 };
 
-const handleFix = async (mention: Record<string, unknown>, ctx: ReplyContext): Promise<void> => {
-	const targetPath = mention.path as string;
-	const { content, found } = await readPrFile(ctx, targetPath);
+const handleFix = async (mention: ReviewMention, ctx: ReplyContext): Promise<void> => {
+	const { content, found } = await readPrFile(ctx, mention.path);
 	if (!found) {
 		return;
 	}
-	const fixed = await generateFix(ctx, { content, mention, targetPath });
+	const fixed = await generateFix(ctx, { content, mention });
 	if (!fixed) {
 		return;
 	}
@@ -260,7 +270,7 @@ const handleFix = async (mention: Record<string, unknown>, ctx: ReplyContext): P
 		await postReply(ctx, NO_CHANGE_REPLY, "nochange");
 		return;
 	}
-	await applyFix(ctx, targetPath, fixed);
+	await applyFix(ctx, mention.path, fixed);
 };
 
 const getLogin = (user: unknown): string => {
@@ -274,12 +284,37 @@ const getLogin = (user: unknown): string => {
 	return "";
 };
 
+const handleConversation = async (mention: Mention, ctx: ReplyContext): Promise<void> => {
+	const prompt = `Conversation comment: ${JSON.stringify(mention.body)}\n\nRespond to the comment. Return only the response.`;
+	const finalPrompt = ctx.prompt ? `${ctx.prompt}\n\n${prompt}` : prompt;
+	const answer = await callProvider(ctx, finalPrompt);
+	if (!answer) {
+		const message = `${ctx.provider || "claude"} returned empty conversation response`;
+		await ctx.warn(message, logContext(ctx, { kind: "explain", reason: "empty" }));
+		return;
+	}
+	await postReply(ctx, answer, "explain");
+};
+
 const dispatchMention = async (
-	mention: Record<string, unknown>,
+	mention: Mention,
 	ctx: ReplyContext,
-	{ allowFix, commentBody }: { allowFix: boolean; commentBody: string },
+	{ allowFix }: { allowFix: boolean },
 ): Promise<void> => {
-	if (allowFix && /#fix/i.test(commentBody)) {
+	const wantsFix = allowFix && /#fix\b/i.test(mention.body);
+	if (mention.kind === "conversation") {
+		if (wantsFix) {
+			await ctx.warn(
+				"fix requested on conversation comment; only review comments can be fixed",
+				logContext(ctx),
+			);
+			await postReply(ctx, NO_FIX_IN_CONVERSATION, "error");
+			return;
+		}
+		await handleConversation(mention, ctx);
+		return;
+	}
+	if (wantsFix) {
 		await handleFix(mention, ctx);
 	} else {
 		await handleExplain(mention, ctx);

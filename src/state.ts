@@ -30,7 +30,7 @@ const readRawState = async (filePath: string): Promise<string> => {
 	}
 };
 
-const loadStateEntries = (state: Map<string, number[]>, raw: string): boolean => {
+const loadStateEntries = (state: Map<string, string[]>, raw: string): boolean => {
 	let parsed: Record<string, unknown>;
 	try {
 		parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -41,8 +41,17 @@ const loadStateEntries = (state: Map<string, number[]>, raw: string): boolean =>
 		return true;
 	}
 	for (const [key, value] of Object.entries(parsed)) {
-		if (Array.isArray(value) && value.every((item) => typeof item === "number")) {
-			state.set(key, value as number[]);
+		if (!Array.isArray(value)) {
+			continue;
+		}
+		const keys = value
+			.map((item) => (typeof item === "number" ? `review:${item}` : item))
+			.filter(
+				(item): item is string =>
+					typeof item === "string" && /^(review|conversation):\d+$/.test(item),
+			);
+		if (keys.length) {
+			state.set(key, keys);
 		}
 	}
 	return false;
@@ -53,8 +62,8 @@ const loadState = async (
 	onCorrupt: () => void | Promise<void> = () => {
 		process.stderr.write("Warning: state file is corrupted, resetting.\n");
 	},
-): Promise<Map<string, number[]>> => {
-	const state = new Map<string, number[]>();
+): Promise<Map<string, string[]>> => {
+	const state = new Map<string, string[]>();
 	const raw = await readRawState(filePath);
 	if (raw === "") {
 		return state;
@@ -65,7 +74,7 @@ const loadState = async (
 	return state;
 };
 
-const saveState = async (state: Map<string, number[]>, filePath = statePath()): Promise<void> => {
+const saveState = async (state: Map<string, string[]>, filePath = statePath()): Promise<void> => {
 	const dir = path.dirname(filePath);
 	// oxlint-disable-next-line security/detect-non-literal-fs-filename -- state dir is internal (XDG_CONFIG_HOME/homedir), not user input
 	await mkdir(dir, { recursive: true });

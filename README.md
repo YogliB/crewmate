@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" alt="pickup mascot" width="120" />
 
-Watch GitHub PR review comments for `@pickup` mentions and reply with an explanation or a generated fix.
+Watch GitHub PR comments (review and conversation) for `@pickup` mentions and reply with an explanation or a generated fix.
 
 ## Before you start
 
@@ -107,13 +107,13 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - `--dry-run` still runs `gh pr checkout` and may change the working tree; it only skips posting replies and committing/pushing fixes.
 - If a fix is committed but `git push` fails, the commit stays local. Push it yourself once the problem is fixed.
 - `--provider` expects a `claude`-shaped CLI (`--version`, `--model`, `-p`). Wrap other tools in a shim.
+- General PR conversation comments are handled in addition to diff-level review comments. Conversation replies are not threaded, do not support `#fix`, and cannot be linked to their original mention on a fresh install (missing parent id), so they may be reprocessed if state is lost.
 
 ## TBD
 
 - **Stream mode**: run `pickup` as a long-lived watcher that processes comments as they arrive, not only on a poll interval.
 - **Agent stream skill**: a skill or guide that teaches an agent to run `pickup` in stream mode and handle comments as they come in.
 - **Degit integration**: keep a fast, minimal copy of the target repo in the CLI config folder so agents have code context without a full clone.
-- **General PR comments**: right now only review comments on diff lines are handled; conversation comments should be supported too.
 - **Listen to repo and org changes**: watch for relevant activity across a repository or organization instead of polling a single PR.
 - **Watch multiple PRs**: target a list of PRs, or all open PRs in a repo or org, in one command.
 - **Listen to issues alongside PR mentions**: respond to `@pickup` mentions in issue bodies and comments, not just pull request review threads.
