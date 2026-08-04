@@ -63,9 +63,9 @@ Example `.pickup.json`:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/YogliB/pickup/main/assets/config.schema.json",
-  "provider": "my-llm",
-  "prompt": "Be terse"
+	"$schema": "https://raw.githubusercontent.com/YogliB/pickup/main/assets/config.schema.json",
+	"provider": "my-llm",
+	"prompt": "Be terse"
 }
 ```
 
@@ -73,9 +73,9 @@ Example global `config.json`:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/YogliB/pickup/main/assets/config.schema.json",
-  "defaults": { "interval": 120 },
-  "profiles": { "myorg/myrepo": { "provider": "my-llm" } }
+	"$schema": "https://raw.githubusercontent.com/YogliB/pickup/main/assets/config.schema.json",
+	"defaults": { "interval": 120 },
+	"profiles": { "myorg/myrepo": { "provider": "my-llm" } }
 }
 ```
 
