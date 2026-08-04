@@ -117,7 +117,7 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - **Listen to repo and org changes**: watch for relevant activity across a repository or organization instead of polling a single PR.
 - **Watch multiple PRs**: target a list of PRs, or all open PRs in a repo or org, in one command.
 - **Listen to issues alongside PR mentions**: respond to `@pickup` mentions in issue bodies and comments, not just pull request review threads.
-- **Type model providers in the config schema**: type the `provider` and `model` fields in `assets/config.schema.json` so it is easy to configure which model CLI to use.
+- **Init-time model selection**: when running `pickup init`, query the configured provider for its available models and let the user select one.
 
 ## More docs
 
