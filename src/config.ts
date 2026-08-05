@@ -13,7 +13,6 @@ type Profile = {
 	fix?: boolean;
 	dryRun?: boolean;
 	log?: boolean;
-	json?: boolean;
 };
 
 type GlobalConfig = {
@@ -30,7 +29,6 @@ const PROFILE_KEYS = new Set<keyof Profile>([
 	"fix",
 	"dryRun",
 	"log",
-	"json",
 ]);
 
 const isString = (value: unknown): value is string => typeof value === "string";
@@ -78,7 +76,6 @@ const validateProfile = (raw: unknown): { profile: Partial<Profile>; warnings: s
 			case "fix":
 			case "dryRun":
 			case "log":
-			case "json":
 				valid = isBoolean(value);
 				break;
 		}
@@ -228,10 +225,13 @@ const loadRepoConfig = async (
 const resolveProfile = async (
 	owner: string,
 	repo: string,
-	repoRoot: string,
+	repoRoot: string | undefined,
 	onWarning: WarningFn,
 ): Promise<Partial<Profile>> => {
 	const globalProfile = await loadGlobalConfig(owner, repo, onWarning);
+	if (repoRoot === undefined) {
+		return globalProfile;
+	}
 	const repoProfile = await loadRepoConfig(repoRoot, onWarning);
 	return { ...globalProfile, ...repoProfile };
 };

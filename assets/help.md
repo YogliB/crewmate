@@ -17,8 +17,21 @@ A CLI that watches GitHub PR comments (review and conversation) for `@pickup` me
 - `--prompt <text>` Prepend custom instructions to the LLM prompt.
 - `--log` Also mirror structured log lines to stderr.
 - `--dry-run` Preview the reply or fix on stdout without posting to GitHub or committing/pushing. Defaults to one iteration.
-- `--json` When used with `--dry-run`, output the preview as JSON. Without `--dry-run` it is ignored and a warning is logged.
 - `--user <login>` Only respond to comments from this GitHub login
+
+### `pickup stream <pr-url-or-shorthand> [options]`
+
+Emit new `@pickup` mentions as NDJSON to stdout without invoking the provider or posting replies. Use this to feed an agent or another pipeline.
+
+`<pr-url-or-shorthand>` can be a full URL or a shorthand, the same as for `watch`.
+
+#### Options
+
+- `--interval <seconds>` Seconds between polls (default: 60)
+- `--log` Also mirror structured log lines to stderr.
+- `--user <login>` Only emit mentions from this GitHub login
+
+Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and for review comments `path` and `line`. State is saved after the line is written, so a restart re-fetches but does not re-emit already seen mentions.
 
 ### `pickup init`
 
@@ -32,6 +45,8 @@ Configuration is read from:
 - `.pickup.json` in the repository root for per-repo overrides.
 
 CLI flags win, then per-repo `.pickup.json`, then the global config. In the global file, `profiles["owner/repo"]` takes precedence over `defaults`.
+
+`pickup stream` does not read `.pickup.json` when run outside a git working tree; only the global config is used.
 
 State is persisted in `$XDG_CONFIG_HOME/pickup/state.json`.
 Structured logs are always appended to `$XDG_CONFIG_HOME/pickup/pickup.log`; use `--log` to also mirror them to stderr.

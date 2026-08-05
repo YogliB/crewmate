@@ -6,6 +6,7 @@ import { PICKUP_PREFIX } from "./fix.js";
 import { createLogger, type Logger } from "./log.js";
 import { homedir, tmpdir } from "node:os";
 import type { Mention } from "./index.js";
+import * as config from "./config.js";
 
 type Runner = (file: string, args: string[]) => Promise<string>;
 
@@ -358,6 +359,30 @@ describe("run watch missing", () => {
 		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
 		process.exitCode = previousExitCode;
 	});
+
+	it("exits with an error when watch is not in a git working tree", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+				return Promise.resolve("");
+			}
+			if (
+				file === "git" &&
+				args[0] === "rev-parse" &&
+				args.at(SECOND_INDEX) === "--show-toplevel"
+			) {
+				return Promise.reject(new Error("not a git repo"));
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		await run(["watch", PR_URL], { runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		expect(stderr).toHaveBeenCalledWith("Error: watch requires a git working tree\n");
+		stderr.mockRestore();
+		process.exitCode = previousExitCode;
+	});
 });
 
 describe("run watch flags", () => {
@@ -380,30 +405,6 @@ describe("run watch flags", () => {
 			runner,
 		});
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-	});
-
-	it("produces JSON dry-run output with --json", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL, "--json", "--dry-run"], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"action":"reply"'))).toBe(true);
-		write.mockRestore();
-	});
-
-	it("warns when --json is used without --dry-run", async () => {
-		const runner = makeMultiMentionRunner();
-		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		await run(["watch", PR_URL, "--json"], { iterations: FIRST_ITERATION, logger, runner });
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ message: "json output only applies in dry-run mode" }),
-		);
-		expect(write).toHaveBeenCalledWith(
-			expect.stringContaining("json output only applies in dry-run mode"),
-		);
-		write.mockRestore();
 	});
 
 	it("uses default interval when the flag has no value", async () => {
@@ -615,6 +616,407 @@ describe("run watch flags", () => {
 		});
 		expect(warn).toHaveBeenCalledWith("Warning: my-llm returned empty explanation\n");
 		warn.mockRestore();
+	});
+
+	it("prints help for watch --help", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		await run(["watch", "--help"]);
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("pickup watch"));
+		write.mockRestore();
+	});
+
+	it("prints help for watch PR_URL --help", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		await run(["watch", PR_URL, "--help"]);
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("pickup watch"));
+		write.mockRestore();
+	});
+});
+
+describe("run stream missing", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
+	});
+
+	it("exits with an error when stream is missing a PR URL", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		await run(["stream"]);
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+
+	it("exits with an error when stream has an empty PR URL", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		await run(["stream", ""]);
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+});
+
+describe("run stream flags", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
+	});
+
+	it("emits one NDJSON line per new mention", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		expect(calls.some((line) => line.includes('"commentId":1'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("does not invoke the provider", async () => {
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+	});
+
+	it("does not post replies or run gh pr checkout", async () => {
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
+	});
+
+	it("saves state after emitting", async () => {
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toEqual(["review:1"]);
+	});
+
+	it("saves state for every new mention in a multi-mention poll", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeMultiMentionRunner({ conversationBody: "@pickup hi" });
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		const events = calls
+			.filter((line) => line.includes('"event":"mention"'))
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+		expect(events).toHaveLength(3);
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toEqual(["conversation:3", "review:2", "review:1"]);
+		write.mockRestore();
+	});
+
+	it("does not re-emit mentions that are already in state", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeMultiMentionRunner({ conversationBody: "@pickup hi" });
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		const firstCalls = write.mock.calls.map(([line]) => line as string).length;
+		expect(firstCalls).toBeGreaterThan(0);
+		write.mockClear();
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		const secondCalls = write.mock.calls.map(([line]) => line as string);
+		expect(secondCalls.some((line) => line.includes('"event":"mention"'))).toBe(false);
+		write.mockRestore();
+	});
+
+	it("respects --user", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--user", "bob"], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(false);
+		write.mockRestore();
+	});
+
+	it("warns on unsupported flags", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(
+			[
+				"stream",
+				PR_URL,
+				"--fix",
+				"--model",
+				"best",
+				"--provider",
+				"my-llm",
+				"--prompt",
+				"custom",
+				"--dry-run",
+				"--json",
+			],
+			{
+				iterations: FIRST_ITERATION,
+				logger,
+				runner,
+			},
+		);
+		for (const flag of ["--fix", "--model", "--provider", "--prompt", "--dry-run", "--json"]) {
+			expect(logger).toHaveBeenCalledWith(
+				"warning",
+				expect.objectContaining({ message: "unsupported flag", flag }),
+			);
+		}
+	});
+
+	it("warns on unsupported flags when passed as booleans", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--model", "--provider", "--prompt"], {
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		for (const flag of ["--model", "--provider", "--prompt"]) {
+			expect(logger).toHaveBeenCalledWith(
+				"warning",
+				expect.objectContaining({ message: "unsupported flag", flag }),
+			);
+		}
+	});
+
+	it("passes options.iterations to stream", async () => {
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL], {
+			config: { interval: 0 },
+			iterations: TWO_ITERATIONS,
+			runner,
+		});
+		expect(
+			countCalls(
+				runner,
+				"gh",
+				(args) =>
+					args.at(FIRST_INDEX) === "api" &&
+					!args.includes("--method") &&
+					args.some((arg) => startsWithRepos(arg)),
+			),
+		).toBe(4);
+	});
+
+	it("defaults to Infinity iterations and runs more than one", async () => {
+		let apiCalls = 0;
+		const runner = vi.fn((file: string, args: string[]) => {
+			const [command] = args;
+			const endpoint = findEndpoint(args);
+			if (file === "gh" && (command === "--version" || command === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
+				apiCalls += 1;
+				if (apiCalls > 2) {
+					return Promise.reject(new Error("second iteration"));
+				}
+				return Promise.resolve(
+					JSON.stringify([
+						[
+							{
+								body: "@pickup hello",
+								id: FIRST_ID,
+								in_reply_to_id: null,
+								line: FIRST_LINE,
+								path: "src/index.ts",
+								user: { login: "alice" },
+							},
+						],
+					]),
+				);
+			}
+			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
+				return Promise.resolve(JSON.stringify([[]]));
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await expect(run.stream(PR_URL, { interval: NO_INTERVAL, runner })).rejects.toThrow(
+			"second iteration",
+		);
+		expect(apiCalls).toBeGreaterThan(2);
+	});
+
+	it("can run outside a git working tree", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const resolveProfile = vi.spyOn(config, "resolveProfile").mockResolvedValue({});
+		const runner = vi.fn((file: string, args: string[]) => {
+			const [command] = args;
+			const endpoint = findEndpoint(args);
+			if (file === "gh" && (command === "--version" || command === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
+				return Promise.resolve(
+					JSON.stringify([
+						[
+							{
+								body: "@pickup hello",
+								id: FIRST_ID,
+								in_reply_to_id: null,
+								line: FIRST_LINE,
+								path: "src/index.ts",
+								user: { login: "alice" },
+							},
+						],
+					]),
+				);
+			}
+			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
+				return Promise.resolve(JSON.stringify([[]]));
+			}
+			if (
+				file === "git" &&
+				command === "rev-parse" &&
+				args.at(SECOND_INDEX) === "--show-toplevel"
+			) {
+				return Promise.reject(new Error("not a git repo"));
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "rev-parse")).toBe(
+			FIRST_CALL,
+		);
+		expect(resolveProfile).toHaveBeenCalledWith("owner", "repo", undefined, expect.any(Function));
+		resolveProfile.mockRestore();
+		write.mockRestore();
+	});
+
+	it("prints help for stream --help", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		await run(["stream", "--help"]);
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("pickup stream"));
+		write.mockRestore();
+	});
+
+	it("prints help for stream PR_URL --help", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		await run(["stream", PR_URL, "--help"]);
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("pickup stream"));
+		write.mockRestore();
+	});
+
+	it("uses the default runner when none is provided", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		await expect(run(["stream", PR_URL], { iterations: NO_ITERATIONS })).resolves.toBeUndefined();
+		process.exitCode = previousExitCode;
+	});
+
+	it("treats an empty git root as outside a working tree", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = vi.fn((file: string, args: string[]) => {
+			const [command] = args;
+			const endpoint = findEndpoint(args);
+			if (file === "gh" && (command === "--version" || command === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
+				return Promise.resolve(
+					JSON.stringify([
+						[
+							{
+								body: "@pickup hello",
+								id: FIRST_ID,
+								in_reply_to_id: null,
+								line: FIRST_LINE,
+								path: "src/index.ts",
+								user: { login: "alice" },
+							},
+						],
+					]),
+				);
+			}
+			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
+				return Promise.resolve(JSON.stringify([[]]));
+			}
+			if (
+				file === "git" &&
+				command === "rev-parse" &&
+				args.at(SECOND_INDEX) === "--show-toplevel"
+			) {
+				return Promise.resolve("");
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("emits a conversation mention without path or line", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({
+			answer: "It does something.",
+			body: "thanks",
+			conversationBody: "@pickup hello",
+		});
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		const events = calls
+			.filter((line) => line.includes('"event":"mention"'))
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+		const conversation = events.find((event) => event.kind === "conversation");
+		expect(conversation).toBeDefined();
+		expect(conversation).not.toHaveProperty("path");
+		expect(conversation).not.toHaveProperty("line");
+		write.mockRestore();
+	});
+
+	it("mirrors logs to stderr with --log", async () => {
+		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--log"], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("does not let an extra word after --log disable stderr mirroring", async () => {
+		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--log", "/tmp/x.log"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("throws non-Error failures", async () => {
+		const runner = vi.fn(() => Promise.reject("string error")) as unknown as Runner;
+		const logger = vi.fn((event: string) => {
+			if (event === "error") {
+				return Promise.reject(new Error("logger failed"));
+			}
+			return Promise.resolve();
+		}) as unknown as Logger;
+		await expect(
+			run.stream(PR_URL, {
+				interval: NO_INTERVAL,
+				iterations: FIRST_ITERATION,
+				logger,
+				runner,
+			}),
+		).rejects.toThrow("string error");
 	});
 });
 
@@ -1767,8 +2169,6 @@ describe("watch fix success", () => {
 	});
 });
 
-const dryRunOutput = (write: { mock: { calls: unknown[][] } }): Record<string, unknown> =>
-	JSON.parse((write.mock.calls.at(-1) as [string])[0]);
 const lastDryRunWrite = (write: { mock: { calls: unknown[][] } }): string =>
 	(write.mock.calls.at(-1) as [string])[0];
 
@@ -1839,26 +2239,6 @@ describe("watch dry-run", () => {
 		expect(state.get(PR_URL)).toBeUndefined();
 	});
 
-	it("explain dry-run --json produces JSON preview", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, {
-			dryRun: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			json: true,
-			runner,
-		});
-
-		const output = dryRunOutput(write);
-		expect(output).toMatchObject({
-			action: "reply",
-			body: "🛻 pickup: It does something.",
-			commentId: FIRST_ID,
-		});
-		write.mockRestore();
-	});
-
 	it("fix dry-run produces human-readable preview", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
 		const targetPath = path.join("src", "index.ts");
@@ -1893,32 +2273,6 @@ describe("watch dry-run", () => {
 		expect(output).toContain("would write fix to");
 		expect(output).toContain(targetPath);
 		expect(output).toContain("new");
-		write.mockRestore();
-	});
-
-	it("fix dry-run --json produces JSON preview", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
-		const targetPath = path.join("src", "index.ts");
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath);
-		await run.watch(PR_URL, {
-			allowFix: true,
-			dryRun: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			json: true,
-			runner,
-		});
-
-		const output = dryRunOutput(write);
-		expect(output).toMatchObject({
-			action: "fix",
-			content: "new",
-		});
-		expect(typeof output.path === "string" && (output.path as string).endsWith(targetPath)).toBe(
-			true,
-		);
 		write.mockRestore();
 	});
 });
@@ -2175,25 +2529,6 @@ describe("conversation comments", () => {
 
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toEqual(["conversation:3"]);
-	});
-
-	it("produces JSON dry-run output for a conversation mention", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-		const runner = makeExplainRunner({
-			answer: "It does something.",
-			body: "thanks",
-			conversationBody: "@pickup hello",
-		});
-		await run.watch(PR_URL, {
-			dryRun: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			json: true,
-			runner,
-		});
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"action":"comment"'))).toBe(true);
-		write.mockRestore();
 	});
 
 	it("warns and skips git commands for a conversation #fix with --fix", async () => {
@@ -2796,39 +3131,6 @@ describe("watch config", () => {
 					line.includes('"event":"reply"'),
 			),
 		).toBe(true);
-		write.mockRestore();
-	});
-
-	it("uses a config json flag with dry-run", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-		const runner = makeMultiMentionRunner();
-		await run.watch(PR_URL, {
-			config: { dryRun: true, json: true },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"action":"reply"'))).toBe(true);
-		write.mockRestore();
-	});
-
-	it("warns when config json is set without dry-run", async () => {
-		const runner = makeMultiMentionRunner();
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		await run.watch(PR_URL, {
-			config: { json: true },
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-		});
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ message: "json output only applies in dry-run mode" }),
-		);
-		expect(write).toHaveBeenCalledWith(
-			expect.stringContaining("json output only applies in dry-run mode"),
-		);
 		write.mockRestore();
 	});
 });
