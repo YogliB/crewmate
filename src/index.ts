@@ -164,7 +164,6 @@ const respondToMention = async (
 	options: {
 		allowFix: boolean;
 		dryRun: boolean;
-		json: boolean;
 		logger: Logger;
 		model?: string;
 		prompt?: string;
@@ -180,7 +179,6 @@ const respondToMention = async (
 	const ctx = {
 		commentId,
 		dryRun: options.dryRun,
-		json: options.json,
 		kind: mention.kind,
 		logger: options.logger,
 		model: options.model,
@@ -196,66 +194,60 @@ const respondToMention = async (
 	await dispatchMention(mention, ctx, { allowFix: options.allowFix });
 };
 
-const pollIteration = async (
+const saveMention = async (
+	state: Map<string, string[]>,
 	prUrl: string,
-	runner: Runner,
-	iteration: {
-		allowFix: boolean;
+	mention: Mention,
+): Promise<void> => {
+	const stateKey = `${mention.kind}:${mention.id}`;
+	state.set(prUrl, [...(state.get(prUrl) ?? []), stateKey]);
+	await saveState(state);
+};
+
+const pollMentions = async (
+	prUrl: string,
+	options: {
+		allowFix?: boolean;
 		allowedUser?: string;
 		dryRun: boolean;
 		index: number;
 		interval: number;
 		iterations: number;
-		json: boolean;
 		logger: Logger;
-		model?: string;
-		prompt?: string;
-		provider?: string;
-		repoRoot: string;
+		onMention: (mention: Mention) => Promise<void>;
+		runner: Runner;
+		saveAfterEmit: boolean;
 		warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
 	},
 ): Promise<void> => {
-	await iteration.logger("poll", { url: prUrl });
+	await options.logger("poll", { url: prUrl });
 	const state = await loadState(undefined, async () =>
-		iteration.warn("state file is corrupted, resetting", { reason: "state-corrupted" }),
+		options.warn("state file is corrupted, resetting", { reason: "state-corrupted" }),
 	);
-	const comments = await fetchMentions(prUrl, runner);
+	const comments = await fetchMentions(prUrl, options.runner);
 	const isFresh = (state.get(prUrl)?.length ?? 0) === 0;
 	const pickupRepliedIds = findPickupRepliedIds(comments, isFresh);
-	const mentions = findNewMentions(
-		comments,
-		state.get(prUrl) ?? [],
-		iteration.allowedUser,
-		isFresh,
-	);
+	const mentions = findNewMentions(comments, state.get(prUrl) ?? [], options.allowedUser, isFresh);
+	// Dry-run polls are intentionally stateless so a preview does not advance
+	// the persistent seen-mention cursor.
 	for (const mention of mentions) {
-		await iteration.logger("mention", {
-			allowFix: iteration.allowFix,
+		await options.logger("mention", {
+			allowFix: options.allowFix,
 			commentId: mention.id,
-			dryRun: iteration.dryRun,
+			dryRun: options.dryRun,
 			kind: mention.kind,
 			user: getLogin(mention.user),
 			url: prUrl,
 		});
-		if (!iteration.dryRun) {
-			const stateKey = `${mention.kind}:${mention.id}`;
-			state.set(prUrl, [...(state.get(prUrl) ?? []), stateKey]);
-			await saveState(state);
+		if (!options.dryRun && !options.saveAfterEmit) {
+			await saveMention(state, prUrl, mention);
 		}
-		await respondToMention(mention, prUrl, {
-			allowFix: iteration.allowFix,
-			dryRun: iteration.dryRun,
-			json: iteration.json,
-			logger: iteration.logger,
-			model: iteration.model,
-			prompt: iteration.prompt,
-			provider: iteration.provider,
-			repoRoot: iteration.repoRoot,
-			runner,
-			warn: iteration.warn,
-		});
+		await options.onMention(mention);
+		if (!options.dryRun && options.saveAfterEmit) {
+			await saveMention(state, prUrl, mention);
+		}
 	}
-	if (!iteration.dryRun && isFresh) {
+	if (!options.dryRun && isFresh) {
 		const existing = new Set(state.get(prUrl) ?? []);
 		for (const id of pickupRepliedIds) {
 			existing.add(id);
@@ -263,8 +255,8 @@ const pollIteration = async (
 		state.set(prUrl, [...existing]);
 		await saveState(state);
 	}
-	if (iteration.index < iteration.iterations - 1) {
-		await setTimeout(iteration.interval * MILLISECONDS_PER_SECOND);
+	if (options.index < options.iterations - 1) {
+		await setTimeout(options.interval * MILLISECONDS_PER_SECOND);
 	}
 };
 
@@ -299,7 +291,6 @@ const watch = async (
 		allowedUser?: string;
 		config?: Partial<Profile>;
 		dryRun?: boolean;
-		json?: boolean;
 		logger?: Logger;
 		model?: string;
 		prompt?: string;
@@ -320,7 +311,12 @@ const watch = async (
 		normalizedPrUrl = toPrUrl(parsed);
 		await runner("gh", ["--version"]);
 		await runner("gh", ["auth", "status", "--hostname", host]);
-		const repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim();
+		let repoRoot: string;
+		try {
+			repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim();
+		} catch {
+			throw new Error("watch requires a git working tree");
+		}
 		const profile = options.config ?? (await resolveProfile(owner, repo, repoRoot, configWarn));
 
 		const provider = options.provider ?? profile.provider;
@@ -330,16 +326,11 @@ const watch = async (
 		const prompt = options.prompt ?? profile.prompt;
 		const allowFix = options.allowFix ?? profile.fix ?? false;
 		const dryRun = options.dryRun ?? profile.dryRun ?? false;
-		const json = options.json ?? profile.json ?? false;
 		toStderr = options.toStderr ?? profile.log ?? false;
 		if (!options.logger) {
 			logger = createLogger({ toStderr });
 		}
 		const warn = makeWarn(toStderr, logger);
-
-		if (json && !dryRun) {
-			await warn("json output only applies in dry-run mode", { json });
-		}
 
 		await runner(provider || "claude", ["--version"]);
 
@@ -359,19 +350,116 @@ const watch = async (
 		}
 
 		for (let index = 0; index < iterations; index += 1) {
-			await pollIteration(normalizedPrUrl, runner, {
+			await pollMentions(normalizedPrUrl, {
 				allowFix,
 				allowedUser,
 				dryRun,
 				index,
 				interval,
 				iterations,
-				json,
 				logger,
-				model,
-				prompt,
-				provider,
-				repoRoot,
+				onMention: (mention) =>
+					respondToMention(mention, normalizedPrUrl, {
+						allowFix,
+						dryRun,
+						logger,
+						model,
+						prompt,
+						provider,
+						repoRoot,
+						runner,
+						warn,
+					}),
+				runner,
+				saveAfterEmit: false,
+				warn,
+			});
+		}
+	} catch (error) {
+		await logger("error", {
+			errorType: error instanceof Error ? error.name : "unknown",
+			message: error instanceof Error ? error.message : String(error),
+			stack: error instanceof Error ? error.stack : undefined,
+			url: normalizedPrUrl,
+		}).catch(() => {});
+		throw error;
+	}
+};
+
+const stream = async (
+	prUrl: string,
+	options: {
+		allowedUser?: string;
+		config?: Partial<Profile>;
+		interval?: number;
+		iterations?: number;
+		logger?: Logger;
+		runner?: Runner;
+		toStderr?: boolean;
+	} = {},
+): Promise<void> => {
+	const runner = options.runner ?? exec;
+	let toStderr = options.toStderr ?? false;
+	let logger = options.logger ?? createLogger({ toStderr });
+	const configWarn = makeWarn(toStderr, logger);
+	let normalizedPrUrl = prUrl;
+	try {
+		const parsed = parsePrUrl(prUrl);
+		const { host, owner, repo } = parsed;
+		normalizedPrUrl = toPrUrl(parsed);
+		await runner("gh", ["--version"]);
+		await runner("gh", ["auth", "status", "--hostname", host]);
+		let repoRoot: string | undefined;
+		try {
+			repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim() || undefined;
+		} catch {
+			repoRoot = undefined;
+		}
+		const profile = options.config ?? (await resolveProfile(owner, repo, repoRoot, configWarn));
+
+		const interval = options.interval ?? profile.interval ?? DEFAULT_INTERVAL_SECONDS;
+		const allowedUser = options.allowedUser ?? profile.user;
+		toStderr = options.toStderr ?? profile.log ?? false;
+		if (!options.logger) {
+			logger = createLogger({ toStderr });
+		}
+		const warn = makeWarn(toStderr, logger);
+
+		const iterations = options.iterations ?? Infinity;
+
+		for (let index = 0; index < iterations; index += 1) {
+			// State is saved after stdout is written. If the emit fails, the
+			// mention may appear again on the next poll/run; consumers deduplicate
+			// by `commentId` if at-least-once delivery is a problem.
+			await pollMentions(normalizedPrUrl, {
+				allowFix: false,
+				allowedUser,
+				dryRun: false,
+				index,
+				interval,
+				iterations,
+				logger,
+				onMention: async (mention) => {
+					const event: Record<string, unknown> = {
+						at: new Date().toISOString(),
+						event: "mention",
+						owner,
+						repo,
+						number: Number(parsed.number),
+						commentId: mention.id,
+						kind: mention.kind,
+						user: getLogin(mention.user),
+						body: mention.body,
+						url: normalizedPrUrl,
+					};
+					if (mention.kind === "review") {
+						event.path = mention.path;
+						event.line = mention.line;
+					}
+					process.stdout.write(JSON.stringify(event) + "\n");
+				},
+				runner,
+				saveAfterEmit: true,
 				warn,
 			});
 		}
@@ -438,14 +526,23 @@ const runWatch = async (
 	},
 ): Promise<void> => {
 	const [prUrl, ...flagArgs] = rest;
+	if (prUrl === "--help" || prUrl === "-h") {
+		showHelp();
+		return;
+	}
 	if (!prUrl || typeof prUrl !== "string") {
 		throw new TypeError("PR reference is required");
 	}
 	const { booleans, values } = parseArgs(flagArgs);
+
+	if (booleans.has("--help") || booleans.has("-h")) {
+		showHelp();
+		return;
+	}
+
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
 	const allowFix = booleans.has("--fix") ? true : undefined;
 	const dryRun = booleans.has("--dry-run") ? true : undefined;
-	const json = booleans.has("--json") ? true : undefined;
 	const toStderr = booleans.has("--log") ? true : undefined;
 	const allowedUser = values.get("--user");
 	const prompt = values.get("--prompt");
@@ -458,11 +555,58 @@ const runWatch = async (
 		dryRun,
 		interval,
 		iterations: options.iterations,
-		json,
 		logger: options.logger,
 		model,
 		prompt,
 		provider,
+		runner: options.runner,
+		toStderr,
+	});
+};
+
+const runStream = async (
+	rest: string[],
+	options: {
+		config?: Partial<Profile>;
+		iterations?: number;
+		logger?: Logger;
+		runner?: Runner;
+	},
+): Promise<void> => {
+	const [prUrl, ...flagArgs] = rest;
+	if (prUrl === "--help" || prUrl === "-h") {
+		showHelp();
+		return;
+	}
+	if (!prUrl || typeof prUrl !== "string") {
+		throw new TypeError("PR reference is required");
+	}
+	const { booleans, values } = parseArgs(flagArgs);
+
+	if (booleans.has("--help") || booleans.has("-h")) {
+		showHelp();
+		return;
+	}
+
+	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
+	const toStderr = booleans.has("--log") ? true : undefined;
+	const allowedUser = values.get("--user");
+
+	const logger = options.logger ?? createLogger({ toStderr: toStderr ?? false });
+	const warn = makeWarn(toStderr ?? false, logger);
+
+	for (const flag of ["--fix", "--dry-run", "--json", "--model", "--provider", "--prompt"]) {
+		if (booleans.has(flag) || values.has(flag)) {
+			await warn("unsupported flag", { flag });
+		}
+	}
+
+	await stream(prUrl, {
+		allowedUser,
+		config: options.config,
+		interval,
+		iterations: options.iterations,
+		logger: options.logger,
 		runner: options.runner,
 		toStderr,
 	});
@@ -488,6 +632,10 @@ const run = Object.assign(
 				await runWatch(rest, options);
 				return;
 			}
+			if (subcommand === "stream") {
+				await runStream(rest, options);
+				return;
+			}
 			if (subcommand === "init") {
 				await runInit();
 				return;
@@ -509,6 +657,7 @@ const run = Object.assign(
 		parsePrUrl,
 		saveState,
 		statePath,
+		stream,
 		stripFences,
 		watch,
 	},

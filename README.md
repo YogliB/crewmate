@@ -24,12 +24,15 @@ If you are building from source, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md
 
 ```bash
 pickup watch <pr-url-or-shorthand> [options]
+pickup stream <pr-url-or-shorthand> [options]
 pickup init
 ```
 
 `<pr-url-or-shorthand>` can be a full URL (`https://github.com/owner/repo/pull/4`) or a shorthand (`owner/repo/pull/4`).
 
 `pickup init` is an interactive one-time setup that writes `provider`, `model`, `interval`, `user`, `prompt`, and `fix` defaults to `<config>/pickup/config.json`.
+
+### `pickup watch`
 
 - `--interval <seconds>` — seconds between polls. Default is `60`.
 - `--fix` — try to generate, commit, and push a fix. The review comment must also contain the tag `#fix`.
@@ -38,8 +41,17 @@ pickup init
 - `--prompt <text>` — prepend custom instructions to the LLM prompt.
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
 - `--dry-run` — preview the reply or fix on stdout without posting to GitHub or committing/pushing. Dry-run defaults to one iteration.
-- `--json` — when used with `--dry-run`, output the preview as JSON. Without `--dry-run` it is ignored and a warning is logged.
 - `--user <login>` — only reply to comments from this GitHub user.
+
+### `pickup stream`
+
+Emit new `@pickup` mentions as NDJSON to stdout without invoking a provider or posting replies. Use this to feed an agent or another pipeline.
+
+- `--interval <seconds>` — seconds between polls. Default is `60`.
+- `--log` — mirror structured log lines to stderr as well as writing them to the log file.
+- `--user <login>` — only emit mentions from this GitHub user.
+
+`pickup stream` can run outside a git working tree and uses only the global config. Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and `path`/`line` for review comments.
 
 State (seen comment IDs) is stored in `<config>/pickup/state.json` and logs in `<config>/pickup/pickup.log`, where `<config>` is `$XDG_CONFIG_HOME`, `$HOME/.config` (or `%USERPROFILE%/.config` on Windows), or the current working directory if none of those are set.
 Structured logs are appended on a best-effort basis; the file is not rotated or truncated. Use `--log` to also mirror each log line to stderr.
@@ -57,7 +69,7 @@ Precedence, strongest first:
 2. Per-repo `.pickup.json`.
 3. Global config (defaults are merged first, then the matching `profiles["owner/repo"]` overrides any overlapping fields).
 
-Both files use the same profile keys: `provider`, `model`, `interval`, `user`, `prompt`, `fix`, `dryRun`, `log`, and `json`. Unknown keys are ignored. Invalid types for known keys are warned and ignored. In the global file, the `profiles` map keys (owner/repo) are matched case-insensitively. See `assets/config.schema.json` for the full schema; point your IDE at it for validation and autocomplete.
+Both files use the same profile keys: `provider`, `model`, `interval`, `user`, `prompt`, `fix`, `dryRun`, and `log`. Unknown keys are ignored. Invalid types for known keys are warned and ignored. In the global file, the `profiles` map keys (owner/repo) are matched case-insensitively. See `assets/config.schema.json` for the full schema; point your IDE at it for validation and autocomplete.
 
 Example `.pickup.json`:
 
@@ -111,7 +123,6 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 
 ## TBD
 
-- **Stream mode**: run `pickup` as a long-lived watcher that processes comments as they arrive, not only on a poll interval.
 - **Agent stream skill**: a skill or guide that teaches an agent to run `pickup` in stream mode and handle comments as they come in.
 - **Degit integration**: keep a fast, minimal copy of the target repo in the CLI config folder so agents have code context without a full clone.
 - **Listen to repo and org changes**: watch for relevant activity across a repository or organization instead of polling a single PR.

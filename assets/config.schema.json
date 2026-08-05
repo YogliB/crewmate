@@ -41,9 +41,6 @@
 				},
 				"log": {
 					"type": "boolean"
-				},
-				"json": {
-					"type": "boolean"
 				}
 			},
 			"additionalProperties": true

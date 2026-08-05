@@ -38,7 +38,9 @@
 - calls `src/fix.ts` to explain the line, or
 - calls `src/fix.ts` to generate and apply a fix when the comment contains `#fix` and `--fix` is enabled.
 
-With `--dry-run`, the generated reply or fix is written to stdout as a human-readable preview instead of posting to GitHub or committing/pushing. Use `--json` with `--dry-run` for a machine-readable JSON preview.
+With `--dry-run`, the generated reply or fix is written to stdout as a human-readable preview instead of posting to GitHub or committing/pushing.
+
+`src/index.ts` also implements `pickup stream`, which emits new `@pickup` mentions as NDJSON to stdout without invoking a provider or posting replies. The poll loop is shared between `watch` and `stream`: `watch` saves state before replying to avoid duplicate posts, while `stream` saves state after writing stdout to avoid event loss.
 
 ## State
 

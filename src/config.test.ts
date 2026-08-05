@@ -73,14 +73,12 @@ describe("validateProfile", () => {
 			fix: true,
 			dryRun: false,
 			log: true,
-			json: true,
 		});
 		expect(result.profile).toEqual({
 			interval: 30,
 			fix: true,
 			dryRun: false,
 			log: true,
-			json: true,
 		});
 		expect(result.warnings).toHaveLength(0);
 	});
@@ -396,14 +394,14 @@ describe("resolveProfile", () => {
 		expect(profile).toEqual({ provider: "my-llm", user: "alice", interval: 10 });
 	});
 
-	it("reads boolean log and json fields", async () => {
+	it("reads boolean log and dryRun fields", async () => {
 		await writeFile(
 			path.join(repoDir, ".pickup.json"),
-			JSON.stringify({ log: true, json: true }),
+			JSON.stringify({ log: true, dryRun: false }),
 			"utf8",
 		);
 		const profile = await resolveProfile("owner", "repo", repoDir, warn);
-		expect(profile).toEqual({ log: true, json: true });
+		expect(profile).toEqual({ log: true, dryRun: false });
 	});
 
 	it("merges global defaults with global profile when repo config is missing", async () => {
@@ -461,5 +459,15 @@ describe("resolveProfile", () => {
 		);
 		const profile = await resolveProfile("OWNER", "REPO", repoDir, warn);
 		expect(profile).toEqual({ provider: "my-llm" });
+	});
+
+	it("returns the global profile when repoRoot is undefined", async () => {
+		await writeGlobalConfig(
+			JSON.stringify({
+				defaults: { provider: "claude", interval: 30 },
+			}),
+		);
+		const profile = await resolveProfile("owner", "repo", undefined, warn);
+		expect(profile).toEqual({ provider: "claude", interval: 30 });
 	});
 });

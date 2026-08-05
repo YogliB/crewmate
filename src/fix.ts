@@ -64,7 +64,6 @@ type Runner = (file: string, args: string[]) => Promise<string>;
 type ReplyContext = {
 	commentId: number;
 	dryRun: boolean;
-	json: boolean;
 	kind: Mention["kind"];
 	logger: Logger;
 	model?: string;
@@ -110,21 +109,12 @@ const postReply = async (
 ): Promise<void> => {
 	const prefixedBody = `${PICKUP_PREFIX} ${body}`;
 	const base = logContext(ctx, { kind });
-	const action = ctx.kind === "conversation" ? "comment" : "reply";
 	const dryRunLabel =
 		ctx.kind === "conversation"
 			? `post a comment on pull request ${ctx.number}`
 			: `reply to comment ${ctx.commentId}`;
 	if (ctx.dryRun) {
-		if (ctx.json) {
-			const json =
-				ctx.kind === "conversation"
-					? { action, number: Number(ctx.number), body: prefixedBody }
-					: { action, commentId: ctx.commentId, body: prefixedBody };
-			process.stdout.write(JSON.stringify(json) + "\n");
-		} else {
-			process.stdout.write(`[dry-run] would ${dryRunLabel}:\n${prefixedBody}\n`);
-		}
+		process.stdout.write(`[dry-run] would ${dryRunLabel}:\n${prefixedBody}\n`);
 		await ctx.logger("reply", { ...base, failed: false });
 		return;
 	}
@@ -217,13 +207,7 @@ const applyFix = async (ctx: ReplyContext, targetPath: string, stripped: string)
 	const relativePath = path.relative(ctx.repoRoot, safePath);
 	const base = logContext(ctx, { path: relativePath });
 	if (ctx.dryRun) {
-		if (ctx.json) {
-			process.stdout.write(
-				JSON.stringify({ action: "fix", content: stripped, path: safePath }) + "\n",
-			);
-		} else {
-			process.stdout.write(`[dry-run] would write fix to ${safePath}:\n${stripped}\n`);
-		}
+		process.stdout.write(`[dry-run] would write fix to ${safePath}:\n${stripped}\n`);
 		await ctx.logger("fix", { ...base, sha: null });
 		await ctx.logger("reply", { ...logContext(ctx), kind: "fix", failed: false });
 		return;
