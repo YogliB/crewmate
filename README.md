@@ -123,7 +123,6 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 
 ## TBD
 
-- **Agent stream skill**: a skill or guide that teaches an agent to run `pickup` in stream mode and handle comments as they come in.
 - **Degit integration**: keep a fast, minimal copy of the target repo in the CLI config folder so agents have code context without a full clone.
 - **Listen to repo and org changes**: watch for relevant activity across a repository or organization instead of polling a single PR.
 - **Watch multiple PRs**: target a list of PRs, or all open PRs in a repo or org, in one command.

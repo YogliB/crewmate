@@ -7,6 +7,7 @@ Agent-facing entry point for this repo. For the open format, see [agents.md](htt
 | Topic                | Where to look                                                                                                       |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | Agent rules          | [@caveman.md](.agents/rules/caveman.md), [@ponytail.md](.agents/rules/ponytail.md), [@rtk.md](.agents/rules/rtk.md) |
+| Agent skills         | [@pickup-stream](.agents/skills/pickup-stream/SKILL.md)                                                             |
 | User-facing CLI docs | [README.md](../README.md)                                                                                           |
 | How to contribute    | [docs/CONTRIBUTING.md](CONTRIBUTING.md)                                                                             |
 | Common CLI problems  | [docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md)                                                                       |
