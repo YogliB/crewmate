@@ -4,9 +4,14 @@ A CLI that watches GitHub PR comments (review and conversation) for `@pickup` me
 
 ## Commands
 
-### `pickup watch <pr-url-or-shorthand> [options]`
+### `pickup watch <target> [options]`
 
-`<pr-url-or-shorthand>` can be a full URL (`https://github.com/owner/repo/pull/4`) or a shorthand (`owner/repo/pull/4`).
+`<target>` can be:
+
+- A single PR: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`.
+- A repository: `https://github.com/owner/repo` or `owner/repo`.
+- An organization: `https://github.com/orgs/myorg` or `org:myorg`.
+- A GHES instance: use a full URL for the host (`https://ghe.example.com/owner/repo`).
 
 #### Options
 
@@ -19,11 +24,13 @@ A CLI that watches GitHub PR comments (review and conversation) for `@pickup` me
 - `--dry-run` Preview the reply or fix on stdout without posting to GitHub or committing/pushing. Defaults to one iteration.
 - `--user <login>` Only respond to comments from this GitHub login
 
-### `pickup stream <pr-url-or-shorthand> [options]`
+`--fix` is only supported for single-PR targets. It is disabled for repo or org scope.
+
+### `pickup stream <target> [options]`
 
 Emit new `@pickup` mentions as NDJSON to stdout without invoking the provider or posting replies. Use this to feed an agent or another pipeline.
 
-`<pr-url-or-shorthand>` can be a full URL or a shorthand, the same as for `watch`.
+`<target>` can be a single PR, a repo, an org, or a GHES full URL, the same as for `watch`.
 
 #### Options
 
@@ -54,6 +61,9 @@ Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, and `i
 
 ## Caveats
 
+- Repo and org scope discover open PRs with the GitHub search API; large scopes may hit rate limits. Use a longer `--interval` for big organizations.
+- `--fix` is disabled for repo and org scope; only single-PR mode can generate and push fixes.
+- Scope mode fetches file content from the GitHub API, so it does not need a local clone.
 - Each poll processes every new unseen `@pickup` mention; additional polls handle comments added after the current poll.
 - Run from a clean repository; `gh pr checkout` will fail if the working tree has uncommitted changes.
 - `--dry-run` still runs `gh pr checkout`; it only skips posting replies and committing/pushing fixes.

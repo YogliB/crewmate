@@ -64,6 +64,7 @@ type Runner = (file: string, args: string[]) => Promise<string>;
 type ReplyContext = {
 	commentId: number;
 	dryRun: boolean;
+	host: string;
 	kind: Mention["kind"];
 	logger: Logger;
 	model?: string;
@@ -72,7 +73,7 @@ type ReplyContext = {
 	prompt?: string;
 	provider?: string;
 	repo: string;
-	repoRoot: string;
+	repoRoot?: string;
 	runner: Runner;
 	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
 };
@@ -123,7 +124,16 @@ const postReply = async (
 			? `repos/${ctx.owner}/${ctx.repo}/issues/${ctx.number}/comments`
 			: `repos/${ctx.owner}/${ctx.repo}/pulls/${ctx.number}/comments/${ctx.commentId}/replies`;
 	try {
-		await ctx.runner("gh", ["api", "--method", "POST", endpoint, "-f", `body=${prefixedBody}`]);
+		await ctx.runner("gh", [
+			"api",
+			"--hostname",
+			ctx.host,
+			"--method",
+			"POST",
+			endpoint,
+			"-f",
+			`body=${prefixedBody}`,
+		]);
 		await ctx.logger("reply", { ...base, failed: false });
 	} catch (error) {
 		await ctx.logger("reply", { ...base, failed: true, error: errorMessage(error) });
@@ -156,11 +166,47 @@ const handleExplain = async (mention: ReviewMention, ctx: ReplyContext): Promise
 	await postReply(ctx, answer, "explain");
 };
 
+const encodeContentPath = (targetPath: string): string =>
+	targetPath
+		.split("/")
+		.filter((segment) => segment !== "")
+		.map(encodeURIComponent)
+		.join("/");
+
 const readPrFile = async (
 	ctx: ReplyContext,
 	targetPath: string,
 ): Promise<{ content: string; found: boolean }> => {
-	await ctx.runner("gh", ["pr", "checkout", "-R", `${ctx.owner}/${ctx.repo}`, ctx.number]);
+	if (ctx.repoRoot === undefined) {
+		const encodedPath = encodeContentPath(targetPath);
+		try {
+			const content = await ctx.runner("gh", [
+				"api",
+				"--hostname",
+				ctx.host,
+				"-H",
+				"Accept: application/vnd.github.raw",
+				`repos/${ctx.owner}/${ctx.repo}/contents/${encodedPath}?ref=refs/pull/${ctx.number}/head`,
+			]);
+			return { content, found: true };
+		} catch (error) {
+			await ctx.warn("file content API failed", {
+				error: errorMessage(error),
+				path: targetPath,
+				reason: "file-content-api-failed",
+			});
+			await postReply(ctx, MISSING_FILE_REPLY, "error");
+			return { content: "", found: false };
+		}
+	}
+
+	await ctx.runner("gh", [
+		"pr",
+		"checkout",
+		"-R",
+		`${ctx.host}/${ctx.owner}/${ctx.repo}`,
+		ctx.number,
+	]);
 	let safePath: string;
 	try {
 		safePath = await toSafePath(targetPath, ctx.repoRoot);
@@ -202,7 +248,14 @@ const generateFix = async (
 	return stripped;
 };
 
-const applyFix = async (ctx: ReplyContext, targetPath: string, stripped: string): Promise<void> => {
+export const applyFix = async (
+	ctx: ReplyContext,
+	targetPath: string,
+	stripped: string,
+): Promise<void> => {
+	if (ctx.repoRoot === undefined) {
+		throw new Error("repoRoot is required to apply fixes");
+	}
 	const safePath = await toSafePath(targetPath, ctx.repoRoot);
 	const relativePath = path.relative(ctx.repoRoot, safePath);
 	const base = logContext(ctx, { path: relativePath });

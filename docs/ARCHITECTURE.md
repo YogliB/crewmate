@@ -33,7 +33,7 @@
                                                                            [src/log.ts] --> $XDG_CONFIG_HOME/pickup/pickup.log
 ```
 
-`src/index.ts` fetches comments with `gh api`, finds the newest unseen `@pickup` mention, and either:
+`src/index.ts` fetches comments with `gh api`. For a repo or org scope it first discovers open PRs via the `search/issues` endpoint (with a fallback to `repos/<owner>/<repo>/pulls` on older GHES), then for each PR it finds the newest unseen `@pickup` mention and either:
 
 - calls `src/fix.ts` to explain the line, or
 - calls `src/fix.ts` to generate and apply a fix when the comment contains `#fix` and `--fix` is enabled.
