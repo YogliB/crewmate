@@ -1760,6 +1760,21 @@ describe("watch explain", () => {
 			1,
 		);
 	});
+
+	it("falls back to host without port when gh auth status --hostname with port fails", async () => {
+		const runner = makeMultiMentionRunner({ failOn: "gh ghe.example.com:8443" });
+		const ghesUrl = "https://ghe.example.com:8443/owner/repo/pull/1";
+		await run.watch(ghesUrl, { iterations: 1, runner });
+		expect(
+			countCalls(runner, "gh", (args, options) => options?.env?.GH_HOST === "ghe.example.com:8443"),
+		).toBeGreaterThanOrEqual(1);
+		expect(countCalls(runner, "gh", (args) => args.includes("--hostname"))).toBe(2);
+	});
+
+	it("throws when gh auth status --hostname fails without a port", async () => {
+		const runner = makeMultiMentionRunner({ failOn: "gh --hostname" });
+		await expect(run.watch(PR_URL, { iterations: 1, runner })).rejects.toThrow();
+	});
 });
 
 describe("getLogin", () => {
@@ -3952,6 +3967,68 @@ describe("scope targets", () => {
 			expect.objectContaining({ reason: "file-content-api-failed" }),
 		);
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+	});
+
+	it("re-throws non-404 raw content API failures", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "gh" && args[0] === "api") {
+				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
+					return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
+				}
+				if (args.includes("Accept: application/vnd.github.raw")) {
+					return Promise.reject(new Error("rate limit"));
+				}
+				if (args.includes("POST")) {
+					return Promise.resolve("");
+				}
+				const endpoint = args.find((arg) => arg.startsWith("repos/"));
+				if (endpoint?.includes("/pulls/")) {
+					return Promise.resolve(
+						JSON.stringify([
+							[
+								{
+									body: "@pickup hello",
+									id: FIRST_ID,
+									in_reply_to_id: null,
+									line: FIRST_LINE,
+									path: "missing.ts",
+									user: { login: "alice" },
+								},
+							],
+						]),
+					);
+				}
+				if (endpoint?.includes("/issues/")) {
+					return Promise.resolve("[]");
+				}
+			}
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "file-content-api-failed" }),
+		);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(0);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "pr-poll-failed" }),
+		);
 	});
 });
 
