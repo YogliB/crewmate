@@ -136,6 +136,8 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 - **Listen to issues alongside PR mentions**: respond to `@pickup` mentions in issue bodies and comments, not just pull request review threads.
 - **Allow `#fix` from general PR conversation comments**: support generating and applying fixes from top-level PR comments, not only from diff-level review comments.
 - **Init-time model selection**: when running `pickup init`, query the configured provider for its available models and let the user select one.
+- **Connected user by default**: agents run connected to the user by default; to run in a looser mode, an explicit `unsafe` override flag is required.
+- **Sandboxed agents by default**: agents run in a sandbox by default.
 
 ## More docs
 
