@@ -53,7 +53,7 @@ Configuration is read from:
 
 CLI flags win, then per-repo `.pickup.json`, then the global config. In the global file, `profiles["owner/repo"]` takes precedence over `defaults`.
 
-`.pickup.json` is only consulted when `pickup watch` is run on a single PR inside that repository's working tree. `pickup stream` and `pickup watch` in `repo` or `org` scope run outside the target repository and use only the global config.
+`.pickup.json` is consulted when `pickup watch` or `pickup stream` is run on a single PR inside that repository's working tree. `pickup watch` in `repo` or `org` scope runs outside the target repository and uses only the global config.
 
 State is persisted in `$XDG_CONFIG_HOME/pickup/state.json`.
 Structured logs are always appended to `$XDG_CONFIG_HOME/pickup/pickup.log`; use `--log` to also mirror them to stderr.

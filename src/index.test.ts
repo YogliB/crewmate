@@ -1746,7 +1746,7 @@ describe("watch explain", () => {
 		).rejects.toThrow();
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
 		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toEqual(["review:2"]);
+		expect(state.get(PR_URL)).toEqual(["review:2", "review:1"]);
 	});
 
 	it("preserves a non-default port in a GHES PR URL", async () => {

@@ -233,6 +233,7 @@ const pollMentions = async (
 		logger: Logger;
 		onMention: (mention: Mention, checkedOut: Set<string>) => Promise<void>;
 		runner: Runner;
+		saveAfterEmit: boolean;
 		warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
 	},
 ): Promise<void> => {
@@ -259,8 +260,11 @@ const pollMentions = async (
 			user: getLogin(mention.user),
 			url: prUrl,
 		});
+		if (!options.dryRun && !options.saveAfterEmit) {
+			await saveMention(state, prUrl, mention);
+		}
 		await options.onMention(mention, checkedOut);
-		if (!options.dryRun) {
+		if (!options.dryRun && options.saveAfterEmit) {
 			await saveMention(state, prUrl, mention);
 		}
 	}
@@ -281,7 +285,7 @@ type PollScope = (
 		iterations: number;
 		target: string;
 	},
-	onPr: (prUrl: string) => Promise<void>,
+	onPr: (prUrl: string, scope: Scope) => Promise<void>,
 	runner: Runner,
 	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
 ) => Promise<void>;
@@ -301,7 +305,7 @@ const pollScope: PollScope = async (scope, options, onPr, runner, warn) => {
 		} else {
 			for (const prUrl of prUrls) {
 				try {
-					await onPr(prUrl);
+					await onPr(prUrl, scope);
 				} catch (error) {
 					const message = errorMessage(error);
 					await warn(`poll failed for ${prUrl}`, {
@@ -584,7 +588,7 @@ const runScope = async (
 	target: string,
 	options: ScopeRunOptions,
 	callbacks: {
-		onPr: (ctx: ScopeContext, prUrl: string) => Promise<void>;
+		onPr: (ctx: ScopeContext, prUrl: string, scope: Scope) => Promise<void>;
 		requiresGitForPr: boolean;
 		requiresProvider: boolean;
 	},
@@ -681,8 +685,8 @@ const runScope = async (
 		await pollScope(
 			scope,
 			{ interval, iterations, target },
-			async (prUrl) => {
-				await callbacks.onPr(ctx, prUrl);
+			async (prUrl, pollScopeScope) => {
+				await callbacks.onPr(ctx, prUrl, pollScopeScope);
 			},
 			runner,
 			warn,
@@ -716,7 +720,7 @@ const watch = async (
 	} = {},
 ): Promise<void> => {
 	await runScope(target, options, {
-		onPr: async (ctx, prUrl) => {
+		onPr: async (ctx, prUrl, scope) => {
 			await pollMentions(prUrl, {
 				allowFix: ctx.allowFix,
 				allowedUser: ctx.allowedUser,
@@ -736,6 +740,7 @@ const watch = async (
 						warn: ctx.warn,
 					}),
 				runner: ctx.runner,
+				saveAfterEmit: scope.kind !== "pr",
 				warn: ctx.warn,
 			});
 		},
@@ -790,6 +795,7 @@ const stream = async (
 						process.stdout.write(JSON.stringify(event) + "\n");
 					},
 					runner: ctx.runner,
+					saveAfterEmit: true,
 					warn: ctx.warn,
 				});
 			},
