@@ -1746,7 +1746,7 @@ describe("watch explain", () => {
 		).rejects.toThrow();
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
 		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toEqual(["review:2", "review:1"]);
+		expect(state.get(PR_URL)).toEqual(["review:2"]);
 	});
 
 	it("preserves a non-default port in a GHES PR URL", async () => {
@@ -1756,7 +1756,9 @@ describe("watch explain", () => {
 		expect(
 			countCalls(runner, "gh", (args, options) => options?.env?.GH_HOST === "ghe.example.com:8443"),
 		).toBeGreaterThanOrEqual(1);
-		expect(countCalls(runner, "gh", (args) => args.includes("--hostname"))).toBe(0);
+		expect(countCalls(runner, "gh", (args) => args.includes("--hostname"))).toBeGreaterThanOrEqual(
+			1,
+		);
 	});
 });
 

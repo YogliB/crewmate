@@ -64,6 +64,8 @@ const parsePrUrl = (
 			typeof owner !== "string" ||
 			typeof repo !== "string" ||
 			typeof number !== "string" ||
+			!isValidName(owner) ||
+			!isValidName(repo) ||
 			!/^\d+$/.test(number)
 		) {
 			throw new TypeError(`Invalid PR reference: ${prUrl}`);
@@ -231,7 +233,6 @@ const pollMentions = async (
 		logger: Logger;
 		onMention: (mention: Mention, checkedOut: Set<string>) => Promise<void>;
 		runner: Runner;
-		saveAfterEmit: boolean;
 		warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
 	},
 ): Promise<void> => {
@@ -258,11 +259,8 @@ const pollMentions = async (
 			user: getLogin(mention.user),
 			url: prUrl,
 		});
-		if (!options.dryRun && !options.saveAfterEmit) {
-			await saveMention(state, prUrl, mention);
-		}
 		await options.onMention(mention, checkedOut);
-		if (!options.dryRun && options.saveAfterEmit) {
+		if (!options.dryRun) {
 			await saveMention(state, prUrl, mention);
 		}
 	}
@@ -606,7 +604,7 @@ const runScope = async (
 		const ghHostEnv = { env: { GH_HOST: ghHost } };
 		if (scope.kind === "pr") {
 			await runner("gh", ["--version"], ghHostEnv);
-			await runner("gh", ["auth", "status"], ghHostEnv);
+			await runner("gh", ["auth", "status", "--hostname", ghHost], ghHostEnv);
 			try {
 				repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim() || undefined;
 			} catch {
@@ -646,7 +644,7 @@ const runScope = async (
 
 		if (scope.kind !== "pr") {
 			await runner("gh", ["--version"], ghHostEnv);
-			await runner("gh", ["auth", "status"], ghHostEnv);
+			await runner("gh", ["auth", "status", "--hostname", ghHost], ghHostEnv);
 		}
 		if (callbacks.requiresProvider) {
 			await runner(provider || "claude", ["--version"]);
@@ -738,7 +736,6 @@ const watch = async (
 						warn: ctx.warn,
 					}),
 				runner: ctx.runner,
-				saveAfterEmit: false,
 				warn: ctx.warn,
 			});
 		},
@@ -793,7 +790,6 @@ const stream = async (
 						process.stdout.write(JSON.stringify(event) + "\n");
 					},
 					runner: ctx.runner,
-					saveAfterEmit: true,
 					warn: ctx.warn,
 				});
 			},
