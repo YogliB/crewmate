@@ -703,6 +703,9 @@ describe("run stream flags", () => {
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "--version")).toBe(
+			NO_CALLS,
+		);
 	});
 
 	it("does not post replies or run gh pr checkout", async () => {
@@ -3143,7 +3146,7 @@ describe("watch config", () => {
 					args[0] === "pr" &&
 					args[1] === "checkout" &&
 					args[2] === "-R" &&
-					args[3] === "owner/repo",
+					args[3] === "github.com/owner/repo",
 			),
 		).toBe(true);
 	});
@@ -3827,6 +3830,9 @@ describe("scope targets", () => {
 		const calls = write.mock.calls.map(([line]) => line as string);
 		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "--version")).toBe(
+			NO_CALLS,
+		);
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
 		write.mockRestore();
 	});

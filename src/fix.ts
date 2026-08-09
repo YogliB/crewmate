@@ -71,6 +71,7 @@ export type Runner = (
 ) => Promise<string>;
 
 type ReplyContext = {
+	checkedOut: Set<string>;
 	commentId: number;
 	dryRun: boolean;
 	ghHost: string;
@@ -79,6 +80,7 @@ type ReplyContext = {
 	model?: string;
 	number: string;
 	owner: string;
+	prUrl: string;
 	prompt?: string;
 	provider?: string;
 	repo: string;
@@ -214,9 +216,17 @@ const readPrFile = async (
 		}
 	}
 
-	await ctx.runner("gh", ["pr", "checkout", "-R", `${ctx.owner}/${ctx.repo}`, ctx.number], {
-		env: { GH_HOST: ctx.ghHost },
-	});
+	if (!ctx.checkedOut.has(ctx.prUrl)) {
+		await ctx.runner("gh", [
+			"pr",
+			"checkout",
+			"-R",
+			`${ctx.ghHost}/${ctx.owner}/${ctx.repo}`,
+			ctx.number,
+		]);
+		ctx.checkedOut.add(ctx.prUrl);
+	}
+
 	let safePath: string;
 	try {
 		safePath = await toSafePath(targetPath, ctx.repoRoot);

@@ -49,7 +49,7 @@ const PR_SHORTHAND = new RegExp(
 const parsePrUrl = (
 	prUrl: string,
 ): { host: string; owner: string; port?: string; repo: string; number: string } => {
-	if (/^https?:\/\//i.test(prUrl)) {
+	if (/^https:\/\//i.test(prUrl)) {
 		const url = new URL(prUrl);
 		const parts = url.pathname.split("/").filter(Boolean);
 		const [owner, repo, pull, number] = parts;
@@ -172,6 +172,7 @@ const respondToMention = async (
 	prUrl: string,
 	options: {
 		allowFix: boolean;
+		checkedOut: Set<string>;
 		dryRun: boolean;
 		logger: Logger;
 		model?: string;
@@ -186,6 +187,7 @@ const respondToMention = async (
 	const { host, owner, port, repo, number } = parsePrUrl(prUrl);
 	const commentId = mention.id;
 	const ctx = {
+		checkedOut: options.checkedOut,
 		commentId,
 		dryRun: options.dryRun,
 		ghHost: hostWithPort(host, port),
@@ -194,6 +196,7 @@ const respondToMention = async (
 		model: options.model,
 		number,
 		owner,
+		prUrl,
 		prompt: options.prompt,
 		provider: options.provider,
 		repo,
@@ -254,7 +257,7 @@ const pollMentions = async (
 			await saveMention(state, prUrl, mention);
 		}
 	}
-	if (!options.dryRun && isFresh) {
+	if (!options.dryRun && isFresh && pickupRepliedIds.size > 0) {
 		const existing = new Set(state.get(prUrl) ?? []);
 		for (const id of pickupRepliedIds) {
 			existing.add(id);
@@ -277,13 +280,17 @@ type PollScope = (
 ) => Promise<void>;
 
 const pollScope: PollScope = async (scope, options, onPr, runner, warn) => {
+	let warnedNoOpenPrs = false;
 	for (let index = 0; index < options.iterations; index += 1) {
 		const prUrls = scope.kind === "pr" ? [toPrUrl(scope)] : await fetchOpenPrs(scope, runner, warn);
 		if (prUrls.length === 0) {
-			await warn("No open PRs found for the target", {
-				reason: "no-open-prs",
-				target: options.target,
-			});
+			if (!warnedNoOpenPrs) {
+				warnedNoOpenPrs = true;
+				await warn("No open PRs found for the target", {
+					reason: "no-open-prs",
+					target: options.target,
+				});
+			}
 		} else {
 			for (const prUrl of prUrls) {
 				try {
@@ -349,7 +356,7 @@ const parseTarget = (target: string): Scope => {
 		return { kind: "org", host: "github.com", org };
 	}
 
-	if (/^https?:\/\//i.test(target)) {
+	if (/^https:\/\//i.test(target)) {
 		let url: URL;
 		try {
 			url = new URL(target);
@@ -526,22 +533,42 @@ const makeWarn =
 		await log("warning", { ...fields, message });
 	};
 
-const watch = async (
+type ScopeRunOptions = {
+	allowFix?: boolean;
+	allowedUser?: string;
+	config?: Partial<Profile>;
+	dryRun?: boolean;
+	interval?: number;
+	iterations?: number;
+	logger?: Logger;
+	model?: string;
+	prompt?: string;
+	provider?: string;
+	runner?: Runner;
+	toStderr?: boolean;
+};
+
+type ScopeContext = {
+	allowFix: boolean;
+	allowedUser: string | undefined;
+	dryRun: boolean;
+	logger: Logger;
+	model: string | undefined;
+	prompt: string | undefined;
+	provider: string | undefined;
+	repoRoot: string | undefined;
+	runner: Runner;
+	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
+};
+
+const runScope = async (
 	target: string,
-	options: {
-		interval?: number;
-		allowFix?: boolean;
-		allowedUser?: string;
-		config?: Partial<Profile>;
-		dryRun?: boolean;
-		logger?: Logger;
-		model?: string;
-		prompt?: string;
-		provider?: string;
-		runner?: Runner;
-		iterations?: number;
-		toStderr?: boolean;
-	} = {},
+	options: ScopeRunOptions,
+	callbacks: {
+		onPr: (ctx: ScopeContext, prUrl: string) => Promise<void>;
+		requiresGitForPr: boolean;
+		requiresProvider: boolean;
+	},
 ): Promise<void> => {
 	const runner = options.runner ?? exec;
 	let toStderr = options.toStderr ?? false;
@@ -554,15 +581,19 @@ const watch = async (
 
 		let repoRoot: string | undefined;
 		let profile: Partial<Profile>;
-		const ghHostEnv = { env: { GH_HOST: hostWithPort(scope.host, scope.port) } };
+		const ghHost = hostWithPort(scope.host, scope.port);
+		const ghHostEnv = { env: { GH_HOST: ghHost } };
 		if (scope.kind === "pr") {
 			await runner("gh", ["--version"], ghHostEnv);
 			await runner("gh", ["auth", "status"], ghHostEnv);
 			try {
-				repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim();
+				repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim() || undefined;
 			} catch {
-				throw new Error("watch requires a git working tree");
+				if (callbacks.requiresGitForPr) {
+					throw new Error("watch requires a git working tree");
+				}
 			}
+
 			profile =
 				options.config ?? (await resolveProfile(scope.owner, scope.repo, repoRoot, configWarn));
 		} else {
@@ -596,7 +627,9 @@ const watch = async (
 			await runner("gh", ["--version"], ghHostEnv);
 			await runner("gh", ["auth", "status"], ghHostEnv);
 		}
-		await runner(provider || "claude", ["--version"]);
+		if (callbacks.requiresProvider) {
+			await runner(provider || "claude", ["--version"]);
+		}
 
 		const iterations = options.iterations ?? (dryRun ? 1 : Infinity);
 
@@ -613,31 +646,24 @@ const watch = async (
 			});
 		}
 
+		const ctx: ScopeContext = {
+			allowFix,
+			allowedUser,
+			dryRun,
+			logger,
+			model,
+			prompt,
+			provider,
+			repoRoot,
+			runner,
+			warn,
+		};
+
 		await pollScope(
 			scope,
 			{ interval, iterations, target },
 			async (prUrl) => {
-				await pollMentions(prUrl, {
-					allowFix,
-					allowedUser,
-					dryRun,
-					logger,
-					onMention: (mention) =>
-						respondToMention(mention, prUrl, {
-							allowFix,
-							dryRun,
-							logger,
-							model,
-							prompt,
-							provider,
-							repoRoot,
-							runner,
-							warn,
-						}),
-					runner,
-					saveAfterEmit: false,
-					warn,
-				});
+				await callbacks.onPr(ctx, prUrl);
 			},
 			runner,
 			warn,
@@ -653,6 +679,54 @@ const watch = async (
 	}
 };
 
+const watch = async (
+	target: string,
+	options: {
+		interval?: number;
+		allowFix?: boolean;
+		allowedUser?: string;
+		config?: Partial<Profile>;
+		dryRun?: boolean;
+		logger?: Logger;
+		model?: string;
+		prompt?: string;
+		provider?: string;
+		runner?: Runner;
+		iterations?: number;
+		toStderr?: boolean;
+	} = {},
+): Promise<void> => {
+	const checkedOut = new Set<string>();
+	await runScope(target, options, {
+		onPr: async (ctx, prUrl) => {
+			await pollMentions(prUrl, {
+				allowFix: ctx.allowFix,
+				allowedUser: ctx.allowedUser,
+				dryRun: ctx.dryRun,
+				logger: ctx.logger,
+				onMention: (mention) =>
+					respondToMention(mention, prUrl, {
+						allowFix: ctx.allowFix,
+						checkedOut,
+						dryRun: ctx.dryRun,
+						logger: ctx.logger,
+						model: ctx.model,
+						prompt: ctx.prompt,
+						provider: ctx.provider,
+						repoRoot: ctx.repoRoot,
+						runner: ctx.runner,
+						warn: ctx.warn,
+					}),
+				runner: ctx.runner,
+				saveAfterEmit: false,
+				warn: ctx.warn,
+			});
+		},
+		requiresGitForPr: true,
+		requiresProvider: true,
+	});
+};
+
 const stream = async (
 	target: string,
 	options: {
@@ -665,55 +739,20 @@ const stream = async (
 		toStderr?: boolean;
 	} = {},
 ): Promise<void> => {
-	const runner = options.runner ?? exec;
-	let toStderr = options.toStderr ?? false;
-	let logger = options.logger ?? createLogger({ toStderr });
-	const configWarn = makeWarn(toStderr, logger);
-	let normalizedPrUrl = target;
-	try {
-		const scope = parseTarget(target);
-		normalizedPrUrl = scope.kind === "pr" ? toPrUrl(scope) : target;
-
-		let repoRoot: string | undefined;
-		if (scope.kind === "pr") {
-			try {
-				repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim() || undefined;
-			} catch {
-				repoRoot = undefined;
-			}
-		}
-
-		const owner = scope.kind === "org" ? scope.org : scope.owner;
-		const repo = scope.kind === "org" ? undefined : scope.repo;
-		const profile = options.config ?? (await resolveProfile(owner, repo, repoRoot, configWarn));
-
-		const interval = options.interval ?? profile.interval ?? DEFAULT_INTERVAL_SECONDS;
-		const allowedUser = options.allowedUser ?? profile.user;
-		toStderr = options.toStderr ?? profile.log ?? false;
-		if (!options.logger) {
-			logger = createLogger({ toStderr });
-		}
-		const warn = makeWarn(toStderr, logger);
-		const ghHostEnv = { env: { GH_HOST: hostWithPort(scope.host, scope.port) } };
-
-		await runner("gh", ["--version"], ghHostEnv);
-		await runner("gh", ["auth", "status"], ghHostEnv);
-
-		const iterations = options.iterations ?? Infinity;
-
-		await pollScope(
-			scope,
-			{ interval, iterations, target },
-			async (prUrl) => {
+	await runScope(
+		target,
+		{ ...options, allowFix: false, dryRun: false },
+		{
+			onPr: async (ctx, prUrl) => {
 				const parsed = parsePrUrl(prUrl);
 				// State is saved after stdout is written. If the emit fails, the
 				// mention may appear again on the next poll/run; consumers deduplicate
 				// by `commentId` if at-least-once delivery is a problem.
 				await pollMentions(prUrl, {
 					allowFix: false,
-					allowedUser,
+					allowedUser: ctx.allowedUser,
 					dryRun: false,
-					logger,
+					logger: ctx.logger,
 					onMention: async (mention) => {
 						const event: Record<string, unknown> = {
 							at: new Date().toISOString(),
@@ -733,23 +772,15 @@ const stream = async (
 						}
 						process.stdout.write(JSON.stringify(event) + "\n");
 					},
-					runner,
+					runner: ctx.runner,
 					saveAfterEmit: true,
-					warn,
+					warn: ctx.warn,
 				});
 			},
-			runner,
-			warn,
-		);
-	} catch (error) {
-		await logger("error", {
-			errorType: error instanceof Error ? error.name : "unknown",
-			message: error instanceof Error ? error.message : String(error),
-			stack: error instanceof Error ? error.stack : undefined,
-			url: normalizedPrUrl,
-		}).catch(() => {});
-		throw error;
-	}
+			requiresGitForPr: false,
+			requiresProvider: false,
+		},
+	);
 };
 
 const VALUE_FLAGS = new Set(["--interval", "--user", "--prompt", "--model", "--provider"]);
