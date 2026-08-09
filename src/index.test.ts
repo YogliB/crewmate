@@ -1083,6 +1083,15 @@ describe("parsePrUrl", () => {
 		});
 	});
 
+	it("parses an HTTP URL returned by an API", () => {
+		expect(run.parsePrUrl("http://ghe.example.com/owner/repo/pull/1")).toEqual({
+			host: "ghe.example.com",
+			number: "1",
+			owner: "owner",
+			repo: "repo",
+		});
+	});
+
 	it("throws for a non-pull URL", () => {
 		expect(() => run.parsePrUrl("https://github.com/owner/repo/issues/123")).toThrow(TypeError);
 	});
@@ -3146,7 +3155,7 @@ describe("watch config", () => {
 					args[0] === "pr" &&
 					args[1] === "checkout" &&
 					args[2] === "-R" &&
-					args[3] === "github.com/owner/repo",
+					args[3] === "owner/repo",
 			),
 		).toBe(true);
 	});
@@ -3302,6 +3311,13 @@ describe("scope targets", () => {
 	it("throws for an invalid org shorthand", () => {
 		expect(() => run.parseTarget("org:")).toThrow("Invalid target: org:");
 		expect(() => run.parseTarget("org:my org")).toThrow("Invalid target: org:my org");
+	});
+
+	it("throws for an owner or repo containing path metacharacters in a URL", () => {
+		expect(() => run.parseTarget("https://github.com/%2e%2e/repo")).toThrow(TypeError);
+		expect(() => run.parseTarget("https://github.com/foo%2fbar/pull/1")).toThrow(TypeError);
+		expect(() => run.parseTarget("https://github.com/../repo")).toThrow(TypeError);
+		expect(() => run.parseTarget("https://github.com/orgs/%2e%2e")).toThrow(TypeError);
 	});
 
 	it("fetchOpenPrs searches for open PRs in a repo", async () => {

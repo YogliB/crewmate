@@ -42,6 +42,11 @@ function showHelp(): void {
 }
 
 const NAME = "[A-Za-z0-9_.-]+";
+
+const isValidName = (name: string): boolean =>
+	new RegExp(`^(?!\\.\\.?(?:\\/|$))(${NAME})$`).test(name) &&
+	!new RegExp(`^(?:\\.\\.?)$`).test(name);
+
 const PR_SHORTHAND = new RegExp(
 	`^(?!\\.\\.?(?:\\/|$))(${NAME})\\/(?!\\.\\.?(?:\\/|$))(${NAME})\\/pull\\/(\\d+)\\/?$`,
 );
@@ -49,7 +54,7 @@ const PR_SHORTHAND = new RegExp(
 const parsePrUrl = (
 	prUrl: string,
 ): { host: string; owner: string; port?: string; repo: string; number: string } => {
-	if (/^https:\/\//i.test(prUrl)) {
+	if (/^https?:\/\//i.test(prUrl)) {
 		const url = new URL(prUrl);
 		const parts = url.pathname.split("/").filter(Boolean);
 		const [owner, repo, pull, number] = parts;
@@ -224,7 +229,7 @@ const pollMentions = async (
 		allowedUser?: string;
 		dryRun: boolean;
 		logger: Logger;
-		onMention: (mention: Mention) => Promise<void>;
+		onMention: (mention: Mention, checkedOut: Set<string>) => Promise<void>;
 		runner: Runner;
 		saveAfterEmit: boolean;
 		warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
@@ -238,6 +243,10 @@ const pollMentions = async (
 	const isFresh = (state.get(prUrl)?.length ?? 0) === 0;
 	const pickupRepliedIds = findPickupRepliedIds(comments, isFresh);
 	const mentions = findNewMentions(comments, state.get(prUrl) ?? [], options.allowedUser, isFresh);
+	// Each poll cycle gets a fresh checkout set so a long-running watch re-syncs
+	// the PR branch once per poll while still avoiding repeated checkouts for
+	// multiple mentions handled in the same cycle.
+	const checkedOut = new Set<string>();
 	// Dry-run polls are intentionally stateless so a preview does not advance
 	// the persistent seen-mention cursor.
 	for (const mention of mentions) {
@@ -252,7 +261,7 @@ const pollMentions = async (
 		if (!options.dryRun && !options.saveAfterEmit) {
 			await saveMention(state, prUrl, mention);
 		}
-		await options.onMention(mention);
+		await options.onMention(mention, checkedOut);
 		if (!options.dryRun && options.saveAfterEmit) {
 			await saveMention(state, prUrl, mention);
 		}
@@ -314,8 +323,7 @@ const pollScope: PollScope = async (scope, options, onPr, runner, warn) => {
 	}
 };
 
-const hostWithPort = (host: string, port?: string): string =>
-	port && port !== "443" ? `${host}:${port}` : host;
+const hostWithPort = (host: string, port?: string): string => (port ? `${host}:${port}` : host);
 
 const toPrUrl = ({
 	host,
@@ -350,7 +358,7 @@ const REPO_SHORTHAND = new RegExp(
 const parseTarget = (target: string): Scope => {
 	if (target.startsWith("org:")) {
 		const org = target.slice(4).replace(/\/$/, "");
-		if (!org || !new RegExp(`^(?!\\.\\.?(?:\\/|$))(${NAME})$`).test(org)) {
+		if (!isValidName(org)) {
 			throw new TypeError(`Invalid target: ${target}`);
 		}
 		return { kind: "org", host: "github.com", org };
@@ -366,7 +374,12 @@ const parseTarget = (target: string): Scope => {
 		const parts = url.pathname.split("/").filter(Boolean);
 		const [first, second, third, fourth] = parts;
 
-		if (parts.length === 2 && first === "orgs" && typeof second === "string") {
+		if (
+			parts.length === 2 &&
+			first === "orgs" &&
+			typeof second === "string" &&
+			isValidName(second)
+		) {
 			return {
 				kind: "org",
 				host: url.hostname,
@@ -381,6 +394,8 @@ const parseTarget = (target: string): Scope => {
 			typeof first === "string" &&
 			typeof second === "string" &&
 			typeof fourth === "string" &&
+			isValidName(first) &&
+			isValidName(second) &&
 			/^\d+$/.test(fourth)
 		) {
 			return {
@@ -393,7 +408,13 @@ const parseTarget = (target: string): Scope => {
 			};
 		}
 
-		if (parts.length === 2 && typeof first === "string" && typeof second === "string") {
+		if (
+			parts.length === 2 &&
+			typeof first === "string" &&
+			typeof second === "string" &&
+			isValidName(first) &&
+			isValidName(second)
+		) {
 			return {
 				kind: "repo",
 				host: url.hostname,
@@ -696,7 +717,6 @@ const watch = async (
 		toStderr?: boolean;
 	} = {},
 ): Promise<void> => {
-	const checkedOut = new Set<string>();
 	await runScope(target, options, {
 		onPr: async (ctx, prUrl) => {
 			await pollMentions(prUrl, {
@@ -704,7 +724,7 @@ const watch = async (
 				allowedUser: ctx.allowedUser,
 				dryRun: ctx.dryRun,
 				logger: ctx.logger,
-				onMention: (mention) =>
+				onMention: (mention, checkedOut) =>
 					respondToMention(mention, prUrl, {
 						allowFix: ctx.allowFix,
 						checkedOut,
@@ -753,7 +773,7 @@ const stream = async (
 					allowedUser: ctx.allowedUser,
 					dryRun: false,
 					logger: ctx.logger,
-					onMention: async (mention) => {
+					onMention: async (mention, _checkedOut) => {
 						const event: Record<string, unknown> = {
 							at: new Date().toISOString(),
 							event: "mention",

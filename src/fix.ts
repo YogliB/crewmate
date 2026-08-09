@@ -217,13 +217,9 @@ const readPrFile = async (
 	}
 
 	if (!ctx.checkedOut.has(ctx.prUrl)) {
-		await ctx.runner("gh", [
-			"pr",
-			"checkout",
-			"-R",
-			`${ctx.ghHost}/${ctx.owner}/${ctx.repo}`,
-			ctx.number,
-		]);
+		await ctx.runner("gh", ["pr", "checkout", "-R", `${ctx.owner}/${ctx.repo}`, ctx.number], {
+			env: { GH_HOST: ctx.ghHost },
+		});
 		ctx.checkedOut.add(ctx.prUrl);
 	}
 

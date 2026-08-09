@@ -73,8 +73,10 @@ Set defaults and per-repo overrides in two JSON files.
 Precedence, strongest first:
 
 1. CLI flags.
-2. Per-repo `.pickup.json`.
+2. Per-repo `.pickup.json` (only when `pickup watch` is run on a single PR inside that repository's working tree).
 3. Global config (defaults are merged first, then the matching `profiles["owner/repo"]` overrides any overlapping fields).
+
+`repo` and `org` scope watches, as well as `pickup stream`, run outside the target repository and therefore use only the global config.
 
 Both files use the same profile keys: `provider`, `model`, `interval`, `user`, `prompt`, `fix`, `dryRun`, and `log`. Unknown keys are ignored. Invalid types for known keys are warned and ignored. In the global file, the `profiles` map keys (owner/repo) are matched case-insensitively. See `assets/config.schema.json` for the full schema; point your IDE at it for validation and autocomplete.
 
