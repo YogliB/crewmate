@@ -303,6 +303,7 @@ const pollScope: PollScope = async (scope, options, onPr, runner, warn) => {
 				});
 			}
 		} else {
+			warnedNoOpenPrs = false;
 			for (const prUrl of prUrls) {
 				try {
 					await onPr(prUrl, scope);
@@ -720,7 +721,7 @@ const watch = async (
 	} = {},
 ): Promise<void> => {
 	await runScope(target, options, {
-		onPr: async (ctx, prUrl, scope) => {
+		onPr: async (ctx, prUrl, _scope) => {
 			await pollMentions(prUrl, {
 				allowFix: ctx.allowFix,
 				allowedUser: ctx.allowedUser,
@@ -740,7 +741,7 @@ const watch = async (
 						warn: ctx.warn,
 					}),
 				runner: ctx.runner,
-				saveAfterEmit: scope.kind !== "pr",
+				saveAfterEmit: false,
 				warn: ctx.warn,
 			});
 		},
