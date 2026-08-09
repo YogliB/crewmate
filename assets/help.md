@@ -4,9 +4,14 @@ A CLI that watches GitHub PR comments (review and conversation) for `@pickup` me
 
 ## Commands
 
-### `pickup watch <pr-url-or-shorthand> [options]`
+### `pickup watch <target> [options]`
 
-`<pr-url-or-shorthand>` can be a full URL (`https://github.com/owner/repo/pull/4`) or a shorthand (`owner/repo/pull/4`).
+`<target>` can be:
+
+- A single PR: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`.
+- A repository: `https://github.com/owner/repo` or `owner/repo`.
+- An organization: `https://github.com/orgs/myorg` or `org:myorg`.
+- For GHES, use a full URL for the host (`https://ghe.example.com/owner/repo`).
 
 #### Options
 
@@ -19,11 +24,13 @@ A CLI that watches GitHub PR comments (review and conversation) for `@pickup` me
 - `--dry-run` Preview the reply or fix on stdout without posting to GitHub or committing/pushing. Defaults to one iteration.
 - `--user <login>` Only respond to comments from this GitHub login
 
-### `pickup stream <pr-url-or-shorthand> [options]`
+`--fix` is only supported for single-PR targets. It is disabled for repo or org scope.
+
+### `pickup stream <target> [options]`
 
 Emit new `@pickup` mentions as NDJSON to stdout without invoking the provider or posting replies. Use this to feed an agent or another pipeline.
 
-`<pr-url-or-shorthand>` can be a full URL or a shorthand, the same as for `watch`.
+`<target>` can be a single PR, a repo, an org, or a GHES full URL, the same as for `watch`.
 
 #### Options
 
@@ -46,7 +53,7 @@ Configuration is read from:
 
 CLI flags win, then per-repo `.pickup.json`, then the global config. In the global file, `profiles["owner/repo"]` takes precedence over `defaults`.
 
-`pickup stream` does not read `.pickup.json` when run outside a git working tree; only the global config is used.
+`.pickup.json` is consulted when `pickup watch` or `pickup stream` is run on a single PR inside that repository's working tree. `pickup watch` in `repo` or `org` scope runs outside the target repository and uses only the global config.
 
 State is persisted in `$XDG_CONFIG_HOME/pickup/state.json`.
 Structured logs are always appended to `$XDG_CONFIG_HOME/pickup/pickup.log`; use `--log` to also mirror them to stderr.
@@ -54,9 +61,12 @@ Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, and `i
 
 ## Caveats
 
+- Repo and org scope discover open PRs with the GitHub search API; large scopes may hit rate limits. Use a longer `--interval` for big organizations.
+- `--fix` is disabled for repo and org scope; only single-PR mode can generate and push fixes.
+- Scope mode fetches file content from the GitHub API, so it does not need a local clone.
 - Each poll processes every new unseen `@pickup` mention; additional polls handle comments added after the current poll.
-- Run from a clean repository; `gh pr checkout` will fail if the working tree has uncommitted changes.
-- `--dry-run` still runs `gh pr checkout`; it only skips posting replies and committing/pushing fixes.
+- For single-PR targets, run from a clean repository; `gh pr checkout` will fail if the working tree has uncommitted changes.
+- For single-PR targets, `--dry-run` still runs `gh pr checkout`; it only skips posting replies and committing/pushing fixes.
 - If `git push` fails after a fix is committed, the commit remains local and must be pushed manually.
 - `--provider` expects a CLI with the same flags as `claude` (`--version`, `--model`, `-p`).
 - General PR conversation comments are handled too. Conversation replies are not threaded, do not support `#fix`, and cannot be matched to their original mention on a fresh install, so they may be reprocessed if state is lost.

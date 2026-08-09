@@ -451,6 +451,16 @@ describe("resolveProfile", () => {
 		expect(profile).toEqual({ provider: "my-llm" });
 	});
 
+	it("matches an org profile by owner only", async () => {
+		await writeGlobalConfig(
+			JSON.stringify({
+				profiles: { myorg: { provider: "my-llm" } },
+			}),
+		);
+		const profile = await resolveProfile("MyOrg", undefined, repoDir, warn);
+		expect(profile).toEqual({ provider: "my-llm" });
+	});
+
 	it("matches a lowercase config key against uppercase PR identifiers", async () => {
 		await writeGlobalConfig(
 			JSON.stringify({

@@ -2,13 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import run from "./index.js";
-import { PICKUP_PREFIX } from "./fix.js";
+import { PICKUP_PREFIX, applyFix } from "./fix.js";
 import { createLogger, type Logger } from "./log.js";
 import { homedir, tmpdir } from "node:os";
 import type { Mention } from "./index.js";
 import * as config from "./config.js";
 
-type Runner = (file: string, args: string[]) => Promise<string>;
+type Runner = (
+	file: string,
+	args: string[],
+	options?: { env?: Record<string, string | undefined> },
+) => Promise<string>;
 
 const startsWithRepos = (value: string | undefined): boolean =>
 	typeof value === "string" && value.startsWith("repos/");
@@ -36,11 +40,20 @@ const ORIGINAL_CWD = process.cwd();
 const countCalls = (
 	runner: Runner,
 	file: string,
-	argMatcher: (args: string[]) => boolean,
+	argMatcher?: (args: string[], options?: { env?: Record<string, string | undefined> }) => boolean,
 ): number =>
-	(runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.filter(
-		([calledFile, args]) => calledFile === file && argMatcher(args),
+	(
+		runner as unknown as {
+			mock: { calls: [string, string[], { env?: Record<string, string | undefined> }?][] };
+		}
+	).mock.calls.filter(
+		([calledFile, args, options]) =>
+			calledFile === file && (argMatcher === undefined || argMatcher(args, options)),
 	).length;
+
+const warnFn = (logger: Logger) => async (message: string, fields?: Record<string, unknown>) => {
+	await logger("warning", { ...fields, message });
+};
 
 const getPrompt = (runner: Runner, provider = "claude"): string | undefined => {
 	const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
@@ -690,6 +703,9 @@ describe("run stream flags", () => {
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "--version")).toBe(
+			NO_CALLS,
+		);
 	});
 
 	it("does not post replies or run gh pr checkout", async () => {
@@ -1048,12 +1064,31 @@ describe("parsePrUrl", () => {
 		});
 	});
 
+	it("preserves a non-default port in a GHES PR URL", () => {
+		expect(run.parsePrUrl("https://ghe.example.com:8443/owner/repo/pull/1")).toEqual({
+			host: "ghe.example.com",
+			number: "1",
+			owner: "owner",
+			port: "8443",
+			repo: "repo",
+		});
+	});
+
 	it("parses a shorthand whose owner starts with 'http'", () => {
 		expect(run.parsePrUrl("httpie/cli/pull/123")).toEqual({
 			host: "github.com",
 			number: "123",
 			owner: "httpie",
 			repo: "cli",
+		});
+	});
+
+	it("parses an HTTP URL returned by an API", () => {
+		expect(run.parsePrUrl("http://ghe.example.com/owner/repo/pull/1")).toEqual({
+			host: "ghe.example.com",
+			number: "1",
+			owner: "owner",
+			repo: "repo",
 		});
 	});
 
@@ -1076,12 +1111,16 @@ describe("parsePrUrl", () => {
 	it("throws for a shorthand with unsafe owner characters", () => {
 		expect(() => run.parsePrUrl("../repo/pull/123")).toThrow(TypeError);
 	});
+
+	it("throws when the PR number is not numeric", () => {
+		expect(() => run.parsePrUrl("https://github.com/owner/repo/pull/abc")).toThrow(TypeError);
+	});
 });
 
 describe("exec", () => {
-	it("runs a command and returns trimmed stdout", async () => {
+	it("runs a command and returns untrimmed stdout", async () => {
 		const out = await run.exec("node", ["-e", "console.log('hi')"]);
-		expect(out).toBe("hi");
+		expect(out).toBe("hi\n");
 	});
 
 	it("throws when a command fails", async () => {
@@ -1708,6 +1747,33 @@ describe("watch explain", () => {
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toEqual(["review:2", "review:1"]);
+	});
+
+	it("preserves a non-default port in a GHES PR URL", async () => {
+		const runner = makeMultiMentionRunner();
+		const ghesUrl = "https://ghe.example.com:8443/owner/repo/pull/1";
+		await run.watch(ghesUrl, { iterations: 1, runner });
+		expect(
+			countCalls(runner, "gh", (args, options) => options?.env?.GH_HOST === "ghe.example.com:8443"),
+		).toBeGreaterThanOrEqual(1);
+		expect(countCalls(runner, "gh", (args) => args.includes("--hostname"))).toBeGreaterThanOrEqual(
+			1,
+		);
+	});
+
+	it("falls back to host without port when gh auth status --hostname with port fails", async () => {
+		const runner = makeMultiMentionRunner({ failOn: "gh ghe.example.com:8443" });
+		const ghesUrl = "https://ghe.example.com:8443/owner/repo/pull/1";
+		await run.watch(ghesUrl, { iterations: 1, runner });
+		expect(
+			countCalls(runner, "gh", (args, options) => options?.env?.GH_HOST === "ghe.example.com:8443"),
+		).toBeGreaterThanOrEqual(1);
+		expect(countCalls(runner, "gh", (args) => args.includes("--hostname"))).toBe(2);
+	});
+
+	it("throws when gh auth status --hostname fails without a port", async () => {
+		const runner = makeMultiMentionRunner({ failOn: "gh --hostname" });
+		await expect(run.watch(PR_URL, { iterations: 1, runner })).rejects.toThrow();
 	});
 });
 
@@ -2802,6 +2868,15 @@ describe("run help", () => {
 		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
 		write.mockRestore();
 	});
+
+	it("prints help when -h is passed after a target", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = vi.fn(() => Promise.resolve("")) as unknown as Runner;
+		await run(["watch", PR_URL, "-h"], { runner });
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
+		expect(countCalls(runner, "gh")).toBe(0);
+		write.mockRestore();
+	});
 });
 
 const logFilePath = (tempDir: string): string => path.join(tempDir, "pickup", "pickup.log");
@@ -3091,6 +3166,15 @@ describe("watch config", () => {
 		expect(countCalls(runner, "gh", (args) => args[0] === "pr" && args[1] === "checkout")).toBe(
 			FIRST_CALL,
 		);
+		expect(
+			(runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.some(
+				([, args]) =>
+					args[0] === "pr" &&
+					args[1] === "checkout" &&
+					args[2] === "-R" &&
+					args[3] === "owner/repo",
+			),
+		).toBe(true);
 	});
 
 	it("lets CLI flags override config", async () => {
@@ -3132,5 +3216,830 @@ describe("watch config", () => {
 			),
 		).toBe(true);
 		write.mockRestore();
+	});
+});
+
+describe("scope targets", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
+	});
+
+	const REPO_TARGET = "owner/repo";
+	const ORG_TARGET = "org:myorg";
+	const GHES_REPO_URL = "https://ghe.example.com/owner/repo";
+	const SCOPE_PR_URL = "https://github.com/owner/repo/pull/1";
+
+	it("parses a full GHES repo URL", () => {
+		expect(run.parseTarget(GHES_REPO_URL)).toEqual({
+			kind: "repo",
+			host: "ghe.example.com",
+			owner: "owner",
+			repo: "repo",
+		});
+	});
+
+	it("preserves a non-default port in a GHES repo URL", () => {
+		expect(run.parseTarget("https://ghe.example.com:8443/owner/repo")).toEqual({
+			kind: "repo",
+			host: "ghe.example.com",
+			owner: "owner",
+			port: "8443",
+			repo: "repo",
+		});
+	});
+
+	it("parses an org full URL", () => {
+		expect(run.parseTarget("https://ghe.example.com/orgs/myorg")).toEqual({
+			kind: "org",
+			host: "ghe.example.com",
+			org: "myorg",
+		});
+	});
+
+	it("preserves a non-default port in a GHES org URL", () => {
+		expect(run.parseTarget("https://ghe.example.com:8443/orgs/myorg")).toEqual({
+			kind: "org",
+			host: "ghe.example.com",
+			org: "myorg",
+			port: "8443",
+		});
+	});
+
+	it("parses a repo shorthand", () => {
+		expect(run.parseTarget(REPO_TARGET)).toEqual({
+			kind: "repo",
+			host: "github.com",
+			owner: "owner",
+			repo: "repo",
+		});
+	});
+
+	it("parses an org shorthand", () => {
+		expect(run.parseTarget(ORG_TARGET)).toEqual({
+			kind: "org",
+			host: "github.com",
+			org: "myorg",
+		});
+	});
+
+	it("parses a PR shorthand", () => {
+		expect(run.parseTarget("owner/repo/pull/123")).toEqual({
+			kind: "pr",
+			host: "github.com",
+			owner: "owner",
+			repo: "repo",
+			number: "123",
+		});
+	});
+
+	it("preserves a non-default port in a GHES PR URL", () => {
+		expect(run.parseTarget("https://ghe.example.com:8443/owner/repo/pull/1")).toEqual({
+			kind: "pr",
+			host: "ghe.example.com",
+			owner: "owner",
+			port: "8443",
+			repo: "repo",
+			number: "1",
+		});
+	});
+
+	it("throws for an invalid bare word", () => {
+		expect(() => run.parseTarget("not-a-pr")).toThrow("Invalid target: not-a-pr");
+	});
+
+	it("throws for an unsupported URL", () => {
+		expect(() => run.parseTarget("https://github.com/orgs/myorg/projects/1")).toThrow(
+			"Invalid target: https://github.com/orgs/myorg/projects/1",
+		);
+	});
+
+	it("throws for a malformed URL", () => {
+		expect(() => run.parseTarget("https://")).toThrow("Invalid target: https://");
+	});
+
+	it("throws for an invalid org shorthand", () => {
+		expect(() => run.parseTarget("org:")).toThrow("Invalid target: org:");
+		expect(() => run.parseTarget("org:my org")).toThrow("Invalid target: org:my org");
+	});
+
+	it("throws for an owner or repo containing path metacharacters in a URL", () => {
+		expect(() => run.parseTarget("https://github.com/%2e%2e/repo")).toThrow(TypeError);
+		expect(() => run.parseTarget("https://github.com/foo%2fbar/pull/1")).toThrow(TypeError);
+		expect(() => run.parseTarget("https://github.com/../repo")).toThrow(TypeError);
+		expect(() => run.parseTarget("https://github.com/orgs/%2e%2e")).toThrow(TypeError);
+	});
+
+	it("fetchOpenPrs searches for open PRs in a repo", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (
+				file === "gh" &&
+				args[0] === "api" &&
+				args.some((arg) => arg.startsWith("search/issues?q="))
+			) {
+				return Promise.resolve(
+					JSON.stringify([
+						{
+							items: [{ html_url: SCOPE_PR_URL }, { html_url: 123 }, { html_url: "not-a-url" }],
+						},
+					]),
+				);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget(REPO_TARGET);
+		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(prUrls).toEqual([SCOPE_PR_URL]);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "search-invalid-url" }),
+		);
+	});
+
+	it("fetchOpenPrs searches for open PRs in an org", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && args.some((arg) => arg.startsWith("search/issues?q="))) {
+				const encoded = encodeURIComponent("org:myorg is:pr is:open");
+				if (args.some((arg) => arg === `search/issues?q=${encoded}`)) {
+					return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
+				}
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget(ORG_TARGET);
+		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(prUrls).toEqual([SCOPE_PR_URL]);
+	});
+
+	it("fetchOpenPrs sets GH_HOST for GHES", async () => {
+		const runner = vi.fn(
+			(file: string, args: string[], options?: { env?: Record<string, string | undefined> }) => {
+				if (file === "gh" && args[0] === "api") {
+					expect(options?.env?.GH_HOST).toBe("ghe.example.com");
+					expect(args).not.toContain("--hostname");
+					return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
+				}
+				return Promise.resolve("");
+			},
+		) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget(GHES_REPO_URL);
+		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(prUrls).toEqual(["https://ghe.example.com/owner/repo/pull/1"]);
+	});
+
+	it("fetchOpenPrs preserves a non-default GHES port", async () => {
+		const runner = vi.fn(
+			(file: string, args: string[], options?: { env?: Record<string, string | undefined> }) => {
+				if (file === "gh" && args[0] === "api") {
+					expect(options?.env?.GH_HOST).toBe("ghe.example.com:8443");
+					expect(args).not.toContain("--hostname");
+					return Promise.resolve(
+						JSON.stringify([
+							{
+								items: [{ html_url: "https://ghe.example.com/owner/repo/pull/1" }],
+							},
+						]),
+					);
+				}
+				return Promise.resolve("");
+			},
+		) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget("https://ghe.example.com:8443/owner/repo");
+		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(prUrls).toEqual(["https://ghe.example.com:8443/owner/repo/pull/1"]);
+	});
+
+	it("fetchOpenPrs warns and returns empty on 403/422", async () => {
+		const runner = vi.fn(() => Promise.reject(new Error("HTTP 403"))) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget(REPO_TARGET);
+		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(prUrls).toEqual([]);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "search-token-scope" }),
+		);
+	});
+
+	it("fetchOpenPrs falls back to pulls endpoint on 404 for repo scope", async () => {
+		let callCount = 0;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file !== "gh" || args[0] !== "api") return Promise.resolve("");
+			callCount += 1;
+			if (callCount === 1) {
+				return Promise.reject(new Error("HTTP 404: Not Found"));
+			}
+			return Promise.resolve(
+				JSON.stringify([
+					[
+						{
+							html_url: SCOPE_PR_URL,
+						},
+					],
+				]),
+			);
+		}) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget(REPO_TARGET);
+		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(prUrls).toEqual([SCOPE_PR_URL]);
+		expect(callCount).toBe(TWO_CALLS);
+	});
+
+	it("fetchOpenPrs throws on 404 for org scope", async () => {
+		const runner = vi.fn(() =>
+			Promise.reject(new Error("HTTP 404: Not Found")),
+		) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget(ORG_TARGET);
+		await expect(run.fetchOpenPrs(scope, runner, warn)).rejects.toThrow(
+			"org scope requires GHES 3.x+ search/issues",
+		);
+	});
+
+	it("fetchOpenPrs throws when called for a single PR", async () => {
+		const runner = vi.fn(() => Promise.resolve("")) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget("owner/repo/pull/1");
+		await expect(run.fetchOpenPrs(scope, runner, warn)).rejects.toThrow(
+			"fetchOpenPrs should not be called for a single PR",
+		);
+	});
+
+	it("fetchOpenPrs warns on a generic search failure", async () => {
+		const runner = vi.fn(() => Promise.reject(new Error("Boom"))) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget(REPO_TARGET);
+		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(prUrls).toEqual([]);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "search-failed" }),
+		);
+	});
+
+	it("fetchOpenPrs repo fallback warns on invalid PR URLs", async () => {
+		let callCount = 0;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file !== "gh" || args[0] !== "api") return Promise.resolve("");
+			callCount += 1;
+			if (callCount === 1) {
+				return Promise.reject(new Error("HTTP 404: Not Found"));
+			}
+			return Promise.resolve(
+				JSON.stringify([
+					[{ html_url: undefined }, { html_url: "not-a-pr-url" }, { html_url: SCOPE_PR_URL }],
+				]),
+			);
+		}) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget(REPO_TARGET);
+		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(prUrls).toEqual([SCOPE_PR_URL]);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "fallback-invalid-url" }),
+		);
+	});
+
+	it("fetchOpenPrs repo fallback returns empty on failure", async () => {
+		const runner = vi.fn(() =>
+			Promise.reject(new Error("HTTP 404: Not Found")),
+		) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget(REPO_TARGET);
+		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(prUrls).toEqual([]);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "repo-fallback-failed" }),
+		);
+	});
+
+	it("fetchOpenPrs repo fallback coerces a non-Error failure", async () => {
+		const runner = vi.fn(() => Promise.reject("HTTP 404: Not Found")) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget(REPO_TARGET);
+		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(prUrls).toEqual([]);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "repo-fallback-failed" }),
+		);
+	});
+
+	it("fetchOpenPrs returns empty when search has no items", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (
+				file === "gh" &&
+				args[0] === "api" &&
+				args.some((arg) => arg.startsWith("search/issues?q="))
+			) {
+				return Promise.resolve(JSON.stringify([{}]));
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget(REPO_TARGET);
+		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(prUrls).toEqual([]);
+	});
+
+	const makeScopeRunner = ({
+		prUrl = SCOPE_PR_URL,
+		rawContent = "example",
+		body = "@pickup hello",
+		filePath = "src/index.ts",
+	}: {
+		prUrl?: string;
+		rawContent?: string;
+		body?: string;
+		filePath?: string;
+	} = {}): Runner =>
+		vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "gh" && args[0] === "api") {
+				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
+					return Promise.resolve(JSON.stringify([{ items: [{ html_url: prUrl }] }]));
+				}
+				if (args.includes("Accept: application/vnd.github.raw")) {
+					return Promise.resolve(rawContent);
+				}
+				if (args.includes("POST")) {
+					return Promise.resolve("");
+				}
+				const endpoint = args.find((arg) => arg.startsWith("repos/"));
+				if (endpoint?.includes("/pulls/")) {
+					return Promise.resolve(
+						JSON.stringify([
+							[
+								{
+									body,
+									id: FIRST_ID,
+									in_reply_to_id: null,
+									line: FIRST_LINE,
+									path: filePath,
+									user: { login: "alice" },
+								},
+							],
+						]),
+					);
+				}
+				if (endpoint?.includes("/issues/")) {
+					return Promise.resolve("[]");
+				}
+			}
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+
+	it("watches a repo scope and replies to mentions", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeScopeRunner();
+		await run.watch(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+	});
+
+	it("rejects an unsafe review file path outside a git tree", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeScopeRunner({ filePath: "../etc/passwd" });
+		await run.watch(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(
+			countCalls(runner, "gh", (args) => args.includes("Accept: application/vnd.github.raw")),
+		).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "invalid-file-path" }),
+		);
+	});
+
+	it("watches an org scope and replies to mentions", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeScopeRunner();
+		await run.watch(ORG_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
+	});
+
+	it("watches a repo scope with multiple open PRs", async () => {
+		const SCOPE_PR_URL_2 = "https://github.com/owner/repo/pull/2";
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "gh" && args[0] === "api") {
+				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
+					return Promise.resolve(
+						JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }, { html_url: SCOPE_PR_URL_2 }] }]),
+					);
+				}
+				if (args.includes("Accept: application/vnd.github.raw")) {
+					return Promise.resolve("example");
+				}
+				if (args.includes("POST")) {
+					return Promise.resolve("");
+				}
+				const endpoint = args.find((arg) => arg.startsWith("repos/"));
+				if (endpoint?.includes("/pulls/")) {
+					return Promise.resolve(
+						JSON.stringify([
+							[
+								{
+									body: "@pickup hello",
+									id: FIRST_ID,
+									in_reply_to_id: null,
+									line: FIRST_LINE,
+									path: "src/index.ts",
+									user: { login: "alice" },
+								},
+							],
+						]),
+					);
+				}
+				if (endpoint?.includes("/issues/")) {
+					return Promise.resolve("[]");
+				}
+			}
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(TWO_CALLS);
+	});
+
+	it("continues polling when one repo scope PR fails", async () => {
+		const SCOPE_PR_URL_2 = "https://github.com/owner/repo/pull/2";
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "gh" && args[0] === "api") {
+				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
+					return Promise.resolve(
+						JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }, { html_url: SCOPE_PR_URL_2 }] }]),
+					);
+				}
+				if (args.includes("Accept: application/vnd.github.raw")) {
+					return Promise.resolve("example");
+				}
+				if (args.includes("POST")) {
+					return Promise.resolve("");
+				}
+				const endpoint = args.find((arg) => arg.startsWith("repos/"));
+				if (endpoint?.includes("/pulls/1/comments")) {
+					return Promise.reject(new Error("HTTP 404: Not Found"));
+				}
+				if (endpoint?.includes("/pulls/")) {
+					return Promise.resolve(
+						JSON.stringify([
+							[
+								{
+									body: "@pickup hello",
+									id: FIRST_ID,
+									in_reply_to_id: null,
+									line: FIRST_LINE,
+									path: "src/index.ts",
+									user: { login: "alice" },
+								},
+							],
+						]),
+					);
+				}
+				if (endpoint?.includes("/issues/")) {
+					return Promise.resolve("[]");
+				}
+			}
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "pr-poll-failed" }),
+		);
+	});
+
+	it("watches a repo scope with no open PRs", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+				return Promise.resolve("");
+			}
+			if (
+				file === "gh" &&
+				args[0] === "api" &&
+				args.some((arg) => arg.startsWith("search/issues?q="))
+			) {
+				return Promise.resolve(JSON.stringify([{ items: [] }]));
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: TWO_CALLS,
+			logger,
+			runner,
+		});
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "no-open-prs" }),
+		);
+	});
+
+	it("sets GH_HOST for GHES repo scope", async () => {
+		const runner = makeScopeRunner({
+			prUrl: "https://ghe.example.com/owner/repo/pull/1",
+		});
+		await run.watch(GHES_REPO_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(
+			countCalls(
+				runner,
+				"gh",
+				(args, options) => args[0] === "auth" && options?.env?.GH_HOST === "ghe.example.com",
+			),
+		).toBeGreaterThanOrEqual(1);
+		expect(
+			countCalls(
+				runner,
+				"gh",
+				(args, options) => args[0] === "api" && options?.env?.GH_HOST === "ghe.example.com",
+			),
+		).toBeGreaterThanOrEqual(1);
+	});
+
+	it("disables --fix for repo scope and logs a warning", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeScopeRunner({ body: "@pickup #fix" });
+		await run.watch(REPO_TARGET, {
+			allowFix: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "scope-fix-disabled" }),
+		);
+		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
+		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
+	});
+
+	it("streams a repo scope and emits one line per discovered PR", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeScopeRunner();
+		await run(["stream", REPO_TARGET], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "--version")).toBe(
+			NO_CALLS,
+		);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		write.mockRestore();
+	});
+
+	it("streams an org scope and sets GH_HOST", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeScopeRunner({ prUrl: "https://ghe.example.com/owner/repo/pull/1" });
+		await run(["stream", "https://ghe.example.com/orgs/myorg"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		expect(
+			countCalls(
+				runner,
+				"gh",
+				(args, options) => args[0] === "api" && options?.env?.GH_HOST === "ghe.example.com",
+			),
+		).toBeGreaterThanOrEqual(1);
+		write.mockRestore();
+	});
+
+	it("streams a repo scope with no open PRs", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+				return Promise.resolve("");
+			}
+			if (
+				file === "gh" &&
+				args[0] === "api" &&
+				args.some((arg) => arg.startsWith("search/issues?q="))
+			) {
+				return Promise.resolve(JSON.stringify([{ items: [] }]));
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.stream(REPO_TARGET, { interval: NO_INTERVAL, iterations: TWO_CALLS, logger, runner });
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "no-open-prs" }),
+		);
+	});
+
+	it("falls back to missing file reply when the raw content API fails", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "gh" && args[0] === "api") {
+				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
+					return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
+				}
+				if (args.includes("Accept: application/vnd.github.raw")) {
+					return Promise.reject(new Error("Not Found"));
+				}
+				if (args.includes("POST")) {
+					return Promise.resolve("");
+				}
+				const endpoint = args.find((arg) => arg.startsWith("repos/"));
+				if (endpoint?.includes("/pulls/")) {
+					return Promise.resolve(
+						JSON.stringify([
+							[
+								{
+									body: "@pickup hello",
+									id: FIRST_ID,
+									in_reply_to_id: null,
+									line: FIRST_LINE,
+									path: "missing.ts",
+									user: { login: "alice" },
+								},
+							],
+						]),
+					);
+				}
+				if (endpoint?.includes("/issues/")) {
+					return Promise.resolve("[]");
+				}
+			}
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "file-content-api-failed" }),
+		);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+	});
+
+	it("re-throws non-404 raw content API failures", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "gh" && args[0] === "api") {
+				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
+					return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
+				}
+				if (args.includes("Accept: application/vnd.github.raw")) {
+					return Promise.reject(new Error("rate limit"));
+				}
+				if (args.includes("POST")) {
+					return Promise.resolve("");
+				}
+				const endpoint = args.find((arg) => arg.startsWith("repos/"));
+				if (endpoint?.includes("/pulls/")) {
+					return Promise.resolve(
+						JSON.stringify([
+							[
+								{
+									body: "@pickup hello",
+									id: FIRST_ID,
+									in_reply_to_id: null,
+									line: FIRST_LINE,
+									path: "missing.ts",
+									user: { login: "alice" },
+								},
+							],
+						]),
+					);
+				}
+				if (endpoint?.includes("/issues/")) {
+					return Promise.resolve("[]");
+				}
+			}
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "file-content-api-failed" }),
+		);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(0);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "pr-poll-failed" }),
+		);
+	});
+});
+
+describe("applyFix", () => {
+	it("throws when repoRoot is missing", async () => {
+		await expect(
+			applyFix(
+				{ repoRoot: undefined } as unknown as Parameters<typeof applyFix>[0],
+				"src/index.ts",
+				"fixed",
+			),
+		).rejects.toThrow("repoRoot is required to apply fixes");
 	});
 });

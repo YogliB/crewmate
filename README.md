@@ -10,7 +10,7 @@ You need:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated.
 - A `claude`-shaped CLI in your PATH (default is `claude`; use `--provider` to swap).
-- A clean git working tree.
+- A clean git working tree if you are watching a single PR.
 
 ## Install
 
@@ -23,12 +23,17 @@ If you are building from source, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md
 ## Usage
 
 ```bash
-pickup watch <pr-url-or-shorthand> [options]
-pickup stream <pr-url-or-shorthand> [options]
+pickup watch <target> [options]
+pickup stream <target> [options]
 pickup init
 ```
 
-`<pr-url-or-shorthand>` can be a full URL (`https://github.com/owner/repo/pull/4`) or a shorthand (`owner/repo/pull/4`).
+`<target>` can be:
+
+- A single PR: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`.
+- A repository: `https://github.com/owner/repo` or `owner/repo`.
+- An organization: `https://github.com/orgs/myorg` or `org:myorg`.
+- For GHES, use a full URL (`https://ghe.example.com/owner/repo`).
 
 `pickup init` is an interactive one-time setup that writes `provider`, `model`, `interval`, `user`, `prompt`, and `fix` defaults to `<config>/pickup/config.json`.
 
@@ -43,6 +48,8 @@ pickup init
 - `--dry-run` — preview the reply or fix on stdout without posting to GitHub or committing/pushing. Dry-run defaults to one iteration.
 - `--user <login>` — only reply to comments from this GitHub user.
 
+`--fix` only works for single-PR targets. It is disabled for repo or org scope.
+
 ### `pickup stream`
 
 Emit new `@pickup` mentions as NDJSON to stdout without invoking a provider or posting replies. Use this to feed an agent or another pipeline.
@@ -51,7 +58,7 @@ Emit new `@pickup` mentions as NDJSON to stdout without invoking a provider or p
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
 - `--user <login>` — only emit mentions from this GitHub user.
 
-`pickup stream` can run outside a git working tree and uses only the global config. Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and `path`/`line` for review comments.
+`pickup stream` can run outside a git working tree and uses only the global config. The `<target>` can be a single PR, a repo, an org, or a GHES full URL. Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and `path`/`line` for review comments.
 
 State (seen comment IDs) is stored in `<config>/pickup/state.json` and logs in `<config>/pickup/pickup.log`, where `<config>` is `$XDG_CONFIG_HOME`, `$HOME/.config` (or `%USERPROFILE%/.config` on Windows), or the current working directory if none of those are set.
 Structured logs are appended on a best-effort basis; the file is not rotated or truncated. Use `--log` to also mirror each log line to stderr.
@@ -66,8 +73,10 @@ Set defaults and per-repo overrides in two JSON files.
 Precedence, strongest first:
 
 1. CLI flags.
-2. Per-repo `.pickup.json`.
+2. Per-repo `.pickup.json` (when `pickup watch` or `pickup stream` is run on a single PR inside that repository's working tree).
 3. Global config (defaults are merged first, then the matching `profiles["owner/repo"]` overrides any overlapping fields).
+
+`repo` and `org` scope watches run outside the target repository and therefore use only the global config.
 
 Both files use the same profile keys: `provider`, `model`, `interval`, `user`, `prompt`, `fix`, `dryRun`, and `log`. Unknown keys are ignored. Invalid types for known keys are warned and ignored. In the global file, the `profiles` map keys (owner/repo) are matched case-insensitively. See `assets/config.schema.json` for the full schema; point your IDE at it for validation and autocomplete.
 
@@ -115,8 +124,8 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 ## Notes
 
 - Each poll processes every new unseen `@pickup` mention; additional polls handle comments added after the current poll.
-- `gh pr checkout` needs a clean working tree, so commit or stash your own changes first.
-- `--dry-run` still runs `gh pr checkout` and may change the working tree; it only skips posting replies and committing/pushing fixes.
+- For single-PR targets, `gh pr checkout` needs a clean working tree, so commit or stash your own changes first.
+- For single-PR targets, `--dry-run` still runs `gh pr checkout` and may change the working tree; it only skips posting replies and committing/pushing fixes.
 - If a fix is committed but `git push` fails, the commit stays local. Push it yourself once the problem is fixed.
 - `--provider` expects a `claude`-shaped CLI (`--version`, `--model`, `-p`). Wrap other tools in a shim.
 - General PR conversation comments are handled in addition to diff-level review comments. Conversation replies are not threaded, do not support `#fix`, and cannot be linked to their original mention on a fresh install (missing parent id), so they may be reprocessed if state is lost.
@@ -124,8 +133,6 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 ## TBD
 
 - **Degit integration**: keep a fast, minimal copy of the target repo in the CLI config folder so agents have code context without a full clone.
-- **Listen to repo and org changes**: watch for relevant activity across a repository or organization instead of polling a single PR.
-- **Watch multiple PRs**: target a list of PRs, or all open PRs in a repo or org, in one command.
 - **Listen to issues alongside PR mentions**: respond to `@pickup` mentions in issue bodies and comments, not just pull request review threads.
 - **Allow `#fix` from general PR conversation comments**: support generating and applying fixes from top-level PR comments, not only from diff-level review comments.
 - **Init-time model selection**: when running `pickup init`, query the configured provider for its available models and let the user select one.

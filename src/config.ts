@@ -134,7 +134,7 @@ const loadConfigFile = async (
 
 const loadGlobalConfig = async (
 	owner: string,
-	repo: string,
+	repo: string | undefined,
 	onWarning: WarningFn,
 ): Promise<Partial<Profile>> => {
 	const filePath = globalConfigPath();
@@ -177,7 +177,7 @@ const loadGlobalConfig = async (
 
 	if (global.profiles !== undefined) {
 		if (isPlainObject(global.profiles)) {
-			const repoKey = `${owner}/${repo}`.toLowerCase();
+			const repoKey = repo === undefined ? owner.toLowerCase() : `${owner}/${repo}`.toLowerCase();
 			const match = Object.entries(global.profiles).find(([key]) => key.toLowerCase() === repoKey);
 			if (match !== undefined) {
 				const [matchedKey, repoProfile] = match;
@@ -224,7 +224,7 @@ const loadRepoConfig = async (
 
 const resolveProfile = async (
 	owner: string,
-	repo: string,
+	repo: string | undefined,
 	repoRoot: string | undefined,
 	onWarning: WarningFn,
 ): Promise<Partial<Profile>> => {

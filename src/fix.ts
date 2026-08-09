@@ -31,6 +31,11 @@ const isOutsideRepo = (repoRoot: string, resolved: string): boolean => {
 	return relative.startsWith("..") || path.isAbsolute(relative) || resolved === repoRoot;
 };
 
+const isUnsafeContentPath = (targetPath: string): boolean =>
+	path.isAbsolute(targetPath) ||
+	targetPath.includes("\\") ||
+	/(?:^|\/)\.\.?(?:\/|$)/.test(targetPath);
+
 const toSafePath = async (targetPath: string, repoRoot: string): Promise<string> => {
 	const resolved = path.resolve(repoRoot, targetPath);
 	if (isOutsideRepo(repoRoot, resolved)) {
@@ -59,20 +64,27 @@ const toSafePath = async (targetPath: string, repoRoot: string): Promise<string>
 	return realResolved;
 };
 
-type Runner = (file: string, args: string[]) => Promise<string>;
+export type Runner = (
+	file: string,
+	args: string[],
+	options?: { env?: Record<string, string | undefined> },
+) => Promise<string>;
 
 type ReplyContext = {
+	checkedOut: Set<string>;
 	commentId: number;
 	dryRun: boolean;
+	ghHost: string;
 	kind: Mention["kind"];
 	logger: Logger;
 	model?: string;
 	number: string;
 	owner: string;
+	prUrl: string;
 	prompt?: string;
 	provider?: string;
 	repo: string;
-	repoRoot: string;
+	repoRoot?: string;
 	runner: Runner;
 	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
 };
@@ -123,7 +135,9 @@ const postReply = async (
 			? `repos/${ctx.owner}/${ctx.repo}/issues/${ctx.number}/comments`
 			: `repos/${ctx.owner}/${ctx.repo}/pulls/${ctx.number}/comments/${ctx.commentId}/replies`;
 	try {
-		await ctx.runner("gh", ["api", "--method", "POST", endpoint, "-f", `body=${prefixedBody}`]);
+		await ctx.runner("gh", ["api", "--method", "POST", endpoint, "-f", `body=${prefixedBody}`], {
+			env: { GH_HOST: ctx.ghHost },
+		});
 		await ctx.logger("reply", { ...base, failed: false });
 	} catch (error) {
 		await ctx.logger("reply", { ...base, failed: true, error: errorMessage(error) });
@@ -131,11 +145,13 @@ const postReply = async (
 	}
 };
 
-const callProvider = (ctx: ReplyContext, finalPrompt: string): Promise<string> =>
-	ctx.runner(
+const callProvider = async (ctx: ReplyContext, finalPrompt: string): Promise<string> => {
+	const answer = await ctx.runner(
 		ctx.provider || "claude",
 		ctx.model ? ["--model", ctx.model, "-p", finalPrompt] : ["-p", finalPrompt],
 	);
+	return answer.trim();
+};
 
 type ReviewMention = Extract<Mention, { kind: "review" }>;
 
@@ -156,11 +172,61 @@ const handleExplain = async (mention: ReviewMention, ctx: ReplyContext): Promise
 	await postReply(ctx, answer, "explain");
 };
 
+const encodeContentPath = (targetPath: string): string =>
+	targetPath
+		.split("/")
+		.filter((segment) => segment !== "")
+		.map(encodeURIComponent)
+		.join("/");
+
 const readPrFile = async (
 	ctx: ReplyContext,
 	targetPath: string,
 ): Promise<{ content: string; found: boolean }> => {
-	await ctx.runner("gh", ["pr", "checkout", "-R", `${ctx.owner}/${ctx.repo}`, ctx.number]);
+	if (ctx.repoRoot === undefined) {
+		if (isUnsafeContentPath(targetPath)) {
+			await ctx.warn("invalid target path", {
+				path: targetPath,
+				reason: "invalid-file-path",
+			});
+			await postReply(ctx, MISSING_FILE_REPLY, "error");
+			return { content: "", found: false };
+		}
+		const encodedPath = encodeContentPath(targetPath);
+		try {
+			const content = await ctx.runner(
+				"gh",
+				[
+					"api",
+					"-H",
+					"Accept: application/vnd.github.raw",
+					`repos/${ctx.owner}/${ctx.repo}/contents/${encodedPath}?ref=refs/pull/${ctx.number}/head`,
+				],
+				{ env: { GH_HOST: ctx.ghHost } },
+			);
+			return { content, found: true };
+		} catch (error) {
+			const message = errorMessage(error);
+			await ctx.warn("file content API failed", {
+				error: message,
+				path: targetPath,
+				reason: "file-content-api-failed",
+			});
+			if (!message.includes("404") && !message.includes("Not Found")) {
+				throw error;
+			}
+			await postReply(ctx, MISSING_FILE_REPLY, "error");
+			return { content: "", found: false };
+		}
+	}
+
+	if (!ctx.checkedOut.has(ctx.prUrl)) {
+		await ctx.runner("gh", ["pr", "checkout", "-R", `${ctx.owner}/${ctx.repo}`, ctx.number], {
+			env: { GH_HOST: ctx.ghHost },
+		});
+		ctx.checkedOut.add(ctx.prUrl);
+	}
+
 	let safePath: string;
 	try {
 		safePath = await toSafePath(targetPath, ctx.repoRoot);
@@ -202,7 +268,14 @@ const generateFix = async (
 	return stripped;
 };
 
-const applyFix = async (ctx: ReplyContext, targetPath: string, stripped: string): Promise<void> => {
+export const applyFix = async (
+	ctx: ReplyContext,
+	targetPath: string,
+	stripped: string,
+): Promise<void> => {
+	if (ctx.repoRoot === undefined) {
+		throw new Error("repoRoot is required to apply fixes");
+	}
 	const safePath = await toSafePath(targetPath, ctx.repoRoot);
 	const relativePath = path.relative(ctx.repoRoot, safePath);
 	const base = logContext(ctx, { path: relativePath });
@@ -225,7 +298,7 @@ const applyFix = async (ctx: ReplyContext, targetPath: string, stripped: string)
 	}
 	let shortHash = "";
 	try {
-		shortHash = await ctx.runner("git", ["rev-parse", "--short", "HEAD"]);
+		shortHash = (await ctx.runner("git", ["rev-parse", "--short", "HEAD"])).trim();
 	} catch {
 		shortHash = "";
 	}
@@ -305,4 +378,4 @@ const dispatchMention = async (
 	}
 };
 
-export { PICKUP_PREFIX, type Runner, stripFences, getLogin, dispatchMention };
+export { PICKUP_PREFIX, stripFences, getLogin, dispatchMention, errorMessage };
