@@ -328,6 +328,23 @@ const pollScope: PollScope = async (scope, options, onPr, runner, warn) => {
 
 const hostWithPort = (host: string, port?: string): string => (port ? `${host}:${port}` : host);
 
+const authenticateHost = async (
+	runner: Runner,
+	host: string,
+	env: { env: { GH_HOST: string } },
+): Promise<void> => {
+	try {
+		await runner("gh", ["auth", "status", "--hostname", host], env);
+	} catch (error) {
+		const plainHost = host.replace(/:\d+$/, "");
+		if (plainHost !== host) {
+			await runner("gh", ["auth", "status", "--hostname", plainHost], env);
+		} else {
+			throw error;
+		}
+	}
+};
+
 const toPrUrl = ({
 	host,
 	owner,
@@ -609,7 +626,7 @@ const runScope = async (
 		const ghHostEnv = { env: { GH_HOST: ghHost } };
 		if (scope.kind === "pr") {
 			await runner("gh", ["--version"], ghHostEnv);
-			await runner("gh", ["auth", "status", "--hostname", ghHost], ghHostEnv);
+			await authenticateHost(runner, ghHost, ghHostEnv);
 			try {
 				repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim() || undefined;
 			} catch {
@@ -649,7 +666,7 @@ const runScope = async (
 
 		if (scope.kind !== "pr") {
 			await runner("gh", ["--version"], ghHostEnv);
-			await runner("gh", ["auth", "status", "--hostname", ghHost], ghHostEnv);
+			await authenticateHost(runner, ghHost, ghHostEnv);
 		}
 		if (callbacks.requiresProvider) {
 			await runner(provider || "claude", ["--version"]);
