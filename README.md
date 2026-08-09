@@ -10,7 +10,7 @@ You need:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated.
 - A `claude`-shaped CLI in your PATH (default is `claude`; use `--provider` to swap).
-- A clean git working tree.
+- A clean git working tree if you are watching a single PR.
 
 ## Install
 
@@ -33,7 +33,7 @@ pickup init
 - A single PR: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`.
 - A repository: `https://github.com/owner/repo` or `owner/repo`.
 - An organization: `https://github.com/orgs/myorg` or `org:myorg`.
-- A GHES instance: use a full URL (`https://ghe.example.com/owner/repo`).
+- For GHES, use a full URL (`https://ghe.example.com/owner/repo`).
 
 `pickup init` is an interactive one-time setup that writes `provider`, `model`, `interval`, `user`, `prompt`, and `fix` defaults to `<config>/pickup/config.json`.
 
@@ -122,8 +122,8 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 ## Notes
 
 - Each poll processes every new unseen `@pickup` mention; additional polls handle comments added after the current poll.
-- `gh pr checkout` needs a clean working tree, so commit or stash your own changes first.
-- `--dry-run` still runs `gh pr checkout` and may change the working tree; it only skips posting replies and committing/pushing fixes.
+- For single-PR targets, `gh pr checkout` needs a clean working tree, so commit or stash your own changes first.
+- For single-PR targets, `--dry-run` still runs `gh pr checkout` and may change the working tree; it only skips posting replies and committing/pushing fixes.
 - If a fix is committed but `git push` fails, the commit stays local. Push it yourself once the problem is fixed.
 - `--provider` expects a `claude`-shaped CLI (`--version`, `--model`, `-p`). Wrap other tools in a shim.
 - General PR conversation comments are handled in addition to diff-level review comments. Conversation replies are not threaded, do not support `#fix`, and cannot be linked to their original mention on a fresh install (missing parent id), so they may be reprocessed if state is lost.

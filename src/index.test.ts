@@ -8,7 +8,11 @@ import { homedir, tmpdir } from "node:os";
 import type { Mention } from "./index.js";
 import * as config from "./config.js";
 
-type Runner = (file: string, args: string[]) => Promise<string>;
+type Runner = (
+	file: string,
+	args: string[],
+	options?: { env?: Record<string, string | undefined> },
+) => Promise<string>;
 
 const startsWithRepos = (value: string | undefined): boolean =>
 	typeof value === "string" && value.startsWith("repos/");
@@ -36,10 +40,15 @@ const ORIGINAL_CWD = process.cwd();
 const countCalls = (
 	runner: Runner,
 	file: string,
-	argMatcher: (args: string[]) => boolean,
+	argMatcher?: (args: string[], options?: { env?: Record<string, string | undefined> }) => boolean,
 ): number =>
-	(runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.filter(
-		([calledFile, args]) => calledFile === file && argMatcher(args),
+	(
+		runner as unknown as {
+			mock: { calls: [string, string[], { env?: Record<string, string | undefined> }?][] };
+		}
+	).mock.calls.filter(
+		([calledFile, args, options]) =>
+			calledFile === file && (argMatcher === undefined || argMatcher(args, options)),
 	).length;
 
 const warnFn = (logger: Logger) => async (message: string, fields?: Record<string, unknown>) => {
@@ -1052,6 +1061,16 @@ describe("parsePrUrl", () => {
 		});
 	});
 
+	it("preserves a non-default port in a GHES PR URL", () => {
+		expect(run.parsePrUrl("https://ghe.example.com:8443/owner/repo/pull/1")).toEqual({
+			host: "ghe.example.com",
+			number: "1",
+			owner: "owner",
+			port: "8443",
+			repo: "repo",
+		});
+	});
+
 	it("parses a shorthand whose owner starts with 'http'", () => {
 		expect(run.parsePrUrl("httpie/cli/pull/123")).toEqual({
 			host: "github.com",
@@ -1080,12 +1099,16 @@ describe("parsePrUrl", () => {
 	it("throws for a shorthand with unsafe owner characters", () => {
 		expect(() => run.parsePrUrl("../repo/pull/123")).toThrow(TypeError);
 	});
+
+	it("throws when the PR number is not numeric", () => {
+		expect(() => run.parsePrUrl("https://github.com/owner/repo/pull/abc")).toThrow(TypeError);
+	});
 });
 
 describe("exec", () => {
-	it("runs a command and returns trimmed stdout", async () => {
+	it("runs a command and returns untrimmed stdout", async () => {
 		const out = await run.exec("node", ["-e", "console.log('hi')"]);
-		expect(out).toBe("hi");
+		expect(out).toBe("hi\n");
 	});
 
 	it("throws when a command fails", async () => {
@@ -1712,6 +1735,16 @@ describe("watch explain", () => {
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toEqual(["review:2", "review:1"]);
+	});
+
+	it("preserves a non-default port in a GHES PR URL", async () => {
+		const runner = makeMultiMentionRunner();
+		const ghesUrl = "https://ghe.example.com:8443/owner/repo/pull/1";
+		await run.watch(ghesUrl, { iterations: 1, runner });
+		expect(
+			countCalls(runner, "gh", (args, options) => options?.env?.GH_HOST === "ghe.example.com:8443"),
+		).toBeGreaterThanOrEqual(1);
+		expect(countCalls(runner, "gh", (args) => args.includes("--hostname"))).toBe(0);
 	});
 });
 
@@ -2806,6 +2839,15 @@ describe("run help", () => {
 		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
 		write.mockRestore();
 	});
+
+	it("prints help when -h is passed after a target", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = vi.fn(() => Promise.resolve("")) as unknown as Runner;
+		await run(["watch", PR_URL, "-h"], { runner });
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
+		expect(countCalls(runner, "gh")).toBe(0);
+		write.mockRestore();
+	});
 });
 
 const logFilePath = (tempDir: string): string => path.join(tempDir, "pickup", "pickup.log");
@@ -3095,6 +3137,15 @@ describe("watch config", () => {
 		expect(countCalls(runner, "gh", (args) => args[0] === "pr" && args[1] === "checkout")).toBe(
 			FIRST_CALL,
 		);
+		expect(
+			(runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.some(
+				([, args]) =>
+					args[0] === "pr" &&
+					args[1] === "checkout" &&
+					args[2] === "-R" &&
+					args[3] === "owner/repo",
+			),
+		).toBe(true);
 	});
 
 	it("lets CLI flags override config", async () => {
@@ -3166,11 +3217,30 @@ describe("scope targets", () => {
 		});
 	});
 
+	it("preserves a non-default port in a GHES repo URL", () => {
+		expect(run.parseTarget("https://ghe.example.com:8443/owner/repo")).toEqual({
+			kind: "repo",
+			host: "ghe.example.com",
+			owner: "owner",
+			port: "8443",
+			repo: "repo",
+		});
+	});
+
 	it("parses an org full URL", () => {
 		expect(run.parseTarget("https://ghe.example.com/orgs/myorg")).toEqual({
 			kind: "org",
 			host: "ghe.example.com",
 			org: "myorg",
+		});
+	});
+
+	it("preserves a non-default port in a GHES org URL", () => {
+		expect(run.parseTarget("https://ghe.example.com:8443/orgs/myorg")).toEqual({
+			kind: "org",
+			host: "ghe.example.com",
+			org: "myorg",
+			port: "8443",
 		});
 	});
 
@@ -3201,6 +3271,17 @@ describe("scope targets", () => {
 		});
 	});
 
+	it("preserves a non-default port in a GHES PR URL", () => {
+		expect(run.parseTarget("https://ghe.example.com:8443/owner/repo/pull/1")).toEqual({
+			kind: "pr",
+			host: "ghe.example.com",
+			owner: "owner",
+			port: "8443",
+			repo: "repo",
+			number: "1",
+		});
+	});
+
 	it("throws for an invalid bare word", () => {
 		expect(() => run.parseTarget("not-a-pr")).toThrow("Invalid target: not-a-pr");
 	});
@@ -3209,6 +3290,10 @@ describe("scope targets", () => {
 		expect(() => run.parseTarget("https://github.com/orgs/myorg/projects/1")).toThrow(
 			"Invalid target: https://github.com/orgs/myorg/projects/1",
 		);
+	});
+
+	it("throws for a malformed URL", () => {
+		expect(() => run.parseTarget("https://")).toThrow("Invalid target: https://");
 	});
 
 	it("throws for an invalid org shorthand", () => {
@@ -3226,7 +3311,7 @@ describe("scope targets", () => {
 				return Promise.resolve(
 					JSON.stringify([
 						{
-							items: [{ html_url: SCOPE_PR_URL }, { html_url: "not-a-url" }],
+							items: [{ html_url: SCOPE_PR_URL }, { html_url: 123 }, { html_url: "not-a-url" }],
 						},
 					]),
 				);
@@ -3261,20 +3346,46 @@ describe("scope targets", () => {
 		expect(prUrls).toEqual([SCOPE_PR_URL]);
 	});
 
-	it("fetchOpenPrs passes --hostname for GHES", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args[0] === "api") {
-				expect(args).toContain("--hostname");
-				expect(args).toContain("ghe.example.com");
-				return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
+	it("fetchOpenPrs sets GH_HOST for GHES", async () => {
+		const runner = vi.fn(
+			(file: string, args: string[], options?: { env?: Record<string, string | undefined> }) => {
+				if (file === "gh" && args[0] === "api") {
+					expect(options?.env?.GH_HOST).toBe("ghe.example.com");
+					expect(args).not.toContain("--hostname");
+					return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
+				}
+				return Promise.resolve("");
+			},
+		) as unknown as Runner;
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const warn = warnFn(logger);
 		const scope = run.parseTarget(GHES_REPO_URL);
 		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(prUrls).toEqual([SCOPE_PR_URL]);
+		expect(prUrls).toEqual(["https://ghe.example.com/owner/repo/pull/1"]);
+	});
+
+	it("fetchOpenPrs preserves a non-default GHES port", async () => {
+		const runner = vi.fn(
+			(file: string, args: string[], options?: { env?: Record<string, string | undefined> }) => {
+				if (file === "gh" && args[0] === "api") {
+					expect(options?.env?.GH_HOST).toBe("ghe.example.com:8443");
+					expect(args).not.toContain("--hostname");
+					return Promise.resolve(
+						JSON.stringify([
+							{
+								items: [{ html_url: "https://ghe.example.com/owner/repo/pull/1" }],
+							},
+						]),
+					);
+				}
+				return Promise.resolve("");
+			},
+		) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget("https://ghe.example.com:8443/owner/repo");
+		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(prUrls).toEqual(["https://ghe.example.com:8443/owner/repo/pull/1"]);
 	});
 
 	it("fetchOpenPrs warns and returns empty on 403/422", async () => {
@@ -3296,7 +3407,7 @@ describe("scope targets", () => {
 			if (file !== "gh" || args[0] !== "api") return Promise.resolve("");
 			callCount += 1;
 			if (callCount === 1) {
-				return Promise.reject(new Error("Not Found"));
+				return Promise.reject(new Error("HTTP 404: Not Found"));
 			}
 			return Promise.resolve(
 				JSON.stringify([
@@ -3339,7 +3450,7 @@ describe("scope targets", () => {
 	});
 
 	it("fetchOpenPrs warns on a generic search failure", async () => {
-		const runner = vi.fn(() => Promise.reject(new Error("HTTP 500: Boom"))) as unknown as Runner;
+		const runner = vi.fn(() => Promise.reject(new Error("Boom"))) as unknown as Runner;
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const warn = warnFn(logger);
 		const scope = run.parseTarget(REPO_TARGET);
@@ -3357,10 +3468,12 @@ describe("scope targets", () => {
 			if (file !== "gh" || args[0] !== "api") return Promise.resolve("");
 			callCount += 1;
 			if (callCount === 1) {
-				return Promise.reject(new Error("Not Found"));
+				return Promise.reject(new Error("HTTP 404: Not Found"));
 			}
 			return Promise.resolve(
-				JSON.stringify([[{ html_url: "not-a-pr-url" }, { html_url: SCOPE_PR_URL }]]),
+				JSON.stringify([
+					[{ html_url: undefined }, { html_url: "not-a-pr-url" }, { html_url: SCOPE_PR_URL }],
+				]),
 			);
 		}) as unknown as Runner;
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
@@ -3375,7 +3488,9 @@ describe("scope targets", () => {
 	});
 
 	it("fetchOpenPrs repo fallback returns empty on failure", async () => {
-		const runner = vi.fn(() => Promise.reject(new Error("Not Found"))) as unknown as Runner;
+		const runner = vi.fn(() =>
+			Promise.reject(new Error("HTTP 404: Not Found")),
+		) as unknown as Runner;
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const warn = warnFn(logger);
 		const scope = run.parseTarget(REPO_TARGET);
@@ -3388,7 +3503,7 @@ describe("scope targets", () => {
 	});
 
 	it("fetchOpenPrs repo fallback coerces a non-Error failure", async () => {
-		const runner = vi.fn(() => Promise.reject("Not Found")) as unknown as Runner;
+		const runner = vi.fn(() => Promise.reject("HTTP 404: Not Found")) as unknown as Runner;
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const warn = warnFn(logger);
 		const scope = run.parseTarget(REPO_TARGET);
@@ -3422,10 +3537,12 @@ describe("scope targets", () => {
 		prUrl = SCOPE_PR_URL,
 		rawContent = "example",
 		body = "@pickup hello",
+		filePath = "src/index.ts",
 	}: {
 		prUrl?: string;
 		rawContent?: string;
 		body?: string;
+		filePath?: string;
 	} = {}): Runner =>
 		vi.fn((file: string, args: string[]) => {
 			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
@@ -3451,7 +3568,7 @@ describe("scope targets", () => {
 									id: FIRST_ID,
 									in_reply_to_id: null,
 									line: FIRST_LINE,
-									path: "src/index.ts",
+									path: filePath,
 									user: { login: "alice" },
 								},
 							],
@@ -3483,6 +3600,26 @@ describe("scope targets", () => {
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
 		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+	});
+
+	it("rejects an unsafe review file path outside a git tree", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeScopeRunner({ filePath: "../etc/passwd" });
+		await run.watch(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(
+			countCalls(runner, "gh", (args) => args.includes("Accept: application/vnd.github.raw")),
+		).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "invalid-file-path" }),
+		);
 	});
 
 	it("watches an org scope and replies to mentions", async () => {
@@ -3552,7 +3689,95 @@ describe("scope targets", () => {
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(TWO_CALLS);
 	});
 
-	it("passes --hostname for GHES repo scope", async () => {
+	it("continues polling when one repo scope PR fails", async () => {
+		const SCOPE_PR_URL_2 = "https://github.com/owner/repo/pull/2";
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "gh" && args[0] === "api") {
+				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
+					return Promise.resolve(
+						JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }, { html_url: SCOPE_PR_URL_2 }] }]),
+					);
+				}
+				if (args.includes("Accept: application/vnd.github.raw")) {
+					return Promise.resolve("example");
+				}
+				if (args.includes("POST")) {
+					return Promise.resolve("");
+				}
+				const endpoint = args.find((arg) => arg.startsWith("repos/"));
+				if (endpoint?.includes("/pulls/1/comments")) {
+					return Promise.reject(new Error("HTTP 404: Not Found"));
+				}
+				if (endpoint?.includes("/pulls/")) {
+					return Promise.resolve(
+						JSON.stringify([
+							[
+								{
+									body: "@pickup hello",
+									id: FIRST_ID,
+									in_reply_to_id: null,
+									line: FIRST_LINE,
+									path: "src/index.ts",
+									user: { login: "alice" },
+								},
+							],
+						]),
+					);
+				}
+				if (endpoint?.includes("/issues/")) {
+					return Promise.resolve("[]");
+				}
+			}
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "pr-poll-failed" }),
+		);
+	});
+
+	it("watches a repo scope with no open PRs", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+				return Promise.resolve("");
+			}
+			if (
+				file === "gh" &&
+				args[0] === "api" &&
+				args.some((arg) => arg.startsWith("search/issues?q="))
+			) {
+				return Promise.resolve(JSON.stringify([{ items: [] }]));
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: TWO_CALLS,
+			logger,
+			runner,
+		});
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "no-open-prs" }),
+		);
+	});
+
+	it("sets GH_HOST for GHES repo scope", async () => {
 		const runner = makeScopeRunner({
 			prUrl: "https://ghe.example.com/owner/repo/pull/1",
 		});
@@ -3561,19 +3786,20 @@ describe("scope targets", () => {
 			iterations: FIRST_ITERATION,
 			runner,
 		});
-		const ghCalls = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls;
 		expect(
-			ghCalls.some(
-				([, args]) =>
-					args[0] === "auth" && args.includes("--hostname") && args.includes("ghe.example.com"),
+			countCalls(
+				runner,
+				"gh",
+				(args, options) => args[0] === "auth" && options?.env?.GH_HOST === "ghe.example.com",
 			),
-		).toBe(true);
+		).toBeGreaterThanOrEqual(1);
 		expect(
-			ghCalls.some(
-				([, args]) =>
-					args[0] === "api" && args.includes("--hostname") && args.includes("ghe.example.com"),
+			countCalls(
+				runner,
+				"gh",
+				(args, options) => args[0] === "api" && options?.env?.GH_HOST === "ghe.example.com",
 			),
-		).toBe(true);
+		).toBeGreaterThanOrEqual(1);
 	});
 
 	it("disables --fix for repo scope and logs a warning", async () => {
@@ -3605,7 +3831,7 @@ describe("scope targets", () => {
 		write.mockRestore();
 	});
 
-	it("streams an org scope and passes --hostname", async () => {
+	it("streams an org scope and sets GH_HOST", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		const runner = makeScopeRunner({ prUrl: "https://ghe.example.com/owner/repo/pull/1" });
 		await run(["stream", "https://ghe.example.com/orgs/myorg"], {
@@ -3615,12 +3841,35 @@ describe("scope targets", () => {
 		const calls = write.mock.calls.map(([line]) => line as string);
 		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
 		expect(
-			(runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.some(
-				([, args]) =>
-					args[0] === "api" && args.includes("--hostname") && args.includes("ghe.example.com"),
+			countCalls(
+				runner,
+				"gh",
+				(args, options) => args[0] === "api" && options?.env?.GH_HOST === "ghe.example.com",
 			),
-		).toBe(true);
+		).toBeGreaterThanOrEqual(1);
 		write.mockRestore();
+	});
+
+	it("streams a repo scope with no open PRs", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+				return Promise.resolve("");
+			}
+			if (
+				file === "gh" &&
+				args[0] === "api" &&
+				args.some((arg) => arg.startsWith("search/issues?q="))
+			) {
+				return Promise.resolve(JSON.stringify([{ items: [] }]));
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.stream(REPO_TARGET, { interval: NO_INTERVAL, iterations: TWO_CALLS, logger, runner });
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "no-open-prs" }),
+		);
 	});
 
 	it("falls back to missing file reply when the raw content API fails", async () => {

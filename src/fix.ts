@@ -31,6 +31,11 @@ const isOutsideRepo = (repoRoot: string, resolved: string): boolean => {
 	return relative.startsWith("..") || path.isAbsolute(relative) || resolved === repoRoot;
 };
 
+const isUnsafeContentPath = (targetPath: string): boolean =>
+	path.isAbsolute(targetPath) ||
+	targetPath.includes("\\") ||
+	/(?:^|\/)\.\.?(?:\/|$)/.test(targetPath);
+
 const toSafePath = async (targetPath: string, repoRoot: string): Promise<string> => {
 	const resolved = path.resolve(repoRoot, targetPath);
 	if (isOutsideRepo(repoRoot, resolved)) {
@@ -59,12 +64,16 @@ const toSafePath = async (targetPath: string, repoRoot: string): Promise<string>
 	return realResolved;
 };
 
-type Runner = (file: string, args: string[]) => Promise<string>;
+export type Runner = (
+	file: string,
+	args: string[],
+	options?: { env?: Record<string, string | undefined> },
+) => Promise<string>;
 
 type ReplyContext = {
 	commentId: number;
 	dryRun: boolean;
-	host: string;
+	ghHost: string;
 	kind: Mention["kind"];
 	logger: Logger;
 	model?: string;
@@ -124,16 +133,9 @@ const postReply = async (
 			? `repos/${ctx.owner}/${ctx.repo}/issues/${ctx.number}/comments`
 			: `repos/${ctx.owner}/${ctx.repo}/pulls/${ctx.number}/comments/${ctx.commentId}/replies`;
 	try {
-		await ctx.runner("gh", [
-			"api",
-			"--hostname",
-			ctx.host,
-			"--method",
-			"POST",
-			endpoint,
-			"-f",
-			`body=${prefixedBody}`,
-		]);
+		await ctx.runner("gh", ["api", "--method", "POST", endpoint, "-f", `body=${prefixedBody}`], {
+			env: { GH_HOST: ctx.ghHost },
+		});
 		await ctx.logger("reply", { ...base, failed: false });
 	} catch (error) {
 		await ctx.logger("reply", { ...base, failed: true, error: errorMessage(error) });
@@ -141,11 +143,13 @@ const postReply = async (
 	}
 };
 
-const callProvider = (ctx: ReplyContext, finalPrompt: string): Promise<string> =>
-	ctx.runner(
+const callProvider = async (ctx: ReplyContext, finalPrompt: string): Promise<string> => {
+	const answer = await ctx.runner(
 		ctx.provider || "claude",
 		ctx.model ? ["--model", ctx.model, "-p", finalPrompt] : ["-p", finalPrompt],
 	);
+	return answer.trim();
+};
 
 type ReviewMention = Extract<Mention, { kind: "review" }>;
 
@@ -178,16 +182,26 @@ const readPrFile = async (
 	targetPath: string,
 ): Promise<{ content: string; found: boolean }> => {
 	if (ctx.repoRoot === undefined) {
+		if (isUnsafeContentPath(targetPath)) {
+			await ctx.warn("invalid target path", {
+				path: targetPath,
+				reason: "invalid-file-path",
+			});
+			await postReply(ctx, MISSING_FILE_REPLY, "error");
+			return { content: "", found: false };
+		}
 		const encodedPath = encodeContentPath(targetPath);
 		try {
-			const content = await ctx.runner("gh", [
-				"api",
-				"--hostname",
-				ctx.host,
-				"-H",
-				"Accept: application/vnd.github.raw",
-				`repos/${ctx.owner}/${ctx.repo}/contents/${encodedPath}?ref=refs/pull/${ctx.number}/head`,
-			]);
+			const content = await ctx.runner(
+				"gh",
+				[
+					"api",
+					"-H",
+					"Accept: application/vnd.github.raw",
+					`repos/${ctx.owner}/${ctx.repo}/contents/${encodedPath}?ref=refs/pull/${ctx.number}/head`,
+				],
+				{ env: { GH_HOST: ctx.ghHost } },
+			);
 			return { content, found: true };
 		} catch (error) {
 			await ctx.warn("file content API failed", {
@@ -200,13 +214,9 @@ const readPrFile = async (
 		}
 	}
 
-	await ctx.runner("gh", [
-		"pr",
-		"checkout",
-		"-R",
-		`${ctx.host}/${ctx.owner}/${ctx.repo}`,
-		ctx.number,
-	]);
+	await ctx.runner("gh", ["pr", "checkout", "-R", `${ctx.owner}/${ctx.repo}`, ctx.number], {
+		env: { GH_HOST: ctx.ghHost },
+	});
 	let safePath: string;
 	try {
 		safePath = await toSafePath(targetPath, ctx.repoRoot);
@@ -278,7 +288,7 @@ export const applyFix = async (
 	}
 	let shortHash = "";
 	try {
-		shortHash = await ctx.runner("git", ["rev-parse", "--short", "HEAD"]);
+		shortHash = (await ctx.runner("git", ["rev-parse", "--short", "HEAD"])).trim();
 	} catch {
 		shortHash = "";
 	}
@@ -358,4 +368,4 @@ const dispatchMention = async (
 	}
 };
 
-export { PICKUP_PREFIX, type Runner, stripFences, getLogin, dispatchMention };
+export { PICKUP_PREFIX, stripFences, getLogin, dispatchMention, errorMessage };

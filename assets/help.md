@@ -11,7 +11,7 @@ A CLI that watches GitHub PR comments (review and conversation) for `@pickup` me
 - A single PR: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`.
 - A repository: `https://github.com/owner/repo` or `owner/repo`.
 - An organization: `https://github.com/orgs/myorg` or `org:myorg`.
-- A GHES instance: use a full URL for the host (`https://ghe.example.com/owner/repo`).
+- For GHES, use a full URL for the host (`https://ghe.example.com/owner/repo`).
 
 #### Options
 
@@ -65,8 +65,8 @@ Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, and `i
 - `--fix` is disabled for repo and org scope; only single-PR mode can generate and push fixes.
 - Scope mode fetches file content from the GitHub API, so it does not need a local clone.
 - Each poll processes every new unseen `@pickup` mention; additional polls handle comments added after the current poll.
-- Run from a clean repository; `gh pr checkout` will fail if the working tree has uncommitted changes.
-- `--dry-run` still runs `gh pr checkout`; it only skips posting replies and committing/pushing fixes.
+- For single-PR targets, run from a clean repository; `gh pr checkout` will fail if the working tree has uncommitted changes.
+- For single-PR targets, `--dry-run` still runs `gh pr checkout`; it only skips posting replies and committing/pushing fixes.
 - If `git push` fails after a fix is committed, the commit remains local and must be pushed manually.
 - `--provider` expects a CLI with the same flags as `claude` (`--version`, `--model`, `-p`).
 - General PR conversation comments are handled too. Conversation replies are not threaded, do not support `#fix`, and cannot be matched to their original mention on a fresh install, so they may be reprocessed if state is lost.

@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import process from "node:process";
 import {
 	dispatchMention,
+	errorMessage,
 	getLogin,
 	PICKUP_PREFIX,
 	type Mention,
@@ -27,9 +28,12 @@ const HELP_PATH = new URL("../assets/help.md", import.meta.url);
 
 const execFilePromise = promisify(execFile);
 
-const exec = async (file: string, args: string[]): Promise<string> => {
-	const { stdout } = await execFilePromise(file, args, { encoding: "utf8" });
-	return stdout.trim();
+const exec: Runner = async (file, args, options) => {
+	const { stdout } = await execFilePromise(file, args, {
+		encoding: "utf8",
+		env: options?.env ? { ...process.env, ...options.env } : process.env,
+	});
+	return stdout;
 };
 
 function showHelp(): void {
@@ -44,7 +48,7 @@ const PR_SHORTHAND = new RegExp(
 
 const parsePrUrl = (
 	prUrl: string,
-): { host: string; owner: string; repo: string; number: string } => {
+): { host: string; owner: string; port?: string; repo: string; number: string } => {
 	if (/^https?:\/\//i.test(prUrl)) {
 		const url = new URL(prUrl);
 		const parts = url.pathname.split("/").filter(Boolean);
@@ -54,11 +58,12 @@ const parsePrUrl = (
 			pull !== "pull" ||
 			typeof owner !== "string" ||
 			typeof repo !== "string" ||
-			typeof number !== "string"
+			typeof number !== "string" ||
+			!/^\d+$/.test(number)
 		) {
 			throw new TypeError(`Invalid PR reference: ${prUrl}`);
 		}
-		return { host: url.hostname, number, owner, repo };
+		return { host: url.hostname, number, owner, repo, ...(url.port ? { port: url.port } : {}) };
 	}
 
 	const shorthand = PR_SHORTHAND.exec(prUrl);
@@ -93,14 +98,16 @@ const fetchKind = async (
 	repo: string,
 	number: string,
 	kind: Mention["kind"],
-	host: string,
+	hostWithPort: string,
 	runner: Runner,
 ): Promise<Mention[]> => {
 	const endpoint =
 		kind === "conversation"
 			? `repos/${owner}/${repo}/issues/${number}/comments`
 			: `repos/${owner}/${repo}/pulls/${number}/comments`;
-	const output = await runner("gh", ["api", "--hostname", host, "--paginate", "--slurp", endpoint]);
+	const output = await runner("gh", ["api", "--paginate", "--slurp", endpoint], {
+		env: { GH_HOST: hostWithPort },
+	});
 	return (JSON.parse(output) as Record<string, unknown>[][])
 		.flat()
 		.map((c) => toMention(c, kind))
@@ -108,10 +115,11 @@ const fetchKind = async (
 };
 
 const fetchMentions = async (prUrl: string, runner: Runner = exec): Promise<Mention[]> => {
-	const { host, owner, repo, number } = parsePrUrl(prUrl);
+	const { host, owner, port, repo, number } = parsePrUrl(prUrl);
+	const ghHost = hostWithPort(host, port);
 	const [review, conversation] = await Promise.all([
-		fetchKind(owner, repo, number, "review", host, runner),
-		fetchKind(owner, repo, number, "conversation", host, runner),
+		fetchKind(owner, repo, number, "review", ghHost, runner),
+		fetchKind(owner, repo, number, "conversation", ghHost, runner),
 	]);
 	return [...review, ...conversation];
 };
@@ -175,12 +183,12 @@ const respondToMention = async (
 	},
 ): Promise<void> => {
 	const { runner } = options;
-	const { host, owner, repo, number } = parsePrUrl(prUrl);
+	const { host, owner, port, repo, number } = parsePrUrl(prUrl);
 	const commentId = mention.id;
 	const ctx = {
 		commentId,
 		dryRun: options.dryRun,
-		host,
+		ghHost: hostWithPort(host, port),
 		kind: mention.kind,
 		logger: options.logger,
 		model: options.model,
@@ -212,14 +220,10 @@ const pollMentions = async (
 		allowFix?: boolean;
 		allowedUser?: string;
 		dryRun: boolean;
-		index: number;
-		interval: number;
-		iterations: number;
 		logger: Logger;
 		onMention: (mention: Mention) => Promise<void>;
 		runner: Runner;
 		saveAfterEmit: boolean;
-		sleep: boolean;
 		warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
 	},
 ): Promise<void> => {
@@ -258,27 +262,77 @@ const pollMentions = async (
 		state.set(prUrl, [...existing]);
 		await saveState(state);
 	}
-	if (options.sleep && options.index < options.iterations - 1) {
-		await setTimeout(options.interval * MILLISECONDS_PER_SECOND);
+};
+
+type PollScope = (
+	scope: Scope,
+	options: {
+		interval: number;
+		iterations: number;
+		target: string;
+	},
+	onPr: (prUrl: string) => Promise<void>,
+	runner: Runner,
+	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
+) => Promise<void>;
+
+const pollScope: PollScope = async (scope, options, onPr, runner, warn) => {
+	for (let index = 0; index < options.iterations; index += 1) {
+		const prUrls = scope.kind === "pr" ? [toPrUrl(scope)] : await fetchOpenPrs(scope, runner, warn);
+		if (prUrls.length === 0) {
+			await warn("No open PRs found for the target", {
+				reason: "no-open-prs",
+				target: options.target,
+			});
+		} else {
+			for (const prUrl of prUrls) {
+				try {
+					await onPr(prUrl);
+				} catch (error) {
+					const message = errorMessage(error);
+					await warn(`poll failed for ${prUrl}`, {
+						error: message,
+						prUrl,
+						reason: "pr-poll-failed",
+					});
+					if (scope.kind === "pr") {
+						throw error;
+					}
+				}
+			}
+		}
+		if (index < options.iterations - 1) {
+			await setTimeout(options.interval * MILLISECONDS_PER_SECOND);
+		}
 	}
 };
+
+const hostWithPort = (host: string, port?: string): string =>
+	port && port !== "443" ? `${host}:${port}` : host;
 
 const toPrUrl = ({
 	host,
 	owner,
+	port,
 	repo,
 	number,
 }: {
 	host: string;
 	owner: string;
+	port?: string;
 	repo: string;
 	number: string;
-}): string => `https://${host}/${owner}/${repo}/pull/${number}`;
+}): string => `https://${hostWithPort(host, port)}/${owner}/${repo}/pull/${number}`;
+
+const toScopePrUrl = (scope: { host: string; port?: string }, url: string): string => {
+	const parsed = parsePrUrl(url);
+	return toPrUrl({ ...parsed, host: scope.host, port: scope.port });
+};
 
 export type Scope =
-	| { kind: "pr"; host: string; owner: string; repo: string; number: string }
-	| { kind: "repo"; host: string; owner: string; repo: string }
-	| { kind: "org"; host: string; org: string };
+	| { kind: "pr"; host: string; owner: string; port?: string; repo: string; number: string }
+	| { kind: "repo"; host: string; owner: string; port?: string; repo: string }
+	| { kind: "org"; host: string; org: string; port?: string };
 
 type RepoScope = Extract<Scope, { kind: "repo" }>;
 
@@ -289,19 +343,29 @@ const REPO_SHORTHAND = new RegExp(
 const parseTarget = (target: string): Scope => {
 	if (target.startsWith("org:")) {
 		const org = target.slice(4).replace(/\/$/, "");
-		if (!org || !new RegExp(`^${NAME}$`).test(org)) {
+		if (!org || !new RegExp(`^(?!\\.\\.?(?:\\/|$))(${NAME})$`).test(org)) {
 			throw new TypeError(`Invalid target: ${target}`);
 		}
 		return { kind: "org", host: "github.com", org };
 	}
 
 	if (/^https?:\/\//i.test(target)) {
-		const url = new URL(target);
+		let url: URL;
+		try {
+			url = new URL(target);
+		} catch {
+			throw new TypeError(`Invalid target: ${target}`);
+		}
 		const parts = url.pathname.split("/").filter(Boolean);
 		const [first, second, third, fourth] = parts;
 
 		if (parts.length === 2 && first === "orgs" && typeof second === "string") {
-			return { kind: "org", host: url.hostname, org: second };
+			return {
+				kind: "org",
+				host: url.hostname,
+				org: second,
+				...(url.port ? { port: url.port } : {}),
+			};
 		}
 
 		if (
@@ -312,11 +376,24 @@ const parseTarget = (target: string): Scope => {
 			typeof fourth === "string" &&
 			/^\d+$/.test(fourth)
 		) {
-			return { kind: "pr", host: url.hostname, owner: first, repo: second, number: fourth };
+			return {
+				kind: "pr",
+				host: url.hostname,
+				owner: first,
+				repo: second,
+				number: fourth,
+				...(url.port ? { port: url.port } : {}),
+			};
 		}
 
 		if (parts.length === 2 && typeof first === "string" && typeof second === "string") {
-			return { kind: "repo", host: url.hostname, owner: first, repo: second };
+			return {
+				kind: "repo",
+				host: url.hostname,
+				owner: first,
+				repo: second,
+				...(url.port ? { port: url.port } : {}),
+			};
 		}
 
 		throw new TypeError(`Invalid target: ${target}`);
@@ -337,40 +414,32 @@ const parseTarget = (target: string): Scope => {
 	throw new TypeError(`Invalid target: ${target}`);
 };
 
-const errorMessage = (error: unknown): string =>
-	error instanceof Error ? error.message : String(error);
-
 const fetchOpenPrsRepoFallback = async (
 	scope: RepoScope,
 	runner: Runner,
 	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
 ): Promise<string[]> => {
 	try {
-		const output = await runner("gh", [
-			"api",
-			"--hostname",
-			scope.host,
-			"--paginate",
-			"--slurp",
-			`repos/${scope.owner}/${scope.repo}/pulls?state=open`,
-		]);
+		const output = await runner(
+			"gh",
+			["api", "--paginate", "--slurp", `repos/${scope.owner}/${scope.repo}/pulls?state=open`],
+			{ env: { GH_HOST: hostWithPort(scope.host, scope.port) } },
+		);
 		const pages = JSON.parse(output) as { html_url?: unknown }[][];
-		return pages
-			.flat()
-			.map((pr) => pr.html_url)
-			.filter((url): url is string => typeof url === "string")
-			.map((url) => {
-				try {
-					return toPrUrl(parsePrUrl(url));
-				} catch {
-					warn(`invalid PR URL from repo fallback: ${url}`, {
-						reason: "fallback-invalid-url",
-						url,
-					});
-					return undefined;
-				}
-			})
-			.filter((url): url is string => url !== undefined);
+		const prUrls: string[] = [];
+		for (const pr of pages.flat()) {
+			const url = pr.html_url;
+			if (typeof url !== "string") continue;
+			try {
+				prUrls.push(toScopePrUrl(scope, url));
+			} catch {
+				await warn(`invalid PR URL from repo fallback: ${url}`, {
+					reason: "fallback-invalid-url",
+					url,
+				});
+			}
+		}
+		return prUrls;
 	} catch (error) {
 		const message = errorMessage(error);
 		await warn(`repo fallback failed: ${message}`, {
@@ -399,38 +468,36 @@ const fetchOpenPrs = async (
 	}
 	const encoded = encodeURIComponent(query);
 	try {
-		const output = await runner("gh", [
-			"api",
-			"--hostname",
-			scope.host,
-			"--paginate",
-			"--slurp",
-			`search/issues?q=${encoded}`,
-		]);
+		const output = await runner(
+			"gh",
+			["api", "--paginate", "--slurp", `search/issues?q=${encoded}`],
+			{ env: { GH_HOST: hostWithPort(scope.host, scope.port) } },
+		);
 		const pages = JSON.parse(output) as { items?: { html_url?: unknown }[] }[];
-		const urls = pages
-			.flatMap((page) => page.items ?? [])
-			.map((item) => item.html_url)
-			.filter((url): url is string => typeof url === "string");
-		return urls
-			.map((url) => {
+		const prUrls: string[] = [];
+		for (const page of pages) {
+			for (const item of page.items ?? []) {
+				const url = item.html_url;
+				if (typeof url !== "string") continue;
 				try {
-					return toPrUrl(parsePrUrl(url));
+					prUrls.push(toScopePrUrl(scope, url));
 				} catch {
-					warn(`invalid PR URL from search: ${url}`, { reason: "search-invalid-url", url });
-					return undefined;
+					await warn(`invalid PR URL from search: ${url}`, { reason: "search-invalid-url", url });
 				}
-			})
-			.filter((url): url is string => url !== undefined);
+			}
+		}
+		return prUrls;
 	} catch (error) {
 		const message = errorMessage(error);
-		if (message.includes("404") || message.includes("Not Found")) {
+		const statusMatch = message.match(/HTTP (\d{3})/);
+		const status = statusMatch ? Number(statusMatch[1]) : 0;
+		if (status === 404) {
 			if (scope.kind === "repo") {
 				return fetchOpenPrsRepoFallback(scope, runner, warn);
 			}
 			throw new Error("org scope requires GHES 3.x+ search/issues", { cause: error });
 		}
-		if (message.includes("403") || message.includes("422")) {
+		if (status === 403 || status === 422) {
 			await warn("Search failed; verify the token can read private repos on this host", {
 				reason: "search-token-scope",
 				host: scope.host,
@@ -483,13 +550,14 @@ const watch = async (
 	let normalizedPrUrl = target;
 	try {
 		const scope = parseTarget(target);
-		const { host } = scope;
+		normalizedPrUrl = scope.kind === "pr" ? toPrUrl(scope) : target;
 
 		let repoRoot: string | undefined;
 		let profile: Partial<Profile>;
+		const ghHostEnv = { env: { GH_HOST: hostWithPort(scope.host, scope.port) } };
 		if (scope.kind === "pr") {
-			await runner("gh", ["--version"]);
-			await runner("gh", ["auth", "status", "--hostname", host]);
+			await runner("gh", ["--version"], ghHostEnv);
+			await runner("gh", ["auth", "status"], ghHostEnv);
 			try {
 				repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim();
 			} catch {
@@ -498,15 +566,8 @@ const watch = async (
 			profile =
 				options.config ?? (await resolveProfile(scope.owner, scope.repo, repoRoot, configWarn));
 		} else {
-			let owner: string;
-			let repo: string;
-			if (scope.kind === "org") {
-				owner = scope.org;
-				repo = "";
-			} else {
-				owner = scope.owner;
-				repo = scope.repo;
-			}
+			const owner = scope.kind === "org" ? scope.org : scope.owner;
+			const repo = scope.kind === "org" ? undefined : scope.repo;
 			profile = options.config ?? (await resolveProfile(owner, repo, undefined, configWarn));
 		}
 
@@ -532,8 +593,8 @@ const watch = async (
 		}
 
 		if (scope.kind !== "pr") {
-			await runner("gh", ["--version"]);
-			await runner("gh", ["auth", "status", "--hostname", host]);
+			await runner("gh", ["--version"], ghHostEnv);
+			await runner("gh", ["auth", "status"], ghHostEnv);
 		}
 		await runner(provider || "claude", ["--version"]);
 
@@ -552,17 +613,14 @@ const watch = async (
 			});
 		}
 
-		const prUrls = scope.kind === "pr" ? [toPrUrl(scope)] : await fetchOpenPrs(scope, runner, warn);
-
-		for (let index = 0; index < iterations; index += 1) {
-			for (const [prIndex, prUrl] of prUrls.entries()) {
+		await pollScope(
+			scope,
+			{ interval, iterations, target },
+			async (prUrl) => {
 				await pollMentions(prUrl, {
 					allowFix,
 					allowedUser,
 					dryRun,
-					index,
-					interval,
-					iterations,
 					logger,
 					onMention: (mention) =>
 						respondToMention(mention, prUrl, {
@@ -578,11 +636,12 @@ const watch = async (
 						}),
 					runner,
 					saveAfterEmit: false,
-					sleep: prIndex === prUrls.length - 1,
 					warn,
 				});
-			}
-		}
+			},
+			runner,
+			warn,
+		);
 	} catch (error) {
 		await logger("error", {
 			errorType: error instanceof Error ? error.name : "unknown",
@@ -613,7 +672,7 @@ const stream = async (
 	let normalizedPrUrl = target;
 	try {
 		const scope = parseTarget(target);
-		const { host } = scope;
+		normalizedPrUrl = scope.kind === "pr" ? toPrUrl(scope) : target;
 
 		let repoRoot: string | undefined;
 		if (scope.kind === "pr") {
@@ -625,7 +684,7 @@ const stream = async (
 		}
 
 		const owner = scope.kind === "org" ? scope.org : scope.owner;
-		const repo = scope.kind === "org" ? "" : scope.repo;
+		const repo = scope.kind === "org" ? undefined : scope.repo;
 		const profile = options.config ?? (await resolveProfile(owner, repo, repoRoot, configWarn));
 
 		const interval = options.interval ?? profile.interval ?? DEFAULT_INTERVAL_SECONDS;
@@ -635,16 +694,17 @@ const stream = async (
 			logger = createLogger({ toStderr });
 		}
 		const warn = makeWarn(toStderr, logger);
+		const ghHostEnv = { env: { GH_HOST: hostWithPort(scope.host, scope.port) } };
 
-		await runner("gh", ["--version"]);
-		await runner("gh", ["auth", "status", "--hostname", host]);
+		await runner("gh", ["--version"], ghHostEnv);
+		await runner("gh", ["auth", "status"], ghHostEnv);
 
 		const iterations = options.iterations ?? Infinity;
 
-		const prUrls = scope.kind === "pr" ? [toPrUrl(scope)] : await fetchOpenPrs(scope, runner, warn);
-
-		for (let index = 0; index < iterations; index += 1) {
-			for (const [prIndex, prUrl] of prUrls.entries()) {
+		await pollScope(
+			scope,
+			{ interval, iterations, target },
+			async (prUrl) => {
 				const parsed = parsePrUrl(prUrl);
 				// State is saved after stdout is written. If the emit fails, the
 				// mention may appear again on the next poll/run; consumers deduplicate
@@ -653,9 +713,6 @@ const stream = async (
 					allowFix: false,
 					allowedUser,
 					dryRun: false,
-					index,
-					interval,
-					iterations,
 					logger,
 					onMention: async (mention) => {
 						const event: Record<string, unknown> = {
@@ -678,11 +735,12 @@ const stream = async (
 					},
 					runner,
 					saveAfterEmit: true,
-					sleep: prIndex === prUrls.length - 1,
 					warn,
 				});
-			}
-		}
+			},
+			runner,
+			warn,
+		);
 	} catch (error) {
 		await logger("error", {
 			errorType: error instanceof Error ? error.name : "unknown",
@@ -702,6 +760,10 @@ const parseArgs = (argv: string[]): { booleans: Set<string>; values: Map<string,
 	for (let i = 0; i < argv.length; i += 1) {
 		// oxlint-disable-next-line security/detect-object-injection -- array index read, not property injection
 		const arg = argv[i];
+		if (arg === "-h") {
+			booleans.add(arg);
+			continue;
+		}
 		if (!arg.startsWith("--")) {
 			continue;
 		}
@@ -736,6 +798,27 @@ const parseInterval = (
 	return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
 };
 
+const parseRunArgs = (
+	rest: string[],
+):
+	| { kind: "args"; booleans: Set<string>; values: Map<string, string>; target: string }
+	| { kind: "help" } => {
+	const [target, ...flagArgs] = rest;
+	if (target === "--help" || target === "-h") {
+		showHelp();
+		return { kind: "help" };
+	}
+	if (!target || typeof target !== "string") {
+		throw new TypeError("Target is required");
+	}
+	const { booleans, values } = parseArgs(flagArgs);
+	if (booleans.has("--help") || booleans.has("-h")) {
+		showHelp();
+		return { kind: "help" };
+	}
+	return { kind: "args", booleans, values, target };
+};
+
 const runWatch = async (
 	rest: string[],
 	options: {
@@ -745,21 +828,11 @@ const runWatch = async (
 		runner?: Runner;
 	},
 ): Promise<void> => {
-	const [target, ...flagArgs] = rest;
-	if (target === "--help" || target === "-h") {
-		showHelp();
+	const parsed = parseRunArgs(rest);
+	if (parsed.kind === "help") {
 		return;
 	}
-	if (!target || typeof target !== "string") {
-		throw new TypeError("Target is required");
-	}
-	const { booleans, values } = parseArgs(flagArgs);
-
-	if (booleans.has("--help") || booleans.has("-h")) {
-		showHelp();
-		return;
-	}
-
+	const { booleans, values, target } = parsed;
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
 	const allowFix = booleans.has("--fix") ? true : undefined;
 	const dryRun = booleans.has("--dry-run") ? true : undefined;
@@ -793,21 +866,11 @@ const runStream = async (
 		runner?: Runner;
 	},
 ): Promise<void> => {
-	const [target, ...flagArgs] = rest;
-	if (target === "--help" || target === "-h") {
-		showHelp();
+	const parsed = parseRunArgs(rest);
+	if (parsed.kind === "help") {
 		return;
 	}
-	if (!target || typeof target !== "string") {
-		throw new TypeError("Target is required");
-	}
-	const { booleans, values } = parseArgs(flagArgs);
-
-	if (booleans.has("--help") || booleans.has("-h")) {
-		showHelp();
-		return;
-	}
-
+	const { booleans, values, target } = parsed;
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
 	const toStderr = booleans.has("--log") ? true : undefined;
 	const allowedUser = values.get("--user");
