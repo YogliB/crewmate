@@ -292,26 +292,60 @@ const makeFixRunner = (
 		resolveFix(file, args, { targetPath, ...options }),
 	) as unknown as Runner;
 
-describe("run default", () => {
-	it("logs a greeting with the provided arguments", async () => {
-		const log = vi.spyOn(console, "log").mockImplementation(vi.fn());
-		await run(["--pick", "up"]);
-		expect(log).toHaveBeenCalledWith("Hello from pickup!", ["--pick", "up"]);
-		log.mockRestore();
+describe("run dispatch", () => {
+	it("prints the version for --version", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		await run(["--version"]);
+		expect(write).toHaveBeenCalledWith("pickup/0.0.1\n");
+		write.mockRestore();
 	});
 
-	it("falls back to process.argv when no arguments are given", async () => {
-		const log = vi.spyOn(console, "log").mockImplementation(vi.fn());
-		await run();
-		expect(log).toHaveBeenCalledWith("Hello from pickup!", expect.any(Array));
-		log.mockRestore();
+	it("prints the version for -v", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		await run(["-v"]);
+		expect(write).toHaveBeenCalledWith("pickup/0.0.1\n");
+		write.mockRestore();
+	});
+
+	it("shows help when no subcommand is given", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		await run([]);
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("## Commands"));
+		expect(process.exitCode).toBe(NO_EXIT_CODE);
+		process.exitCode = previousExitCode;
+		write.mockRestore();
+	});
+
+	it("shows an error for an unknown subcommand", async () => {
+		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		try {
+			await run(["unknown"]);
+		} finally {
+			expect(write).toHaveBeenCalledWith(
+				"Error: Unknown command 'unknown'. Run 'pickup --help' for usage.\n",
+			);
+			expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+			process.exitCode = previousExitCode;
+			write.mockRestore();
+		}
 	});
 
 	it("runs the CLI entry point", async () => {
-		const log = vi.spyOn(console, "log").mockImplementation(vi.fn());
+		const previousArgv = process.argv;
+		const previousExitCode = process.exitCode;
+		process.argv = ["node", "pickup", "--version"];
+		process.exitCode = NO_EXIT_CODE;
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		vi.resetModules();
 		await import("./bin.js");
-		expect(log).toHaveBeenCalledWith("Hello from pickup!", expect.any(Array));
-		log.mockRestore();
+		expect(write).toHaveBeenCalledWith("pickup/0.0.1\n");
+		process.argv = previousArgv;
+		process.exitCode = previousExitCode;
+		write.mockRestore();
 	});
 });
 
