@@ -1,6 +1,6 @@
 # Architecture Overview
 
-`pickup` is a small TypeScript CLI that polls a GitHub PR for review comments mentioning `@pickup`, then replies with an explanation or a generated fix.
+`crewmate` is a small TypeScript CLI that polls a GitHub PR for review comments mentioning `@crewmate`, then replies with an explanation or a generated fix.
 
 ## Project Structure
 
@@ -30,21 +30,21 @@
 [review comment on GitHub] --gh api--> [src/index.ts] --claude--> [reply or fix] --gh api--> [posted reply]
                                                                                   |
                                                                                   v
-                                                                           [src/log.ts] --> $XDG_CONFIG_HOME/pickup/pickup.log
+                                                                           [src/log.ts] --> $XDG_CONFIG_HOME/crewmate/crewmate.log
 ```
 
-`src/index.ts` fetches comments with `gh api`. For a repo or org scope it first discovers open PRs via the `search/issues` endpoint (with a fallback to `repos/<owner>/<repo>/pulls` on older GHES), then for each PR it finds the newest unseen `@pickup` mention and either:
+`src/index.ts` fetches comments with `gh api`. For a repo or org scope it first discovers open PRs via the `search/issues` endpoint (with a fallback to `repos/<owner>/<repo>/pulls` on older GHES), then for each PR it finds the newest unseen `@crewmate` mention and either:
 
 - calls `src/fix.ts` to explain the line, or
 - calls `src/fix.ts` to generate and apply a fix when the comment contains `#fix` and `--fix` is enabled.
 
 With `--dry-run`, the generated reply or fix is written to stdout as a human-readable preview instead of posting to GitHub or committing/pushing.
 
-`src/index.ts` also implements `pickup stream`, which emits new `@pickup` mentions as NDJSON to stdout without invoking a provider or posting replies. The poll loop is shared between `watch` and `stream`: `watch` saves state before replying to avoid duplicate posts, while `stream` saves state after writing stdout to avoid event loss.
+`src/index.ts` also implements `crewmate stream`, which emits new `@crewmate` mentions as NDJSON to stdout without invoking a provider or posting replies. The poll loop is shared between `watch` and `stream`: `watch` saves state before replying to avoid duplicate posts, while `stream` saves state after writing stdout to avoid event loss.
 
 ## State
 
-Seen comment IDs are stored in `$XDG_CONFIG_HOME/pickup/state.json` as a JSON map of PR URLs to arrays of comment IDs. The file is read at the start of each poll and written before any reply is posted, so an error does not reprocess the same comment. In `--dry-run` mode, state is not written.
+Seen comment IDs are stored in `$XDG_CONFIG_HOME/crewmate/state.json` as a JSON map of PR URLs to arrays of comment IDs. The file is read at the start of each poll and written before any reply is posted, so an error does not reprocess the same comment. In `--dry-run` mode, state is not written.
 
 ## External Dependencies
 

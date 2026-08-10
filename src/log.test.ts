@@ -15,7 +15,7 @@ describe("Logger", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-logger-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-logger-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -28,7 +28,7 @@ describe("Logger", () => {
 		const logger = createLogger();
 		await logger("poll", { owner: "owner", repo: "repo", number: "123" });
 
-		const raw = await readFile(path.join(tempDir, "pickup", "pickup.log"), "utf8");
+		const raw = await readFile(path.join(tempDir, "crewmate", "crewmate.log"), "utf8");
 		const lines = parseNdjson(raw);
 
 		expect(lines).toHaveLength(1);
@@ -47,7 +47,7 @@ describe("Logger", () => {
 		const logger = createLogger();
 		await logger("poll", {});
 
-		const raw = await readFile(path.join(tempDir, ".config", "pickup", "pickup.log"), "utf8");
+		const raw = await readFile(path.join(tempDir, ".config", "crewmate", "crewmate.log"), "utf8");
 		const line = parseNdjson(raw)[0];
 		expect(line?.event).toBe("poll");
 	});
@@ -57,7 +57,7 @@ describe("Logger", () => {
 		await logger("poll", { owner: "owner" });
 		await logger("mention", { commentId: 1 });
 
-		const raw = await readFile(path.join(tempDir, "pickup", "pickup.log"), "utf8");
+		const raw = await readFile(path.join(tempDir, "crewmate", "crewmate.log"), "utf8");
 		const lines = parseNdjson(raw);
 
 		expect(lines).toHaveLength(2);
@@ -108,7 +108,7 @@ describe("Logger", () => {
 		const logger = createLogger();
 		await logger("poll", { at: "overwritten" });
 
-		const raw = await readFile(path.join(tempDir, "pickup", "pickup.log"), "utf8");
+		const raw = await readFile(path.join(tempDir, "crewmate", "crewmate.log"), "utf8");
 		const line = parseNdjson(raw)[0];
 		expect(line?.at).not.toBe("overwritten");
 		expect(typeof line?.at).toBe("string");
@@ -136,11 +136,11 @@ describe("Logger", () => {
 		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 		const blocker = path.join(tempDir, "block");
 		await writeFile(blocker, "");
-		const filePath = path.join(blocker, "pickup.log");
+		const filePath = path.join(blocker, "crewmate.log");
 		const logger = createLogger({ filePath });
 
 		await expect(logger("poll", {})).resolves.toBeUndefined();
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("Warning: pickup log failed:"));
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("Warning: crewmate log failed:"));
 
 		await rm(blocker);
 		await mkdir(blocker, { recursive: true });

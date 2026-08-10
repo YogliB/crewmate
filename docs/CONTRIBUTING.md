@@ -1,4 +1,4 @@
-# Contributing to pickup
+# Contributing to crewmate
 
 Thanks for helping out. Keep changes focused and open an issue first if you are planning something large.
 
@@ -10,8 +10,8 @@ Thanks for helping out. Keep changes focused and open an issue first if you are 
 ## Getting started
 
 ```bash
-git clone https://github.com/YogliB/pickup.git
-cd pickup
+git clone https://github.com/YogliB/crewmate.git
+cd crewmate
 nub install
 nub run build
 ```

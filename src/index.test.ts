@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import run from "./index.js";
-import { PICKUP_PREFIX, applyFix } from "./fix.js";
+import { CREWMATE_PREFIX, applyFix } from "./fix.js";
 import { createLogger, type Logger } from "./log.js";
 import { homedir, tmpdir } from "node:os";
 import type { Mention } from "./index.js";
@@ -86,7 +86,7 @@ const resolveGhExplain = (
 				JSON.stringify([
 					[
 						{
-							body: request.body ?? "@pickup hello",
+							body: request.body ?? "@crewmate hello",
 							id: FIRST_ID,
 							in_reply_to_id: null,
 							line: EXPLANATION_LINE,
@@ -180,7 +180,7 @@ const makeMultiMentionRunner = (
 						JSON.stringify([
 							[
 								{
-									body: "@pickup hello",
+									body: "@crewmate hello",
 									id: FIRST_ID,
 									in_reply_to_id: null,
 									line: EXPLANATION_LINE,
@@ -188,7 +188,7 @@ const makeMultiMentionRunner = (
 									user: { login: "alice" },
 								},
 								{
-									body: "@pickup hi",
+									body: "@crewmate hi",
 									id: SECOND_ID,
 									in_reply_to_id: null,
 									line: EXPLANATION_LINE,
@@ -222,7 +222,7 @@ const resolveGhFix = (
 				JSON.stringify([
 					[
 						{
-							body: request.body ?? "@pickup #fix",
+							body: request.body ?? "@crewmate #fix",
 							id: FIRST_ID,
 							in_reply_to_id: null,
 							line: FIRST_LINE,
@@ -296,14 +296,14 @@ describe("run dispatch", () => {
 	it("prints the version for --version", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		await run(["--version"]);
-		expect(write).toHaveBeenCalledWith("pickup/0.0.1\n");
+		expect(write).toHaveBeenCalledWith("crewmate/0.0.1\n");
 		write.mockRestore();
 	});
 
 	it("prints the version for -v", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		await run(["-v"]);
-		expect(write).toHaveBeenCalledWith("pickup/0.0.1\n");
+		expect(write).toHaveBeenCalledWith("crewmate/0.0.1\n");
 		write.mockRestore();
 	});
 
@@ -326,7 +326,7 @@ describe("run dispatch", () => {
 			await run(["unknown"]);
 		} finally {
 			expect(write).toHaveBeenCalledWith(
-				"Error: Unknown command 'unknown'. Run 'pickup --help' for usage.\n",
+				"Error: Unknown command 'unknown'. Run 'crewmate --help' for usage.\n",
 			);
 			expect(process.exitCode).toBe(ERROR_EXIT_CODE);
 			process.exitCode = previousExitCode;
@@ -337,12 +337,12 @@ describe("run dispatch", () => {
 	it("runs the CLI entry point", async () => {
 		const previousArgv = process.argv;
 		const previousExitCode = process.exitCode;
-		process.argv = ["node", "pickup", "--version"];
+		process.argv = ["node", "crewmate", "--version"];
 		process.exitCode = NO_EXIT_CODE;
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		vi.resetModules();
 		await import("./bin.js");
-		expect(write).toHaveBeenCalledWith("pickup/0.0.1\n");
+		expect(write).toHaveBeenCalledWith("crewmate/0.0.1\n");
 		process.argv = previousArgv;
 		process.exitCode = previousExitCode;
 		write.mockRestore();
@@ -369,7 +369,7 @@ describe("run watch missing", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -436,7 +436,7 @@ describe("run watch flags", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -668,14 +668,14 @@ describe("run watch flags", () => {
 	it("prints help for watch --help", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		await run(["watch", "--help"]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("pickup watch"));
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("crewmate watch"));
 		write.mockRestore();
 	});
 
 	it("prints help for watch PR_URL --help", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		await run(["watch", PR_URL, "--help"]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("pickup watch"));
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("crewmate watch"));
 		write.mockRestore();
 	});
 });
@@ -684,7 +684,7 @@ describe("run stream missing", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -714,7 +714,7 @@ describe("run stream flags", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -758,7 +758,7 @@ describe("run stream flags", () => {
 
 	it("saves state for every new mention in a multi-mention poll", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-		const runner = makeMultiMentionRunner({ conversationBody: "@pickup hi" });
+		const runner = makeMultiMentionRunner({ conversationBody: "@crewmate hi" });
 		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
 		const calls = write.mock.calls.map(([line]) => line as string);
 		const events = calls
@@ -772,7 +772,7 @@ describe("run stream flags", () => {
 
 	it("does not re-emit mentions that are already in state", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-		const runner = makeMultiMentionRunner({ conversationBody: "@pickup hi" });
+		const runner = makeMultiMentionRunner({ conversationBody: "@crewmate hi" });
 		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
 		const firstCalls = write.mock.calls.map(([line]) => line as string).length;
 		expect(firstCalls).toBeGreaterThan(0);
@@ -875,7 +875,7 @@ describe("run stream flags", () => {
 					JSON.stringify([
 						[
 							{
-								body: "@pickup hello",
+								body: "@crewmate hello",
 								id: FIRST_ID,
 								in_reply_to_id: null,
 								line: FIRST_LINE,
@@ -914,7 +914,7 @@ describe("run stream flags", () => {
 					JSON.stringify([
 						[
 							{
-								body: "@pickup hello",
+								body: "@crewmate hello",
 								id: FIRST_ID,
 								in_reply_to_id: null,
 								line: FIRST_LINE,
@@ -951,14 +951,14 @@ describe("run stream flags", () => {
 	it("prints help for stream --help", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		await run(["stream", "--help"]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("pickup stream"));
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("crewmate stream"));
 		write.mockRestore();
 	});
 
 	it("prints help for stream PR_URL --help", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		await run(["stream", PR_URL, "--help"]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("pickup stream"));
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("crewmate stream"));
 		write.mockRestore();
 	});
 
@@ -982,7 +982,7 @@ describe("run stream flags", () => {
 					JSON.stringify([
 						[
 							{
-								body: "@pickup hello",
+								body: "@crewmate hello",
 								id: FIRST_ID,
 								in_reply_to_id: null,
 								line: FIRST_LINE,
@@ -1016,7 +1016,7 @@ describe("run stream flags", () => {
 		const runner = makeExplainRunner({
 			answer: "It does something.",
 			body: "thanks",
-			conversationBody: "@pickup hello",
+			conversationBody: "@crewmate hello",
 		});
 		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
 		const calls = write.mock.calls.map(([line]) => line as string);
@@ -1234,7 +1234,7 @@ describe("state errors", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 	});
 
 	afterEach(async () => {
@@ -1253,7 +1253,7 @@ describe("state errors", () => {
 		vi.stubEnv("HOME", tempDir);
 		const state = await run.loadState();
 		expect(state).toBeDefined();
-		expect(run.statePath()).toBe(path.join(tempDir, ".config", "pickup", "state.json"));
+		expect(run.statePath()).toBe(path.join(tempDir, ".config", "crewmate", "state.json"));
 	});
 
 	it("falls back to os.homedir() when HOME is also empty", async () => {
@@ -1261,7 +1261,7 @@ describe("state errors", () => {
 		vi.stubEnv("HOME", "");
 		const state = await run.loadState();
 		expect(state).toBeDefined();
-		expect(run.statePath()).toBe(path.join(homedir(), ".config", "pickup", "state.json"));
+		expect(run.statePath()).toBe(path.join(homedir(), ".config", "crewmate", "state.json"));
 	});
 
 	it("warns and resets when the state file is corrupted", async () => {
@@ -1279,7 +1279,7 @@ describe("findNewMention", () => {
 	it("returns the newest unseen mention", () => {
 		const comments: Mention[] = [
 			{
-				body: "@pickup hello",
+				body: "@crewmate hello",
 				id: FIRST_ID,
 				kind: "review",
 				line: FIRST_LINE,
@@ -1287,7 +1287,7 @@ describe("findNewMention", () => {
 				user: { login: "alice" },
 			},
 			{
-				body: "@pickup fix",
+				body: "@crewmate fix",
 				id: SECOND_ID,
 				kind: "review",
 				line: FIRST_LINE,
@@ -1307,7 +1307,7 @@ describe("findNewMention", () => {
 			run.findNewMention(
 				[
 					{
-						body: "@pickup hello",
+						body: "@crewmate hello",
 						id: FIRST_ID,
 						inReplyToId: undefined,
 						kind: "review",
@@ -1321,7 +1321,7 @@ describe("findNewMention", () => {
 		).toBeUndefined();
 	});
 
-	it("ignores comments without @pickup", () => {
+	it("ignores comments without @crewmate", () => {
 		expect(
 			run.findNewMention(
 				[
@@ -1360,7 +1360,7 @@ describe("findNewMention", () => {
 	it("returns the newest mention when comments are out of order", () => {
 		const comments: Mention[] = [
 			{
-				body: "@pickup hello",
+				body: "@crewmate hello",
 				id: FIRST_ID,
 				kind: "review",
 				line: FIRST_LINE,
@@ -1368,7 +1368,7 @@ describe("findNewMention", () => {
 				user: { login: "alice" },
 			},
 			{
-				body: "@pickup fix",
+				body: "@crewmate fix",
 				id: THIRD_ID,
 				kind: "review",
 				line: FIRST_LINE,
@@ -1376,7 +1376,7 @@ describe("findNewMention", () => {
 				user: { login: "alice" },
 			},
 			{
-				body: "@pickup hi",
+				body: "@crewmate hi",
 				id: SECOND_ID,
 				kind: "review",
 				line: FIRST_LINE,
@@ -1391,12 +1391,12 @@ describe("findNewMention", () => {
 		}
 	});
 
-	it("ignores @pickup as a substring", () => {
+	it("ignores @crewmate as a substring", () => {
 		expect(
 			run.findNewMention(
 				[
 					{
-						body: "foo@pickup hello",
+						body: "foo@crewmate hello",
 						id: FIRST_ID,
 						kind: "review",
 						line: FIRST_LINE,
@@ -1409,11 +1409,11 @@ describe("findNewMention", () => {
 		).toBeUndefined();
 	});
 
-	it("matches @pickup inside parentheses", () => {
+	it("matches @crewmate inside parentheses", () => {
 		const mention = run.findNewMention(
 			[
 				{
-					body: "(@pickup)",
+					body: "(@crewmate)",
 					id: FIRST_ID,
 					kind: "review",
 					line: FIRST_LINE,
@@ -1432,7 +1432,7 @@ describe("findNewMention", () => {
 			run.findNewMention(
 				[
 					{
-						body: "@pickup hello",
+						body: "@crewmate hello",
 						id: FIRST_ID,
 						inReplyToId: SECOND_ID,
 						kind: "review",
@@ -1450,7 +1450,7 @@ describe("findNewMention", () => {
 		const mention = run.findNewMention(
 			[
 				{
-					body: "@pickup hello",
+					body: "@crewmate hello",
 					id: FIRST_ID,
 					inReplyToId: undefined,
 					kind: "review",
@@ -1465,11 +1465,11 @@ describe("findNewMention", () => {
 		expect(mention?.id).toBe(FIRST_ID);
 	});
 
-	it("skips a fresh install mention that already has a pickup reply (sync)", () => {
+	it("skips a fresh install mention that already has a crewmate reply (sync)", () => {
 		const mention = run.findNewMention(
 			[
 				{
-					body: "@pickup hello",
+					body: "@crewmate hello",
 					id: FIRST_ID,
 					inReplyToId: undefined,
 					kind: "review",
@@ -1478,13 +1478,13 @@ describe("findNewMention", () => {
 					user: { login: "alice" },
 				},
 				{
-					body: `${PICKUP_PREFIX} done`,
+					body: `${CREWMATE_PREFIX} done`,
 					id: SECOND_ID,
 					inReplyToId: FIRST_ID,
 					kind: "review",
 					line: FIRST_LINE,
 					path: "src/index.ts",
-					user: { login: "pickup" },
+					user: { login: "crewmate" },
 				},
 			],
 			[],
@@ -1494,11 +1494,11 @@ describe("findNewMention", () => {
 		expect(mention).toBeUndefined();
 	});
 
-	it("does not skip a fresh install mention with a non-pickup reply", () => {
+	it("does not skip a fresh install mention with a non-crewmate reply", () => {
 		const mention = run.findNewMention(
 			[
 				{
-					body: "@pickup hello",
+					body: "@crewmate hello",
 					id: FIRST_ID,
 					inReplyToId: undefined,
 					kind: "review",
@@ -1524,11 +1524,11 @@ describe("findNewMention", () => {
 		expect(mention?.id).toBe(FIRST_ID);
 	});
 
-	it("does not use the pickup reply fallback when not fresh", () => {
+	it("does not use the crewmate reply fallback when not fresh", () => {
 		const mention = run.findNewMention(
 			[
 				{
-					body: "@pickup hello",
+					body: "@crewmate hello",
 					id: FIRST_ID,
 					inReplyToId: undefined,
 					kind: "review",
@@ -1537,13 +1537,13 @@ describe("findNewMention", () => {
 					user: { login: "alice" },
 				},
 				{
-					body: `${PICKUP_PREFIX} done`,
+					body: `${CREWMATE_PREFIX} done`,
 					id: SECOND_ID,
 					inReplyToId: FIRST_ID,
 					kind: "review",
 					line: FIRST_LINE,
 					path: "src/index.ts",
-					user: { login: "pickup" },
+					user: { login: "crewmate" },
 				},
 			],
 			[],
@@ -1559,7 +1559,7 @@ describe("findNewMentions", () => {
 	it("returns all new mentions sorted by id descending", () => {
 		const comments: Mention[] = [
 			{
-				body: "@pickup hello",
+				body: "@crewmate hello",
 				id: FIRST_ID,
 				inReplyToId: undefined,
 				kind: "review",
@@ -1568,7 +1568,7 @@ describe("findNewMentions", () => {
 				user: { login: "alice" },
 			},
 			{
-				body: "@pickup fix",
+				body: "@crewmate fix",
 				id: SECOND_ID,
 				inReplyToId: undefined,
 				kind: "review",
@@ -1602,7 +1602,7 @@ describe("watch explain", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -1654,7 +1654,7 @@ describe("watch explain", () => {
 						JSON.stringify([
 							[
 								{
-									body: "@pickup hello",
+									body: "@crewmate hello",
 									id: FIRST_ID,
 									in_reply_to_id: null,
 									line: FIRST_LINE,
@@ -1662,12 +1662,12 @@ describe("watch explain", () => {
 									user: { login: "alice" },
 								},
 								{
-									body: `${PICKUP_PREFIX} done`,
+									body: `${CREWMATE_PREFIX} done`,
 									id: SECOND_ID,
 									in_reply_to_id: FIRST_ID,
 									line: FIRST_LINE,
 									path: "src/index.ts",
-									user: { login: "pickup" },
+									user: { login: "crewmate" },
 								},
 							],
 						]),
@@ -1686,7 +1686,7 @@ describe("watch explain", () => {
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
 	});
 
-	it("keeps suppressed pickup replies out of the next poll", async () => {
+	it("keeps suppressed crewmate replies out of the next poll", async () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			if (file === "claude") {
 				return Promise.resolve("It does something.");
@@ -1698,7 +1698,7 @@ describe("watch explain", () => {
 						JSON.stringify([
 							[
 								{
-									body: "@pickup hello",
+									body: "@crewmate hello",
 									id: FIRST_ID,
 									in_reply_to_id: null,
 									line: FIRST_LINE,
@@ -1706,12 +1706,12 @@ describe("watch explain", () => {
 									user: { login: "alice" },
 								},
 								{
-									body: `${PICKUP_PREFIX} done`,
+									body: `${CREWMATE_PREFIX} done`,
 									id: SECOND_ID,
 									in_reply_to_id: FIRST_ID,
 									line: FIRST_LINE,
 									path: "src/index.ts",
-									user: { login: "pickup" },
+									user: { login: "crewmate" },
 								},
 							],
 						]),
@@ -1722,7 +1722,7 @@ describe("watch explain", () => {
 						JSON.stringify([
 							[
 								{
-									body: "@pickup hi",
+									body: "@crewmate hi",
 									id: THIRD_ID,
 									user: { login: "alice" },
 								},
@@ -1770,7 +1770,7 @@ describe("watch explain", () => {
 		expect(state.get(PR_URL)).toEqual(["review:2", "review:1"]);
 	});
 	it("saves state for the handled mentions when one fails", async () => {
-		const runner = makeMultiMentionRunner({ failOn: "claude @pickup hello" });
+		const runner = makeMultiMentionRunner({ failOn: "claude @crewmate hello" });
 		await expect(
 			run.watch(PR_URL, {
 				interval: NO_INTERVAL,
@@ -1833,7 +1833,7 @@ describe("watch users missing", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -1851,7 +1851,7 @@ describe("watch users missing", () => {
 					JSON.stringify([
 						[
 							{
-								body: "@pickup hello",
+								body: "@crewmate hello",
 								id: FIRST_ID,
 								in_reply_to_id: null,
 								line: FIRST_LINE,
@@ -1881,7 +1881,7 @@ describe("watch users invalid", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -1899,7 +1899,7 @@ describe("watch users invalid", () => {
 					JSON.stringify([
 						[
 							{
-								body: "@pickup hello",
+								body: "@crewmate hello",
 								id: FIRST_ID,
 								line: FIRST_LINE,
 								path: "src/index.ts",
@@ -1929,7 +1929,7 @@ describe("watch users null", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -1940,7 +1940,7 @@ describe("watch users null", () => {
 
 	it("handles comments with a null user", async () => {
 		const nullUser = JSON.parse('{"user":null}');
-		const base = { body: "@pickup hello", id: FIRST_ID, line: FIRST_LINE, path: "src/index.ts" };
+		const base = { body: "@crewmate hello", id: FIRST_ID, line: FIRST_LINE, path: "src/index.ts" };
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
 			const endpoint = findEndpoint(args);
@@ -1967,7 +1967,7 @@ describe("watch iterations", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -1998,7 +1998,7 @@ describe("watch iterations", () => {
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
 	});
 
-	it("skips a fresh install mention that already has a pickup reply (async)", async () => {
+	it("skips a fresh install mention that already has a crewmate reply (async)", async () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
 			const endpoint = findEndpoint(args);
@@ -2007,7 +2007,7 @@ describe("watch iterations", () => {
 					JSON.stringify([
 						[
 							{
-								body: "@pickup hello",
+								body: "@crewmate hello",
 								id: FIRST_ID,
 								in_reply_to_id: null,
 								line: FIRST_LINE,
@@ -2015,12 +2015,12 @@ describe("watch iterations", () => {
 								user: { login: "alice" },
 							},
 							{
-								body: `${PICKUP_PREFIX} done`,
+								body: `${CREWMATE_PREFIX} done`,
 								id: SECOND_ID,
 								in_reply_to_id: FIRST_ID,
 								line: FIRST_LINE,
 								path: "src/index.ts",
-								user: { login: "pickup" },
+								user: { login: "crewmate" },
 							},
 						],
 					]),
@@ -2050,7 +2050,7 @@ describe("watch fix success", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 		process.chdir(tempDir);
 	});
@@ -2124,7 +2124,7 @@ describe("watch fix success", () => {
 		await mkdir(targetDir, { recursive: true });
 		await writeFile(path.resolve(targetPath), "old");
 
-		const runner = makeFixRunner(targetPath, { body: "@pickup fix", fixed: "new" });
+		const runner = makeFixRunner(targetPath, { body: "@crewmate fix", fixed: "new" });
 		await run.watch(PR_URL, {
 			allowFix: true,
 			interval: NO_INTERVAL,
@@ -2142,7 +2142,7 @@ describe("watch fix success", () => {
 		await mkdir(targetDir, { recursive: true });
 		await writeFile(path.resolve(targetPath), "old");
 
-		const runner = makeFixRunner(targetPath, { body: "@pickup #fixme", fixed: "new" });
+		const runner = makeFixRunner(targetPath, { body: "@crewmate #fixme", fixed: "new" });
 		await run.watch(PR_URL, {
 			allowFix: true,
 			interval: NO_INTERVAL,
@@ -2276,7 +2276,7 @@ describe("watch dry-run", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 		process.chdir(tempDir);
 		await mkdir(path.resolve("src"), { recursive: true });
@@ -2381,7 +2381,7 @@ describe("watch fix missing", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 		process.chdir(tempDir);
 	});
@@ -2408,7 +2408,7 @@ describe("watch fix empty", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 		process.chdir(tempDir);
 	});
@@ -2440,7 +2440,7 @@ describe("watch fix errors", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 		process.chdir(tempDir);
 	});
@@ -2601,7 +2601,7 @@ describe("conversation comments", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -2614,7 +2614,7 @@ describe("conversation comments", () => {
 		const runner = makeExplainRunner({
 			answer: "It does something.",
 			body: "hello",
-			conversationBody: "@pickup hello",
+			conversationBody: "@crewmate hello",
 		});
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 
@@ -2635,7 +2635,7 @@ describe("conversation comments", () => {
 		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
 		const runner = makeFixRunner("src/index.ts", {
 			body: "hello",
-			conversationBody: "@pickup #fix",
+			conversationBody: "@crewmate #fix",
 			fixed: "No problem.",
 		});
 		await run.watch(PR_URL, {
@@ -2667,7 +2667,7 @@ describe("conversation comments", () => {
 		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
 		const runner = makeFixRunner("src/index.ts", {
 			body: "hello",
-			conversationBody: "@pickup #fixme",
+			conversationBody: "@crewmate #fixme",
 			fixed: "No problem.",
 		});
 		await run.watch(PR_URL, {
@@ -2686,7 +2686,7 @@ describe("conversation comments", () => {
 	it("keeps #fix in conversation comments when --fix is not set", async () => {
 		const runner = makeFixRunner("src/index.ts", {
 			body: "hello",
-			conversationBody: "@pickup #fix",
+			conversationBody: "@crewmate #fix",
 			fixed: "No problem.",
 		});
 		await run.watch(PR_URL, {
@@ -2707,7 +2707,7 @@ describe("conversation comments", () => {
 					JSON.stringify([
 						[
 							{
-								body: "@pickup hello",
+								body: "@crewmate hello",
 								id: FIRST_ID,
 								in_reply_to_id: null,
 								line: FIRST_LINE,
@@ -2723,7 +2723,7 @@ describe("conversation comments", () => {
 					JSON.stringify([
 						[
 							{
-								body: "@pickup hi",
+								body: "@crewmate hi",
 								id: SECOND_ID,
 								user: { login: "alice" },
 							},
@@ -2768,7 +2768,7 @@ describe("conversation comments", () => {
 		const runner = makeExplainRunner({
 			answer: "It does something.",
 			body: "",
-			conversationBody: "@pickup hello",
+			conversationBody: "@crewmate hello",
 		});
 		await run.watch(PR_URL, {
 			interval: NO_INTERVAL,
@@ -2785,7 +2785,7 @@ describe("conversation comments", () => {
 		const runner = makeExplainRunner({
 			answer: "",
 			body: "",
-			conversationBody: "@pickup hello",
+			conversationBody: "@crewmate hello",
 		});
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 		expect(warn).toHaveBeenCalledWith("Warning: claude returned empty conversation response\n");
@@ -2798,7 +2798,7 @@ describe("conversation comments", () => {
 		const runner = makeExplainRunner({
 			answer: "",
 			body: "",
-			conversationBody: "@pickup hello",
+			conversationBody: "@crewmate hello",
 			provider: "my-llm",
 		});
 		await run.watch(PR_URL, {
@@ -2821,7 +2821,7 @@ describe("conversation comments", () => {
 			}
 			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
 				return Promise.resolve(
-					JSON.stringify([[[{ body: "@pickup hello", id: "3", user: { login: "alice" } }]]]),
+					JSON.stringify([[[{ body: "@crewmate hello", id: "3", user: { login: "alice" } }]]]),
 				);
 			}
 			if (file === "gh" && (command === "--version" || command === "auth")) {
@@ -2853,7 +2853,7 @@ describe("conversation comments", () => {
 					JSON.stringify([
 						[
 							{
-								body: "@pickup hello",
+								body: "@crewmate hello",
 								id: FIRST_ID,
 								in_reply_to_id: null,
 								line: FIRST_LINE,
@@ -2913,7 +2913,7 @@ describe("run help", () => {
 	});
 });
 
-const logFilePath = (tempDir: string): string => path.join(tempDir, "pickup", "pickup.log");
+const logFilePath = (tempDir: string): string => path.join(tempDir, "crewmate", "crewmate.log");
 
 const parseNdjson = (raw: string): Record<string, unknown>[] =>
 	raw
@@ -2929,7 +2929,7 @@ describe("logs", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-logs-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-logs-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -2981,8 +2981,8 @@ describe("logs", () => {
 	});
 
 	it("logs a warning when the state file is corrupted", async () => {
-		await mkdir(path.join(tempDir, "pickup"), { recursive: true });
-		await writeFile(path.join(tempDir, "pickup", "state.json"), "not json");
+		await mkdir(path.join(tempDir, "crewmate"), { recursive: true });
+		await writeFile(path.join(tempDir, "crewmate", "state.json"), "not json");
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 
@@ -3109,7 +3109,7 @@ describe("watch config", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-config-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-config-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 		process.chdir(tempDir);
 		await mkdir(path.join(tempDir, "src"), { recursive: true });
@@ -3135,13 +3135,13 @@ describe("watch config", () => {
 
 	it("loads config from repo and global config files", async () => {
 		await writeFile(
-			path.join(tempDir, ".pickup.json"),
+			path.join(tempDir, ".crewmate.json"),
 			JSON.stringify({ prompt: "repo prompt", provider: "my-llm" }),
 			"utf8",
 		);
-		await mkdir(path.join(tempDir, "pickup"), { recursive: true });
+		await mkdir(path.join(tempDir, "crewmate"), { recursive: true });
 		await writeFile(
-			path.join(tempDir, "pickup", "config.json"),
+			path.join(tempDir, "crewmate", "config.json"),
 			JSON.stringify({ defaults: { interval: 30 } }),
 			"utf8",
 		);
@@ -3157,7 +3157,7 @@ describe("watch config", () => {
 		const runner = makeMultiMentionRunner();
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		await writeFile(
-			path.join(tempDir, ".pickup.json"),
+			path.join(tempDir, ".crewmate.json"),
 			JSON.stringify({ prompt: "repo prompt", interval: "fast" }),
 			"utf8",
 		);
@@ -3257,7 +3257,7 @@ describe("scope targets", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -3606,7 +3606,7 @@ describe("scope targets", () => {
 	const makeScopeRunner = ({
 		prUrl = SCOPE_PR_URL,
 		rawContent = "example",
-		body = "@pickup hello",
+		body = "@crewmate hello",
 		filePath = "src/index.ts",
 	}: {
 		prUrl?: string;
@@ -3730,7 +3730,7 @@ describe("scope targets", () => {
 						JSON.stringify([
 							[
 								{
-									body: "@pickup hello",
+									body: "@crewmate hello",
 									id: FIRST_ID,
 									in_reply_to_id: null,
 									line: FIRST_LINE,
@@ -3787,7 +3787,7 @@ describe("scope targets", () => {
 						JSON.stringify([
 							[
 								{
-									body: "@pickup hello",
+									body: "@crewmate hello",
 									id: FIRST_ID,
 									in_reply_to_id: null,
 									line: FIRST_LINE,
@@ -3874,7 +3874,7 @@ describe("scope targets", () => {
 
 	it("disables --fix for repo scope and logs a warning", async () => {
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeScopeRunner({ body: "@pickup #fix" });
+		const runner = makeScopeRunner({ body: "@crewmate #fix" });
 		await run.watch(REPO_TARGET, {
 			allowFix: true,
 			interval: NO_INTERVAL,
@@ -3967,7 +3967,7 @@ describe("scope targets", () => {
 						JSON.stringify([
 							[
 								{
-									body: "@pickup hello",
+									body: "@crewmate hello",
 									id: FIRST_ID,
 									in_reply_to_id: null,
 									line: FIRST_LINE,
@@ -4025,7 +4025,7 @@ describe("scope targets", () => {
 						JSON.stringify([
 							[
 								{
-									body: "@pickup hello",
+									body: "@crewmate hello",
 									id: FIRST_ID,
 									in_reply_to_id: null,
 									line: FIRST_LINE,

@@ -1,22 +1,22 @@
 {
-	"name": "pickup",
+	"name": "crewmate",
 	"version": "0.0.1",
-	"description": "A CLI that watches GitHub PR comments for @pickup mentions and replies with explanations or generated fixes.",
+	"description": "A CLI that watches GitHub PR comments for @crewmate mentions and replies with explanations or generated fixes.",
 	"keywords": [
 		"cli"
 	],
-	"homepage": "https://github.com/YogliB/pickup#readme",
+	"homepage": "https://github.com/YogliB/crewmate#readme",
 	"bugs": {
-		"url": "https://github.com/YogliB/pickup/issues"
+		"url": "https://github.com/YogliB/crewmate/issues"
 	},
 	"license": "MIT",
 	"author": "YogliB <me@yogev.dev>",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/YogliB/pickup.git"
+		"url": "git+https://github.com/YogliB/crewmate.git"
 	},
 	"bin": {
-		"pickup": "dist/bin.js"
+		"crewmate": "dist/bin.js"
 	},
 	"files": [
 		"assets",

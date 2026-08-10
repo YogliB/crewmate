@@ -7,7 +7,7 @@ type Logger = (event: string, fields?: Record<string, unknown>) => Promise<void>
 
 const createLogger =
 	({
-		filePath = path.join(path.dirname(statePath()), "pickup.log"),
+		filePath = path.join(path.dirname(statePath()), "crewmate.log"),
 		toStderr = false,
 	}: { filePath?: string; toStderr?: boolean } = {}): Logger =>
 	async (event, fields = {}) => {
@@ -22,7 +22,7 @@ const createLogger =
 			const message = String(error);
 			const warning = toStderr
 				? JSON.stringify({ event: "warning", message, at }) + "\n"
-				: `Warning: pickup log failed: ${message}\n`;
+				: `Warning: crewmate log failed: ${message}\n`;
 			try {
 				process.stderr.write(warning);
 			} catch {}

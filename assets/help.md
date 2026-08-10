@@ -1,10 +1,10 @@
-# pickup
+# crewmate
 
-A CLI that watches GitHub PR comments (review and conversation) for `@pickup` mentions and replies with explanations or generated fixes.
+A CLI that watches GitHub PR comments (review and conversation) for `@crewmate` mentions and replies with explanations or generated fixes.
 
 ## Commands
 
-### `pickup watch <target> [options]`
+### `crewmate watch <target> [options]`
 
 `<target>` can be:
 
@@ -26,9 +26,9 @@ A CLI that watches GitHub PR comments (review and conversation) for `@pickup` me
 
 `--fix` is only supported for single-PR targets. It is disabled for repo or org scope.
 
-### `pickup stream <target> [options]`
+### `crewmate stream <target> [options]`
 
-Emit new `@pickup` mentions as NDJSON to stdout without invoking the provider or posting replies. Use this to feed an agent or another pipeline.
+Emit new `@crewmate` mentions as NDJSON to stdout without invoking the provider or posting replies. Use this to feed an agent or another pipeline.
 
 `<target>` can be a single PR, a repo, an org, or a GHES full URL, the same as for `watch`.
 
@@ -40,23 +40,23 @@ Emit new `@pickup` mentions as NDJSON to stdout without invoking the provider or
 
 Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and for review comments `path` and `line`. State is saved after the line is written, so a restart re-fetches but does not re-emit already seen mentions.
 
-### `pickup init`
+### `crewmate init`
 
-Interactive one-time setup that prompts for `provider`, `model`, `interval`, `user`, `prompt`, and `fix` defaults, then writes them to `$XDG_CONFIG_HOME/pickup/config.json`.
+Interactive one-time setup that prompts for `provider`, `model`, `interval`, `user`, `prompt`, and `fix` defaults, then writes them to `$XDG_CONFIG_HOME/crewmate/config.json`.
 
 ## Configuration
 
 Configuration is read from:
 
-- `$XDG_CONFIG_HOME/pickup/config.json` for global defaults and per-repo profiles.
-- `.pickup.json` in the repository root for per-repo overrides.
+- `$XDG_CONFIG_HOME/crewmate/config.json` for global defaults and per-repo profiles.
+- `.crewmate.json` in the repository root for per-repo overrides.
 
-CLI flags win, then per-repo `.pickup.json`, then the global config. In the global file, `profiles["owner/repo"]` takes precedence over `defaults`.
+CLI flags win, then per-repo `.crewmate.json`, then the global config. In the global file, `profiles["owner/repo"]` takes precedence over `defaults`.
 
-`.pickup.json` is consulted when `pickup watch` or `pickup stream` is run on a single PR inside that repository's working tree. `pickup watch` in `repo` or `org` scope runs outside the target repository and uses only the global config.
+`.crewmate.json` is consulted when `crewmate watch` or `crewmate stream` is run on a single PR inside that repository's working tree. `crewmate watch` in `repo` or `org` scope runs outside the target repository and uses only the global config.
 
-State is persisted in `$XDG_CONFIG_HOME/pickup/state.json`.
-Structured logs are always appended to `$XDG_CONFIG_HOME/pickup/pickup.log`; use `--log` to also mirror them to stderr.
+State is persisted in `$XDG_CONFIG_HOME/crewmate/state.json`.
+Structured logs are always appended to `$XDG_CONFIG_HOME/crewmate/crewmate.log`; use `--log` to also mirror them to stderr.
 Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, and `info`; see the README for the full schema.
 
 ## Caveats
@@ -66,7 +66,7 @@ Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, and `i
 - Repo and org scope discover open PRs with the GitHub search API; large scopes may hit rate limits. Use a longer `--interval` for big organizations.
 - `--fix` is disabled for repo and org scope; only single-PR mode can generate and push fixes.
 - Scope mode fetches file content from the GitHub API, so it does not need a local clone.
-- Each poll processes every new unseen `@pickup` mention; additional polls handle comments added after the current poll.
+- Each poll processes every new unseen `@crewmate` mention; additional polls handle comments added after the current poll.
 - For single-PR targets, run from a clean repository; `gh pr checkout` will fail if the working tree has uncommitted changes.
 - For single-PR targets, `--dry-run` still runs `gh pr checkout`; it only skips posting replies and committing/pushing fixes.
 - If `git push` fails after a fix is committed, the commit remains local and must be pushed manually.

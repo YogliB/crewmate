@@ -1,10 +1,10 @@
-# Plan: Add `pickup stream` subcommand and remove `--json`
+# Plan: Add `crewmate stream` subcommand and remove `--json`
 
 **Shape:** One repo, one PR.
 
 ## Goal
 
-Add `pickup stream` as a new subcommand that emits new `@pickup` mentions as NDJSON to stdout without invoking the provider or posting replies. Refactor the poll loop into a shared `pollMentions` helper used by both `watch` and `stream`. Remove the dry-run-only `--json` flag to simplify the CLI surface.
+Add `crewmate stream` as a new subcommand that emits new `@crewmate` mentions as NDJSON to stdout without invoking the provider or posting replies. Refactor the poll loop into a shared `pollMentions` helper used by both `watch` and `stream`. Remove the dry-run-only `--json` flag to simplify the CLI surface.
 
 ## Files
 
@@ -21,7 +21,7 @@ Add `pickup stream` as a new subcommand that emits new `@pickup` mentions as NDJ
 
 ## Context
 
-`pickup` has `watch` and `init`. `watch` currently polls via `pollIteration`, which calls `respondToMention` → `dispatchMention` and may invoke a provider and `gh pr checkout`. `fetchMentions` and `findNewMentions` are local helpers in `src/index.ts`.
+`crewmate` has `watch` and `init`. `watch` currently polls via `pollIteration`, which calls `respondToMention` → `dispatchMention` and may invoke a provider and `gh pr checkout`. `fetchMentions` and `findNewMentions` are local helpers in `src/index.ts`.
 
 `Mention` shape from `src/fix.ts`:
 
@@ -31,7 +31,7 @@ export type Mention =
 	| (MentionBase & { kind: "review"; path: string; line: number });
 ```
 
-`getLogin` extracts `user?.login`. State is a map of PR URLs to `kind:id` strings. The logger writes NDJSON to `pickup.log` and optionally mirrors to stderr.
+`getLogin` extracts `user?.login`. State is a map of PR URLs to `kind:id` strings. The logger writes NDJSON to `crewmate.log` and optionally mirrors to stderr.
 
 `Profile` currently includes `json?: boolean` and `dryRun?: boolean`. `--json` only works with `--dry-run`:
 
@@ -54,7 +54,7 @@ for (let index = 0; index < iterations; index += 1) {
 }
 ```
 
-`findNewMentions` filters for comments with `inReplyToId === undefined`. The current `pollIteration` seeds fresh state with `pickupRepliedIds` to avoid re-emitting already-answered review comments.
+`findNewMentions` filters for comments with `inReplyToId === undefined`. The current `pollIteration` seeds fresh state with `crewmateRepliedIds` to avoid re-emitting already-answered review comments.
 
 `VALUE_FLAGS` in `src/index.ts` makes `--provider`, `--model`, `--prompt`, `--user`, `--interval` value-form flags. `runStream` must also check the `values` map when warning about unsupported flags.
 
@@ -65,8 +65,8 @@ Verification: `nub run build`, `typecheck`, `test:ci`, `lint:ci`, `format:ci`, `
 ## Scope
 
 - **In Scope:**
-  - Add `pickup stream <pr-url-or-shorthand> [options]`.
-  - `stream` emits one NDJSON line per new `@pickup` mention to stdout, saves state, and does nothing else.
+  - Add `crewmate stream <pr-url-or-shorthand> [options]`.
+  - `stream` emits one NDJSON line per new `@crewmate` mention to stdout, saves state, and does nothing else.
   - Extract a shared `pollMentions` helper used by `watch` and `stream`.
   - `stream` supports `--interval`, `--user`, `--log`, and `--help`.
   - Remove the `--json` flag, `Profile.json`, and JSON dry-run output branches.
@@ -94,13 +94,13 @@ High (directly requested).
 
 ## Logging / Observability
 
-- `stream` logs `poll` and `mention` to `pickup.log` and stderr when `--log` is set.
+- `stream` logs `poll` and `mention` to `crewmate.log` and stderr when `--log` is set.
 - `stream` writes NDJSON to stdout; this is command output, not a log event.
 
 ## Branch setup
 
 - [ ] `git checkout main` then `git pull`
-- [ ] `git checkout -b yogev/pickup-stream`
+- [ ] `git checkout -b yogev/crewmate-stream`
 
 ## Implementation Plan (TODOs)
 
@@ -110,7 +110,7 @@ High (directly requested).
   - [ ] Export `stream` from `run` for tests.
 - [ ] **Step 2: Extract shared `pollMentions` helper**
   - [ ] Define `pollMentions(prUrl, { runner, iterations, interval, allowedUser, logger, warn, onMention, dryRun, saveAfterEmit })` in `src/index.ts`.
-  - [ ] Implement: load state, `fetchMentions`, seed `pickupRepliedIds` on fresh state, `findNewMentions`, call `onMention`, save state before `onMention` when `!saveAfterEmit` / after `onMention` when `saveAfterEmit`, sleep.
+  - [ ] Implement: load state, `fetchMentions`, seed `crewmateRepliedIds` on fresh state, `findNewMentions`, call `onMention`, save state before `onMention` when `!saveAfterEmit` / after `onMention` when `saveAfterEmit`, sleep.
   - [ ] Refactor `watch` to use `pollMentions` with `onMention` that calls `respondToMention`; `saveAfterEmit` defaults to `false` so `watch` keeps its existing save-before-reply behavior.
 - [ ] **Step 3: Implement `stream` polling**
   - [ ] Add `stream` command setup: `gh --version`, `gh auth status --hostname <host>`, optional `git rev-parse --show-toplevel`.
@@ -145,8 +145,8 @@ High (directly requested).
   - [ ] Remove or update existing `--json` tests in `src/index.test.ts`.
   - [ ] Update `src/config.test.ts` if it tests `json`.
 - [ ] **Step 6: Update documentation**
-  - [ ] Update `assets/help.md` for `pickup stream` and remove `--json`.
-  - [ ] Update `README.md` for `pickup stream`, remove `--json`, update TBD (remove "Stream mode" bullet, keep "Agent stream skill").
+  - [ ] Update `assets/help.md` for `crewmate stream` and remove `--json`.
+  - [ ] Update `README.md` for `crewmate stream`, remove `--json`, update TBD (remove "Stream mode" bullet, keep "Agent stream skill").
   - [ ] Update `docs/ARCHITECTURE.md` to describe `stream` and remove the `--json` dry-run sentence.
   - [ ] Update `docs/CHANGELOG.md` with the breaking change and new command.
 
@@ -181,11 +181,11 @@ High (directly requested).
 
 ## Acceptance
 
-- [ ] `pickup stream owner/repo/pull/4` emits one NDJSON line per new `@pickup` mention.
-- [ ] `pickup stream` does not invoke the provider, post replies, or run `gh pr checkout`.
-- [ ] `pickup stream` saves state after stdout and does not re-emit seen mentions on a clean restart.
-- [ ] `pickup stream` can run outside a git working tree (uses global config only).
-- [ ] `pickup watch --dry-run` still prints a human-readable preview.
+- [ ] `crewmate stream owner/repo/pull/4` emits one NDJSON line per new `@crewmate` mention.
+- [ ] `crewmate stream` does not invoke the provider, post replies, or run `gh pr checkout`.
+- [ ] `crewmate stream` saves state after stdout and does not re-emit seen mentions on a clean restart.
+- [ ] `crewmate stream` can run outside a git working tree (uses global config only).
+- [ ] `crewmate watch --dry-run` still prints a human-readable preview.
 - [ ] `--json` is removed from CLI, help, README, schema, and config.
 
 ## References

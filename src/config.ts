@@ -43,7 +43,7 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 
 const globalConfigPath = (): string => path.join(path.dirname(statePath()), "config.json");
 
-const repoConfigPath = (repoRoot: string): string => path.join(repoRoot, ".pickup.json");
+const repoConfigPath = (repoRoot: string): string => path.join(repoRoot, ".crewmate.json");
 
 const errorMessage = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
@@ -211,11 +211,11 @@ const loadRepoConfig = async (
 
 	const { profile, warnings } = validateProfile(raw);
 	if (profile.fix) {
-		warnings.push("repo .pickup.json enables --fix; only run pickup in repositories you trust");
+		warnings.push("repo .crewmate.json enables --fix; only run crewmate in repositories you trust");
 	}
 	if (profile.provider && /[\\/]|^\./.test(profile.provider)) {
 		warnings.push(
-			"repo .pickup.json uses a local/relative LLM provider; only run pickup in repositories you trust",
+			"repo .crewmate.json uses a local/relative LLM provider; only run crewmate in repositories you trust",
 		);
 	}
 	await warnAll(warnings, "repo", filePath, onWarning);

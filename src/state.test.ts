@@ -15,7 +15,7 @@ describe("state", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-state-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-state-"));
 	});
 
 	afterEach(async () => {
@@ -30,20 +30,20 @@ describe("state", () => {
 
 		it("uses XDG_CONFIG_HOME", () => {
 			vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-			expect(statePath()).toBe(path.join(tempDir, "pickup", "state.json"));
+			expect(statePath()).toBe(path.join(tempDir, "crewmate", "state.json"));
 		});
 
 		it("uses HOME", () => {
 			vi.stubEnv("XDG_CONFIG_HOME", "");
 			vi.stubEnv("HOME", tempDir);
-			expect(statePath()).toBe(path.join(tempDir, ".config", "pickup", "state.json"));
+			expect(statePath()).toBe(path.join(tempDir, ".config", "crewmate", "state.json"));
 		});
 
 		it("falls back to os.homedir()", () => {
 			vi.stubEnv("XDG_CONFIG_HOME", "");
 			vi.stubEnv("HOME", "");
 			vi.mocked(homedir).mockReturnValueOnce(tempDir);
-			expect(statePath()).toBe(path.join(tempDir, ".config", "pickup", "state.json"));
+			expect(statePath()).toBe(path.join(tempDir, ".config", "crewmate", "state.json"));
 		});
 
 		it("falls back to the current directory when os.homedir() throws", () => {
@@ -52,7 +52,7 @@ describe("state", () => {
 			vi.mocked(homedir).mockImplementationOnce(() => {
 				throw new Error("no home");
 			});
-			expect(statePath()).toBe(path.join(process.cwd(), ".config", "pickup", "state.json"));
+			expect(statePath()).toBe(path.join(process.cwd(), ".config", "crewmate", "state.json"));
 		});
 	});
 
