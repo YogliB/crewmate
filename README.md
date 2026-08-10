@@ -9,8 +9,16 @@ Watch GitHub PR comments (review and conversation) for `@pickup` mentions and re
 You need:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated.
-- A `claude`-shaped CLI in your PATH (default is `claude`; use `--provider` to swap).
+- An LLM provider CLI in your PATH. The default is `claude` (Anthropic's CLI), but you can use any `claude`-shaped CLI (`--version`, `--model`, `-p`) via `--provider` or config. Wrap other tools in a shim if needed.
 - A clean git working tree if you are watching a single PR.
+
+## Caveats
+
+- **Provider default is `claude`**. If you don't have `claude` installed, set a different provider in `pickup init`, in your config, or with `--provider <command>`.
+- **`--fix` only works for single-PR review comments** that contain the tag `#fix`. It is disabled for repo or org scope, and conversation comments cannot request fixes.
+- **`--dry-run` still runs `gh pr checkout`** for single-PR targets. It skips posting replies and committing/pushing, but it may still touch your working tree.
+- **Conversation comments may be reprocessed** if the state file is lost, because GitHub does not expose a parent id for top-level conversation replies.
+- **Repo and org scope use the GitHub search API**. Large scopes may hit rate limits; use a longer `--interval` for big organizations.
 
 ## Install
 
@@ -124,11 +132,7 @@ pickup watch owner/repo/pull/4 --fix --user myorg-bot
 ## Notes
 
 - Each poll processes every new unseen `@pickup` mention; additional polls handle comments added after the current poll.
-- For single-PR targets, `gh pr checkout` needs a clean working tree, so commit or stash your own changes first.
-- For single-PR targets, `--dry-run` still runs `gh pr checkout` and may change the working tree; it only skips posting replies and committing/pushing fixes.
 - If a fix is committed but `git push` fails, the commit stays local. Push it yourself once the problem is fixed.
-- `--provider` expects a `claude`-shaped CLI (`--version`, `--model`, `-p`). Wrap other tools in a shim.
-- General PR conversation comments are handled in addition to diff-level review comments. Conversation replies are not threaded, do not support `#fix`, and cannot be linked to their original mention on a fresh install (missing parent id), so they may be reprocessed if state is lost.
 
 ## TBD
 
