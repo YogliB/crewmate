@@ -1,6 +1,6 @@
 # crewmate
 
-<img src="assets/logo.png" alt="crewmate mascot" width="120" />
+<img src="assets/logo.webp" alt="crewmate mascot" width="120" />
 
 Watch GitHub PR comments (review and conversation) for `@crewmate` mentions and reply with an explanation or a generated fix.
 
