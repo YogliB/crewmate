@@ -54,29 +54,41 @@ Fields:
 1. Parse each NDJSON line as JSON.
 2. If `event !== "mention"`, skip.
 3. Inspect `body` and `kind`.
-4. If `kind === "review"` and `body` matches `#fix` (case-insensitive), run `pickup watch <url> --fix` to generate and push a fix.
-5. If `kind === "conversation"` and `body` contains `#fix`, do not attempt a fix — pickup rejects these. Reply with `pickup watch <url>` or post a manual comment.
-6. If you only need an explanation, run `pickup watch <url>` to let pickup reply.
-7. If you want custom behavior, reply manually:
-   - Review comment reply: `gh api repos/<owner>/<repo>/pulls/<number>/comments -f body=<text> -f in_reply_to=<commentId>`.
+4. If you want `pickup` to reply, explain, or fix, run `pickup watch <url>` or `pickup watch <url> --fix` **instead of** `pickup stream`. `pickup stream` and `pickup watch` share the same state file, so a mention emitted by stream is already marked as seen and `pickup watch` would skip it.
+5. If you are building a custom responder on top of `pickup stream`, reply manually:
+   - Review comment reply: `gh api repos/<owner>/<repo>/pulls/<number>/comments/<commentId>/replies -f body=<text>`.
    - Conversation comment: `gh api repos/<owner>/<repo>/issues/<number>/comments -f body=<text>`.
-8. Do not double-post; `pickup` already tracks seen comment ids in `$XDG_CONFIG_HOME/pickup/state.json` and saves state after each stdout write in stream mode.
+6. Do not double-post; `pickup` already tracks seen comment ids in `$XDG_CONFIG_HOME/pickup/state.json` and saves state after each stdout write in stream mode.
 
 ## Example one-shot handler
+
+A custom responder that posts a manual reply. This is useful when you want different behavior from `pickup watch`.
 
 ```bash
 pickup stream owner/repo/pull/4 --user myorg-bot | while IFS= read -r line; do
 	event=$(echo "$line" | jq -r '.event')
 	[ "$event" = "mention" ] || continue
-	url=$(echo "$line" | jq -r '.url')
+
+	owner=$(echo "$line" | jq -r '.owner')
+	repo=$(echo "$line" | jq -r '.repo')
+	number=$(echo "$line" | jq -r '.number')
+	commentId=$(echo "$line" | jq -r '.commentId')
 	kind=$(echo "$line" | jq -r '.kind')
 	body=$(echo "$line" | jq -r '.body')
+
 	if [ "$kind" = "review" ] && printf '%s' "$body" | grep -qi '#fix'; then
-		pickup watch "$url" --fix
+		# Generate and apply your own fix, then reply to the review comment.
+		reply="Got it — I'll push a fix for this."
+		gh api "repos/${owner}/${repo}/pulls/${number}/comments/${commentId}/replies" -f "body=${reply}"
 	else
-		pickup watch "$url"
+		reply="Looking into this."
+		if [ "$kind" = "review" ]; then
+			gh api "repos/${owner}/${repo}/pulls/${number}/comments/${commentId}/replies" -f "body=${reply}"
+		else
+			gh api "repos/${owner}/${repo}/issues/${number}/comments" -f "body=${reply}"
+		fi
 	fi
 done
 ```
 
-For custom logic, parse the JSON yourself and call the GitHub CLI directly.
+If you just want `pickup` to reply or fix, use `pickup watch` instead.

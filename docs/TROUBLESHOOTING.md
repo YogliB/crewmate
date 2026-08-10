@@ -22,11 +22,21 @@ gh auth login
 
 ## `claude` is not installed
 
-`pickup` calls the `claude` command to generate explanations and fixes. Install the Claude CLI and make sure it is in your PATH.
+`pickup` calls the `claude` command by default to generate explanations and fixes. Install the Claude CLI and make sure it is in your PATH, or use a different provider:
+
+```bash
+pickup watch owner/repo/pull/4 --provider my-llm
+```
+
+The provider must be a `claude`-shaped CLI that supports `--version`, `--model`, and `-p`.
 
 ## `gh pr checkout` fails
 
 `pickup` checks out the PR branch before reading a file. It needs a clean working tree. Commit or stash your own changes first.
+
+## `--dry-run` changed my working tree
+
+For single-PR targets, `--dry-run` still runs `gh pr checkout` so it can read the file. It only skips posting replies and committing/pushing. Commit or stash your own changes before running it, or use `pickup stream` to preview mentions without touching the repo.
 
 ## `git push` failed after a fix
 
@@ -35,6 +45,10 @@ gh auth login
 ## `@pickup` mention is ignored
 
 `pickup` only replies to review comments (not replies) that contain `@pickup` and were not written by `pickup` itself. The newest unseen mention is handled on each poll; older ones wait for the next poll.
+
+## The same conversation comment was answered twice
+
+General PR conversation comments do not expose a stable parent id. If you delete or reset `<config>/pickup/state.json`, `pickup` cannot tell that a conversation comment was already answered, so it may reply again. Review comments are not affected because `pickup` can match replies to their parent.
 
 ## Fix was not applied
 

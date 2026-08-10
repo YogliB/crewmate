@@ -18,7 +18,7 @@ A CLI that watches GitHub PR comments (review and conversation) for `@pickup` me
 - `--interval <seconds>` Seconds between polls (default: 60)
 - `--fix` Attempt to apply a generated fix and push a commit. The review comment body must also contain the tag `#fix` (case-insensitive).
 - `--model <model>` Use a specific model for explanations and fixes.
-- `--provider <command>` Use a specific provider CLI instead of `claude`.
+- `--provider <command>` Use a specific provider CLI instead of the default `claude`.
 - `--prompt <text>` Prepend custom instructions to the LLM prompt.
 - `--log` Also mirror structured log lines to stderr.
 - `--dry-run` Preview the reply or fix on stdout without posting to GitHub or committing/pushing. Defaults to one iteration.
@@ -61,6 +61,8 @@ Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, and `i
 
 ## Caveats
 
+- The default LLM provider is `claude`. Set a different one with `--provider <command>` or in your config; it must be a `claude`-shaped CLI (`--version`, `--model`, `-p`).
+- `--fix` only works for single-PR review comments and the comment body must contain the tag `#fix`.
 - Repo and org scope discover open PRs with the GitHub search API; large scopes may hit rate limits. Use a longer `--interval` for big organizations.
 - `--fix` is disabled for repo and org scope; only single-PR mode can generate and push fixes.
 - Scope mode fetches file content from the GitHub API, so it does not need a local clone.
