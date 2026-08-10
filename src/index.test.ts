@@ -312,7 +312,7 @@ describe("run dispatch", () => {
 		const previousExitCode = process.exitCode;
 		process.exitCode = NO_EXIT_CODE;
 		await run([]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("## Commands"));
+		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
 		expect(process.exitCode).toBe(NO_EXIT_CODE);
 		process.exitCode = previousExitCode;
 		write.mockRestore();
@@ -2909,6 +2909,18 @@ describe("run help", () => {
 		await run(["watch", PR_URL, "-h"], { runner });
 		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
 		expect(countCalls(runner, "gh")).toBe(0);
+		write.mockRestore();
+	});
+
+	it("renders help as ANSI-styled text", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		await run(["--help"]);
+		const output = String(write.mock.calls[0][0]);
+		expect(output).toContain("Commands");
+		expect(output).not.toContain("## Commands");
+		expect(output).toContain("\x1b[1m");
+		expect(output).toContain("\x1b[36m");
+		expect(output).toContain("  • ");
 		write.mockRestore();
 	});
 });
