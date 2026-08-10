@@ -36,9 +36,28 @@ const exec: Runner = async (file, args, options) => {
 	return stdout;
 };
 
+// ponytail: regex-based markdown renderer. Works for current help.md; upgrade to a proper
+// terminal markdown parser if help text grows complex formatting.
+function renderHelp(text: string): string {
+	const styled = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+	const B = styled ? "\x1b[1m" : "";
+	const D = styled ? "\x1b[2m" : "";
+	const C = styled ? "\x1b[36m" : "";
+	const R = styled ? "\x1b[0m" : "";
+
+	return text
+		.replace(/^# (.+)$/gm, `${B}$1${R}`)
+		.replace(/^## (.+)$/gm, `${B}$1${R}`)
+		.replace(/^### `(.+)`$/gm, `${B}$1${R}`)
+		.replace(/^### (.+)$/gm, `${B}$1${R}`)
+		.replace(/^#### (.+)$/gm, `${D}$1${R}`)
+		.replace(/^- /gm, "  • ")
+		.replace(/`([^`]+)`/g, `${C}$1${R}`);
+}
+
 function showHelp(): void {
 	// oxlint-disable-next-line security/detect-non-literal-fs-filename -- HELP_PATH is a build-time constant
-	process.stdout.write(`\n${readFileSync(HELP_PATH, "utf8")}\n`);
+	process.stdout.write(`\n${renderHelp(readFileSync(HELP_PATH, "utf8"))}\n`);
 }
 
 const NAME = "[A-Za-z0-9_.-]+";
