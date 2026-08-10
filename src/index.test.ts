@@ -2912,8 +2912,10 @@ describe("run help", () => {
 		write.mockRestore();
 	});
 
-	it("renders help as ANSI-styled text", async () => {
+	it("renders help as ANSI-styled text in a TTY", async () => {
+		const previousIsTTY = process.stdout.isTTY;
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		process.stdout.isTTY = true;
 		await run(["--help"]);
 		const output = String(write.mock.calls[0][0]);
 		expect(output).toContain("Commands");
@@ -2921,6 +2923,36 @@ describe("run help", () => {
 		expect(output).toContain("\x1b[1m");
 		expect(output).toContain("\x1b[36m");
 		expect(output).toContain("  • ");
+		process.stdout.isTTY = previousIsTTY;
+		write.mockRestore();
+	});
+
+	it("renders help without ANSI when output is not a TTY", async () => {
+		const previousIsTTY = process.stdout.isTTY;
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		process.stdout.isTTY = false;
+		await run(["--help"]);
+		const output = String(write.mock.calls[0][0]);
+		expect(output).toContain("Commands");
+		expect(output).not.toContain("## Commands");
+		expect(output).not.toContain("\x1b[");
+		process.stdout.isTTY = previousIsTTY;
+		write.mockRestore();
+	});
+
+	it("renders help without ANSI when NO_COLOR is set", async () => {
+		const previousIsTTY = process.stdout.isTTY;
+		const previousNoColor = process.env.NO_COLOR;
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		process.stdout.isTTY = true;
+		process.env.NO_COLOR = "1";
+		await run(["--help"]);
+		const output = String(write.mock.calls[0][0]);
+		expect(output).toContain("Commands");
+		expect(output).not.toContain("## Commands");
+		expect(output).not.toContain("\x1b[");
+		process.stdout.isTTY = previousIsTTY;
+		process.env.NO_COLOR = previousNoColor;
 		write.mockRestore();
 	});
 });

@@ -39,10 +39,11 @@ const exec: Runner = async (file, args, options) => {
 // ponytail: regex-based markdown renderer. Works for current help.md; upgrade to a proper
 // terminal markdown parser if help text grows complex formatting.
 function renderHelp(text: string): string {
-	const B = "\x1b[1m";
-	const D = "\x1b[2m";
-	const C = "\x1b[36m";
-	const R = "\x1b[0m";
+	const styled = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+	const B = styled ? "\x1b[1m" : "";
+	const D = styled ? "\x1b[2m" : "";
+	const C = styled ? "\x1b[36m" : "";
+	const R = styled ? "\x1b[0m" : "";
 
 	return text
 		.replace(/^# (.+)$/gm, `${B}$1${R}`)
