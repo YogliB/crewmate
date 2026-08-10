@@ -15,7 +15,7 @@ const configHome = (): string =>
 	process.env.XDG_CONFIG_HOME ||
 	path.join(process.env.HOME || process.env.USERPROFILE || homeDir(), ".config");
 
-const statePath = (): string => path.join(configHome(), "pickup", "state.json");
+const statePath = (): string => path.join(configHome(), "crewmate", "state.json");
 
 const readRawState = async (filePath: string): Promise<string> => {
 	try {

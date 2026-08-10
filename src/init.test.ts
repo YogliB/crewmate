@@ -73,7 +73,7 @@ describe("runInit", () => {
 	beforeEach(() => {
 		process.exitCode = undefined;
 		process.stdin.isTTY = true;
-		vi.stubEnv("XDG_CONFIG_HOME", "/tmp/pickup-init-test");
+		vi.stubEnv("XDG_CONFIG_HOME", "/tmp/crewmate-init-test");
 		mkdir.mockReset();
 		readFile.mockReset();
 		writeFile.mockReset();

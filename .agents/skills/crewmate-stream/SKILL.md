@@ -1,16 +1,16 @@
 ---
-name: pickup-stream
-description: Run pickup in stream mode and handle incoming @pickup PR mentions as NDJSON events. Use when the user wants to poll a PR for pickup mentions, consume the pickup NDJSON stream, or build an agent that responds to review and conversation comments.
+name: crewmate-stream
+description: Run crewmate in stream mode and handle incoming @crewmate PR mentions as NDJSON events. Use when the user wants to poll a PR for crewmate mentions, consume the crewmate NDJSON stream, or build an agent that responds to review and conversation comments.
 ---
 
-# pickup stream
+# crewmate stream
 
-`pickup stream <pr-url-or-shorthand>` emits one JSON object per new `@pickup` mention on stdout. It does not invoke the provider, post replies, or run `gh pr checkout`.
+`crewmate stream <pr-url-or-shorthand>` emits one JSON object per new `@crewmate` mention on stdout. It does not invoke the provider, post replies, or run `gh pr checkout`.
 
 ## Start the stream
 
 ```bash
-pickup stream <pr-url-or-shorthand> [--user <login>] [--interval <seconds>] [--log]
+crewmate stream <pr-url-or-shorthand> [--user <login>] [--interval <seconds>] [--log]
 ```
 
 - `<pr-url-or-shorthand>`: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`.
@@ -30,7 +30,7 @@ pickup stream <pr-url-or-shorthand> [--user <login>] [--interval <seconds>] [--l
 	"commentId": 123,
 	"kind": "review",
 	"user": "alice",
-	"body": "@pickup explain this line",
+	"body": "@crewmate explain this line",
 	"url": "https://github.com/owner/repo/pull/4",
 	"path": "src/index.ts",
 	"line": 42
@@ -54,18 +54,18 @@ Fields:
 1. Parse each NDJSON line as JSON.
 2. If `event !== "mention"`, skip.
 3. Inspect `body` and `kind`.
-4. If you want `pickup` to reply, explain, or fix, run `pickup watch <url>` or `pickup watch <url> --fix` **instead of** `pickup stream`. `pickup stream` and `pickup watch` share the same state file, so a mention emitted by stream is already marked as seen and `pickup watch` would skip it.
-5. If you are building a custom responder on top of `pickup stream`, reply manually:
+4. If you want `crewmate` to reply, explain, or fix, run `crewmate watch <url>` or `crewmate watch <url> --fix` **instead of** `crewmate stream`. `crewmate stream` and `crewmate watch` share the same state file, so a mention emitted by stream is already marked as seen and `crewmate watch` would skip it.
+5. If you are building a custom responder on top of `crewmate stream`, reply manually:
    - Review comment reply: `gh api repos/<owner>/<repo>/pulls/<number>/comments/<commentId>/replies -f body=<text>`.
    - Conversation comment: `gh api repos/<owner>/<repo>/issues/<number>/comments -f body=<text>`.
-6. Do not double-post; `pickup` already tracks seen comment ids in `$XDG_CONFIG_HOME/pickup/state.json` and saves state after each stdout write in stream mode.
+6. Do not double-post; `crewmate` already tracks seen comment ids in `$XDG_CONFIG_HOME/crewmate/state.json` and saves state after each stdout write in stream mode.
 
 ## Example one-shot handler
 
-A custom responder that posts a manual reply. This is useful when you want different behavior from `pickup watch`.
+A custom responder that posts a manual reply. This is useful when you want different behavior from `crewmate watch`.
 
 ```bash
-pickup stream owner/repo/pull/4 --user myorg-bot | while IFS= read -r line; do
+crewmate stream owner/repo/pull/4 --user myorg-bot | while IFS= read -r line; do
 	event=$(echo "$line" | jq -r '.event')
 	[ "$event" = "mention" ] || continue
 
@@ -91,4 +91,4 @@ pickup stream owner/repo/pull/4 --user myorg-bot | while IFS= read -r line; do
 done
 ```
 
-If you just want `pickup` to reply or fix, use `pickup watch` instead.
+If you just want `crewmate` to reply or fix, use `crewmate watch` instead.

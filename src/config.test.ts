@@ -22,7 +22,7 @@ describe("config paths", () => {
 	let tempDir = "";
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-config-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-config-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -32,12 +32,12 @@ describe("config paths", () => {
 	});
 
 	it("derives global config path from state path", () => {
-		expect(globalConfigPath()).toBe(path.join(tempDir, "pickup", "config.json"));
-		expect(statePath()).toBe(path.join(tempDir, "pickup", "state.json"));
+		expect(globalConfigPath()).toBe(path.join(tempDir, "crewmate", "config.json"));
+		expect(statePath()).toBe(path.join(tempDir, "crewmate", "state.json"));
 	});
 
 	it("derives repo config path from repo root", () => {
-		expect(repoConfigPath("/repo")).toBe(path.join("/repo", ".pickup.json"));
+		expect(repoConfigPath("/repo")).toBe(path.join("/repo", ".crewmate.json"));
 	});
 });
 
@@ -116,7 +116,7 @@ describe("loadGlobalConfig", () => {
 	const warn = vi.fn(() => Promise.resolve());
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-global-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-global-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
 	});
 
@@ -256,7 +256,7 @@ describe("loadRepoConfig", () => {
 	const warn = vi.fn(() => Promise.resolve());
 
 	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "pickup-repo-"));
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-repo-"));
 	});
 
 	afterEach(async () => {
@@ -272,7 +272,7 @@ describe("loadRepoConfig", () => {
 
 	it("loads repo config", async () => {
 		await writeFile(
-			path.join(tempDir, ".pickup.json"),
+			path.join(tempDir, ".crewmate.json"),
 			JSON.stringify({ prompt: "repo prompt" }),
 			"utf8",
 		);
@@ -281,7 +281,7 @@ describe("loadRepoConfig", () => {
 	});
 
 	it("warns and returns empty on invalid JSON", async () => {
-		await writeFile(path.join(tempDir, ".pickup.json"), "{not json", "utf8");
+		await writeFile(path.join(tempDir, ".crewmate.json"), "{not json", "utf8");
 		const profile = await loadRepoConfig(tempDir, warn);
 		expect(profile).toEqual({});
 		expect(warn).toHaveBeenCalledWith(
@@ -291,7 +291,7 @@ describe("loadRepoConfig", () => {
 	});
 
 	it("warns and returns empty when repo config is not an object", async () => {
-		await writeFile(path.join(tempDir, ".pickup.json"), "[]", "utf8");
+		await writeFile(path.join(tempDir, ".crewmate.json"), "[]", "utf8");
 		const profile = await loadRepoConfig(tempDir, warn);
 		expect(profile).toEqual({});
 		expect(warn).toHaveBeenCalledWith("config is not an object", expect.any(Object));
@@ -299,7 +299,7 @@ describe("loadRepoConfig", () => {
 
 	it("warns on invalid type but keeps valid fields", async () => {
 		await writeFile(
-			path.join(tempDir, ".pickup.json"),
+			path.join(tempDir, ".crewmate.json"),
 			JSON.stringify({ prompt: "repo", fix: "yes" }),
 			"utf8",
 		);
@@ -309,25 +309,25 @@ describe("loadRepoConfig", () => {
 	});
 
 	it("warns when repo config enables fix", async () => {
-		await writeFile(path.join(tempDir, ".pickup.json"), JSON.stringify({ fix: true }), "utf8");
+		await writeFile(path.join(tempDir, ".crewmate.json"), JSON.stringify({ fix: true }), "utf8");
 		const profile = await loadRepoConfig(tempDir, warn);
 		expect(profile).toEqual({ fix: true });
 		expect(warn).toHaveBeenCalledWith(
-			"repo .pickup.json enables --fix; only run pickup in repositories you trust",
+			"repo .crewmate.json enables --fix; only run crewmate in repositories you trust",
 			expect.any(Object),
 		);
 	});
 
 	it("warns when repo config uses a relative provider", async () => {
 		await writeFile(
-			path.join(tempDir, ".pickup.json"),
+			path.join(tempDir, ".crewmate.json"),
 			JSON.stringify({ provider: "./claude" }),
 			"utf8",
 		);
 		const profile = await loadRepoConfig(tempDir, warn);
 		expect(profile).toEqual({ provider: "./claude" });
 		expect(warn).toHaveBeenCalledWith(
-			"repo .pickup.json uses a local/relative LLM provider; only run pickup in repositories you trust",
+			"repo .crewmate.json uses a local/relative LLM provider; only run crewmate in repositories you trust",
 			expect.any(Object),
 		);
 	});
@@ -339,8 +339,8 @@ describe("resolveProfile", () => {
 	const warn = vi.fn(() => Promise.resolve());
 
 	beforeEach(async () => {
-		globalDir = await mkdtemp(path.join(tmpdir(), "pickup-resolve-global-"));
-		repoDir = await mkdtemp(path.join(tmpdir(), "pickup-resolve-repo-"));
+		globalDir = await mkdtemp(path.join(tmpdir(), "crewmate-resolve-global-"));
+		repoDir = await mkdtemp(path.join(tmpdir(), "crewmate-resolve-repo-"));
 		vi.stubEnv("XDG_CONFIG_HOME", globalDir);
 	});
 
@@ -354,7 +354,7 @@ describe("resolveProfile", () => {
 	it("merges global defaults with repo overrides", async () => {
 		await writeGlobalConfig(JSON.stringify({ defaults: { provider: "claude", interval: 30 } }));
 		await writeFile(
-			path.join(repoDir, ".pickup.json"),
+			path.join(repoDir, ".crewmate.json"),
 			JSON.stringify({ prompt: "repo", interval: 10 }),
 			"utf8",
 		);
@@ -368,7 +368,11 @@ describe("resolveProfile", () => {
 				profiles: { "owner/repo": { provider: "my-llm" } },
 			}),
 		);
-		await writeFile(path.join(repoDir, ".pickup.json"), JSON.stringify({ prompt: "repo" }), "utf8");
+		await writeFile(
+			path.join(repoDir, ".crewmate.json"),
+			JSON.stringify({ prompt: "repo" }),
+			"utf8",
+		);
 		const profile = await resolveProfile("owner", "repo", repoDir, warn);
 		expect(profile).toEqual({ provider: "my-llm", prompt: "repo" });
 	});
@@ -386,7 +390,7 @@ describe("resolveProfile", () => {
 			}),
 		);
 		await writeFile(
-			path.join(repoDir, ".pickup.json"),
+			path.join(repoDir, ".crewmate.json"),
 			JSON.stringify({ user: "alice", interval: 10 }),
 			"utf8",
 		);
@@ -396,7 +400,7 @@ describe("resolveProfile", () => {
 
 	it("reads boolean log and dryRun fields", async () => {
 		await writeFile(
-			path.join(repoDir, ".pickup.json"),
+			path.join(repoDir, ".crewmate.json"),
 			JSON.stringify({ log: true, dryRun: false }),
 			"utf8",
 		);
@@ -422,7 +426,7 @@ describe("resolveProfile", () => {
 			}),
 		);
 		await writeFile(
-			path.join(repoDir, ".pickup.json"),
+			path.join(repoDir, ".crewmate.json"),
 			JSON.stringify({ interval: 10, user: "alice" }),
 			"utf8",
 		);

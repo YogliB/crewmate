@@ -7,7 +7,7 @@ import {
 	dispatchMention,
 	errorMessage,
 	getLogin,
-	PICKUP_PREFIX,
+	CREWMATE_PREFIX,
 	type Mention,
 	type Runner,
 	stripFences,
@@ -133,12 +133,12 @@ const fetchMentions = async (prUrl: string, runner: Runner = exec): Promise<Ment
 
 // ponytail: conversation comments do not expose a parent id, so a fresh state cannot
 // suppress already-answered conversation mentions. Scope the fallback to review threads only.
-const findPickupRepliedIds = (comments: Mention[], isFresh: boolean): Set<string> =>
+const findCrewmateRepliedIds = (comments: Mention[], isFresh: boolean): Set<string> =>
 	isFresh
 		? new Set(
 				comments.flatMap((comment) =>
 					comment.kind === "review" &&
-					comment.body.startsWith(PICKUP_PREFIX) &&
+					comment.body.startsWith(CREWMATE_PREFIX) &&
 					typeof comment.inReplyToId === "number"
 						? [`${comment.kind}:${comment.inReplyToId}`]
 						: [],
@@ -153,16 +153,16 @@ const findNewMentions = (
 	isFresh = false,
 ): Mention[] => {
 	const seen = new Set(seenIds);
-	const pickupRepliedIds = findPickupRepliedIds(comments, isFresh);
+	const crewmateRepliedIds = findCrewmateRepliedIds(comments, isFresh);
 	return (
 		comments
 			.filter(
 				(comment) =>
-					!comment.body.startsWith(PICKUP_PREFIX) &&
-					/(?:^|\W)@pickup\b/i.test(comment.body) &&
+					!comment.body.startsWith(CREWMATE_PREFIX) &&
+					/(?:^|\W)@crewmate\b/i.test(comment.body) &&
 					comment.inReplyToId === undefined &&
 					!seen.has(`${comment.kind}:${comment.id}`) &&
-					!pickupRepliedIds.has(`${comment.kind}:${comment.id}`) &&
+					!crewmateRepliedIds.has(`${comment.kind}:${comment.id}`) &&
 					(allowedUser === undefined || getLogin(comment.user) === allowedUser),
 			)
 			// ponytail: review and issue comment ids may come from different sequences; sorting by id is
@@ -243,7 +243,7 @@ const pollMentions = async (
 	);
 	const comments = await fetchMentions(prUrl, options.runner);
 	const isFresh = (state.get(prUrl)?.length ?? 0) === 0;
-	const pickupRepliedIds = findPickupRepliedIds(comments, isFresh);
+	const crewmateRepliedIds = findCrewmateRepliedIds(comments, isFresh);
 	const mentions = findNewMentions(comments, state.get(prUrl) ?? [], options.allowedUser, isFresh);
 	// Each poll cycle gets a fresh checkout set so a long-running watch re-syncs
 	// the PR branch once per poll while still avoiding repeated checkouts for
@@ -268,9 +268,9 @@ const pollMentions = async (
 			await saveMention(state, prUrl, mention);
 		}
 	}
-	if (!options.dryRun && isFresh && pickupRepliedIds.size > 0) {
+	if (!options.dryRun && isFresh && crewmateRepliedIds.size > 0) {
 		const existing = new Set(state.get(prUrl) ?? []);
-		for (const id of pickupRepliedIds) {
+		for (const id of crewmateRepliedIds) {
 			existing.add(id);
 		}
 		state.set(prUrl, [...existing]);
@@ -982,7 +982,7 @@ const run = Object.assign(
 				const packageJson = JSON.parse(
 					readFileSync(new URL("../package.json", import.meta.url), "utf8"), // oxlint-disable-line security/detect-non-literal-fs-filename -- package.json is a build-time relative path
 				);
-				process.stdout.write(`pickup/${packageJson.version}\n`);
+				process.stdout.write(`crewmate/${packageJson.version}\n`);
 				return;
 			}
 			if (subcommand === undefined || subcommand === "--help" || subcommand === "-h") {
@@ -1001,7 +1001,7 @@ const run = Object.assign(
 				await runInit();
 				return;
 			}
-			throw new TypeError(`Unknown command '${subcommand}'. Run 'pickup --help' for usage.`);
+			throw new TypeError(`Unknown command '${subcommand}'. Run 'crewmate --help' for usage.`);
 		} catch (error) {
 			process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
 			process.exitCode = 1;

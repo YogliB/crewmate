@@ -3,9 +3,9 @@ import path from "node:path";
 import { type Logger } from "./log.js";
 
 const FENCE_MARKER = "```";
-const FIX_MESSAGE = "fix: address pickup comment";
+const FIX_MESSAGE = "fix: address crewmate comment";
 const MISSING_FILE_REPLY = "Could not find the file.";
-const PICKUP_PREFIX = "🛻 pickup:";
+const CREWMATE_PREFIX = "⚓ crewmate:";
 const NO_CHANGE_REPLY = "No changes needed.";
 const NO_FIX_REPLY = "Could not generate a fix.";
 
@@ -119,7 +119,7 @@ const postReply = async (
 	body: string,
 	kind: "explain" | "error" | "fix" | "nochange",
 ): Promise<void> => {
-	const prefixedBody = `${PICKUP_PREFIX} ${body}`;
+	const prefixedBody = `${CREWMATE_PREFIX} ${body}`;
 	const base = logContext(ctx, { kind });
 	const dryRunLabel =
 		ctx.kind === "conversation"
@@ -378,4 +378,4 @@ const dispatchMention = async (
 	}
 };
 
-export { PICKUP_PREFIX, stripFences, getLogin, dispatchMention, errorMessage };
+export { CREWMATE_PREFIX, stripFences, getLogin, dispatchMention, errorMessage };
