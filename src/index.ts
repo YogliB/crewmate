@@ -978,7 +978,14 @@ const run = Object.assign(
 	): Promise<void> => {
 		try {
 			const [subcommand, ...rest] = argv;
-			if (subcommand === "--help" || subcommand === "-h") {
+			if (subcommand === "--version" || subcommand === "-v") {
+				const packageJson = JSON.parse(
+					readFileSync(new URL("../package.json", import.meta.url), "utf8"), // oxlint-disable-line security/detect-non-literal-fs-filename -- package.json is a build-time relative path
+				);
+				process.stdout.write(`pickup/${packageJson.version}\n`);
+				return;
+			}
+			if (subcommand === undefined || subcommand === "--help" || subcommand === "-h") {
 				showHelp();
 				return;
 			}
@@ -994,7 +1001,7 @@ const run = Object.assign(
 				await runInit();
 				return;
 			}
-			console.log("Hello from pickup!", argv);
+			throw new TypeError(`Unknown command '${subcommand}'. Run 'pickup --help' for usage.`);
 		} catch (error) {
 			process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
 			process.exitCode = 1;
