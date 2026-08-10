@@ -47,7 +47,8 @@ function renderHelp(text: string): string {
 	return text
 		.replace(/^# (.+)$/gm, `${B}$1${R}`)
 		.replace(/^## (.+)$/gm, `${B}$1${R}`)
-		.replace(/^### (?:`(.+?)`|(.+))$/gm, (_, code, plain) => `${B}${code ?? plain}${R}`)
+		.replace(/^### `(.+)`$/gm, `${B}$1${R}`)
+		.replace(/^### (.+)$/gm, `${B}$1${R}`)
 		.replace(/^#### (.+)$/gm, `${D}$1${R}`)
 		.replace(/^- /gm, "  • ")
 		.replace(/`([^`]+)`/g, `${C}$1${R}`);
