@@ -161,6 +161,46 @@ const findCrewmateRepliedIds = (comments: Mention[], isFresh: boolean): Set<stri
 			)
 		: new Set<string>();
 
+type MentionFilterDetails = {
+	passes: boolean;
+	startsWithPrefix: boolean;
+	hasMention: boolean;
+	isReply: boolean;
+	isSeen: boolean;
+	isCrewmateReplied: boolean;
+	userAllowed: boolean;
+};
+
+const getMentionFilterDetails = (
+	comment: Mention,
+	seen: Set<string>,
+	crewmateRepliedIds: Set<string>,
+	allowedUser?: string,
+): MentionFilterDetails => {
+	const key = `${comment.kind}:${comment.id}`;
+	const startsWithPrefix = comment.body.startsWith(CREWMATE_PREFIX);
+	const hasMention = /(?:^|\W)@crewmate\b/i.test(comment.body);
+	const isReply = comment.inReplyToId !== undefined;
+	const isSeen = seen.has(key);
+	const isCrewmateReplied = crewmateRepliedIds.has(key);
+	const userAllowed = allowedUser === undefined || getLogin(comment.user) === allowedUser;
+	return {
+		passes:
+			!startsWithPrefix && hasMention && !isReply && !isSeen && !isCrewmateReplied && userAllowed,
+		startsWithPrefix,
+		hasMention,
+		isReply,
+		isSeen,
+		isCrewmateReplied,
+		userAllowed,
+	};
+};
+
+const debugMentionSummary = (mention: Mention) => ({
+	id: mention.id,
+	kind: mention.kind,
+});
+
 const findNewMentions = (
 	comments: Mention[],
 	seenIds: string[],
@@ -171,13 +211,7 @@ const findNewMentions = (
 	const crewmateRepliedIds = findCrewmateRepliedIds(comments, isFresh);
 	return comments
 		.filter(
-			(comment) =>
-				!comment.body.startsWith(CREWMATE_PREFIX) &&
-				/(?:^|\W)@crewmate\b/i.test(comment.body) &&
-				comment.inReplyToId === undefined &&
-				!seen.has(`${comment.kind}:${comment.id}`) &&
-				!crewmateRepliedIds.has(`${comment.kind}:${comment.id}`) &&
-				(allowedUser === undefined || getLogin(comment.user) === allowedUser),
+			(comment) => getMentionFilterDetails(comment, seen, crewmateRepliedIds, allowedUser).passes,
 		)
 		.toSorted((first, second) => second.id - first.id);
 };
@@ -240,6 +274,7 @@ const pollMentions = async (
 	options: {
 		allowFix?: boolean;
 		allowedUser?: string;
+		debug?: boolean;
 		dryRun: boolean;
 		logger: Logger;
 		onMention: (mention: Mention, checkedOut: Set<string>) => Promise<void>;
@@ -254,8 +289,44 @@ const pollMentions = async (
 	);
 	const comments = await fetchMentions(prUrl, options.runner);
 	const isFresh = (state.get(prUrl)?.length ?? 0) === 0;
+	const seen = new Set(state.get(prUrl) ?? []);
 	const crewmateRepliedIds = findCrewmateRepliedIds(comments, isFresh);
-	const mentions = findNewMentions(comments, state.get(prUrl) ?? [], options.allowedUser, isFresh);
+
+	if (options.debug) {
+		await options.logger("debug", {
+			stage: "fetched-comments",
+			url: prUrl,
+			count: comments.length,
+			comments: comments.map((comment) => ({
+				...debugMentionSummary(comment),
+				inReplyToId: comment.inReplyToId,
+			})),
+		});
+
+		const filterDetails = comments.map((comment) => ({
+			...debugMentionSummary(comment),
+			...getMentionFilterDetails(comment, seen, crewmateRepliedIds, options.allowedUser),
+		}));
+
+		await options.logger("debug", {
+			stage: "mention-filter",
+			url: prUrl,
+			allowedUser: options.allowedUser,
+			details: filterDetails,
+		});
+	}
+
+	const mentions = findNewMentions(comments, [...seen], options.allowedUser, isFresh);
+
+	if (options.debug) {
+		await options.logger("debug", {
+			stage: "new-mentions",
+			url: prUrl,
+			count: mentions.length,
+			mentions: mentions.map((mention) => debugMentionSummary(mention)),
+		});
+	}
+
 	const checkedOut = new Set<string>();
 	for (const mention of mentions) {
 		await options.logger("mention", {
@@ -348,6 +419,23 @@ const authenticateHost = async (
 		} else {
 			throw error;
 		}
+	}
+};
+
+const fetchGhUser = async (
+	runner: Runner,
+	env: { env: { GH_HOST: string } },
+	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
+): Promise<string | undefined> => {
+	try {
+		const login = (await runner("gh", ["api", "user", "--jq", ".login"], env)).trim();
+		return login || undefined;
+	} catch (error) {
+		await warn(
+			"could not determine the authenticated gh user; --user will default to matching every user",
+			{ error: errorMessage(error), reason: "gh-user-unresolved" },
+		);
+		return undefined;
 	}
 };
 
@@ -584,6 +672,7 @@ type ScopeRunOptions = {
 	allowFix?: boolean;
 	allowedUser?: string;
 	config?: Partial<Profile>;
+	debug?: boolean;
 	dryRun?: boolean;
 	interval?: number;
 	iterations?: number;
@@ -598,6 +687,7 @@ type ScopeRunOptions = {
 type ScopeContext = {
 	allowFix: boolean;
 	allowedUser: string | undefined;
+	debug: boolean;
 	dryRun: boolean;
 	logger: Logger;
 	model: string | undefined;
@@ -644,15 +734,19 @@ const runScope = async (
 			profile =
 				options.config ?? (await resolveProfile(scope.owner, scope.repo, repoRoot, configWarn));
 		} else {
+			await runner("gh", ["--version"], ghHostEnv);
+			await authenticateHost(runner, ghHost, ghHostEnv);
 			const owner = scope.kind === "org" ? scope.org : scope.owner;
 			const repo = scope.kind === "org" ? undefined : scope.repo;
 			profile = options.config ?? (await resolveProfile(owner, repo, undefined, configWarn));
 		}
+		const ghUser = await fetchGhUser(runner, ghHostEnv, configWarn);
 
 		const provider = options.provider ?? profile.provider;
 		const model = options.model ?? profile.model;
 		const interval = options.interval ?? profile.interval ?? DEFAULT_INTERVAL_SECONDS;
-		const allowedUser = options.allowedUser ?? profile.user;
+		const allowedUser = options.allowedUser ?? profile.user ?? ghUser;
+		const debug = options.debug ?? profile.debug ?? false;
 		const prompt = options.prompt ?? profile.prompt;
 		let allowFix = options.allowFix ?? profile.fix ?? false;
 		const dryRun = options.dryRun ?? profile.dryRun ?? false;
@@ -670,10 +764,6 @@ const runScope = async (
 			allowFix = false;
 		}
 
-		if (scope.kind !== "pr") {
-			await runner("gh", ["--version"], ghHostEnv);
-			await authenticateHost(runner, ghHost, ghHostEnv);
-		}
 		if (callbacks.requiresProvider) {
 			await runner(provider || "claude", ["--version"]);
 		}
@@ -696,6 +786,7 @@ const runScope = async (
 		const ctx: ScopeContext = {
 			allowFix,
 			allowedUser,
+			debug,
 			dryRun,
 			logger,
 			model,
@@ -733,6 +824,7 @@ const watch = async (
 		allowFix?: boolean;
 		allowedUser?: string;
 		config?: Partial<Profile>;
+		debug?: boolean;
 		dryRun?: boolean;
 		logger?: Logger;
 		model?: string;
@@ -748,6 +840,7 @@ const watch = async (
 			await pollMentions(prUrl, {
 				allowFix: ctx.allowFix,
 				allowedUser: ctx.allowedUser,
+				debug: ctx.debug,
 				dryRun: ctx.dryRun,
 				logger: ctx.logger,
 				onMention: (mention, checkedOut) =>
@@ -778,6 +871,7 @@ const stream = async (
 	options: {
 		allowedUser?: string;
 		config?: Partial<Profile>;
+		debug?: boolean;
 		interval?: number;
 		iterations?: number;
 		logger?: Logger;
@@ -794,6 +888,7 @@ const stream = async (
 				await pollMentions(prUrl, {
 					allowFix: false,
 					allowedUser: ctx.allowedUser,
+					debug: ctx.debug,
 					dryRun: false,
 					logger: ctx.logger,
 					onMention: async (mention, _checkedOut) => {
@@ -909,6 +1004,7 @@ const runWatch = async (
 	const { booleans, values, target } = parsed;
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
 	const allowFix = booleans.has("--fix") ? true : undefined;
+	const debug = booleans.has("--debug") ? true : undefined;
 	const dryRun = booleans.has("--dry-run") ? true : undefined;
 	const toStderr = booleans.has("--log") ? true : undefined;
 	const allowedUser = values.get("--user");
@@ -919,6 +1015,7 @@ const runWatch = async (
 		allowFix,
 		allowedUser,
 		config: options.config,
+		debug,
 		dryRun,
 		interval,
 		iterations: options.iterations,
@@ -946,6 +1043,7 @@ const runStream = async (
 	}
 	const { booleans, values, target } = parsed;
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
+	const debug = booleans.has("--debug") ? true : undefined;
 	const toStderr = booleans.has("--log") ? true : undefined;
 	const allowedUser = values.get("--user");
 
@@ -961,6 +1059,7 @@ const runStream = async (
 	await stream(target, {
 		allowedUser,
 		config: options.config,
+		debug,
 		interval,
 		iterations: options.iterations,
 		logger: options.logger,

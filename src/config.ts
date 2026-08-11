@@ -13,6 +13,7 @@ type Profile = {
 	fix?: boolean;
 	dryRun?: boolean;
 	log?: boolean;
+	debug?: boolean;
 };
 
 type GlobalConfig = {
@@ -29,6 +30,7 @@ const PROFILE_KEYS = new Set<keyof Profile>([
 	"fix",
 	"dryRun",
 	"log",
+	"debug",
 ]);
 
 const isString = (value: unknown): value is string => typeof value === "string";
@@ -76,6 +78,7 @@ const validateProfile = (raw: unknown): { profile: Partial<Profile>; warnings: s
 			case "fix":
 			case "dryRun":
 			case "log":
+			case "debug":
 				valid = isBoolean(value);
 				break;
 		}
