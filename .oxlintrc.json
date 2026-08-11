@@ -1,6 +1,10 @@
 {
 	"$schema": "./node_modules/oxlint/configuration_schema.json",
-	"jsPlugins": ["eslint-plugin-security", "./scripts/oxlint-repo-guidelines.js"],
+	"jsPlugins": [
+		"eslint-plugin-security",
+		"./scripts/oxlint-repo-guidelines.js",
+		"./scripts/oxlint-no-comment.js"
+	],
 	"plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "node", "promise"],
 	"options": { "denyWarnings": true },
 	"rules": {
@@ -18,7 +22,8 @@
 		"security/detect-possible-timing-attacks": "error",
 		"security/detect-pseudoRandomBytes": "error",
 		"security/detect-unsafe-regex": "error",
-		"oxlint-repo-guidelines/no-more-docs": "error"
+		"oxlint-repo-guidelines/no-more-docs": "error",
+		"no-comment/no-comment": "error"
 	},
 	"overrides": [
 		{
