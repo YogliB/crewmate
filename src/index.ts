@@ -36,9 +36,26 @@ const exec: Runner = async (file, args, options) => {
 	return stdout;
 };
 
+function renderHelp(text: string): string {
+	const styled = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+	const B = styled ? "\x1b[1m" : "";
+	const D = styled ? "\x1b[2m" : "";
+	const C = styled ? "\x1b[36m" : "";
+	const R = styled ? "\x1b[0m" : "";
+
+	return text
+		.replace(/^# (.+)$/gm, `${B}$1${R}`)
+		.replace(/^## (.+)$/gm, `${B}$1${R}`)
+		.replace(/^### `(.+)`$/gm, `${B}$1${R}`)
+		.replace(/^### (.+)$/gm, `${B}$1${R}`)
+		.replace(/^#### (.+)$/gm, `${D}$1${R}`)
+		.replace(/^- /gm, "  • ")
+		.replace(/`([^`]+)`/g, `${C}$1${R}`);
+}
+
 function showHelp(): void {
 	// oxlint-disable-next-line security/detect-non-literal-fs-filename -- HELP_PATH is a build-time constant
-	process.stdout.write(`\n${readFileSync(HELP_PATH, "utf8")}\n`);
+	process.stdout.write(`\n${renderHelp(readFileSync(HELP_PATH, "utf8"))}\n`);
 }
 
 const NAME = "[A-Za-z0-9_.-]+";
@@ -131,8 +148,6 @@ const fetchMentions = async (prUrl: string, runner: Runner = exec): Promise<Ment
 	return [...review, ...conversation];
 };
 
-// ponytail: conversation comments do not expose a parent id, so a fresh state cannot
-// suppress already-answered conversation mentions. Scope the fallback to review threads only.
 const findCrewmateRepliedIds = (comments: Mention[], isFresh: boolean): Set<string> =>
 	isFresh
 		? new Set(
@@ -154,21 +169,17 @@ const findNewMentions = (
 ): Mention[] => {
 	const seen = new Set(seenIds);
 	const crewmateRepliedIds = findCrewmateRepliedIds(comments, isFresh);
-	return (
-		comments
-			.filter(
-				(comment) =>
-					!comment.body.startsWith(CREWMATE_PREFIX) &&
-					/(?:^|\W)@crewmate\b/i.test(comment.body) &&
-					comment.inReplyToId === undefined &&
-					!seen.has(`${comment.kind}:${comment.id}`) &&
-					!crewmateRepliedIds.has(`${comment.kind}:${comment.id}`) &&
-					(allowedUser === undefined || getLogin(comment.user) === allowedUser),
-			)
-			// ponytail: review and issue comment ids may come from different sequences; sorting by id is
-			// a coarse proxy for newest-first. Per-kind ordering is preserved by creation time in practice.
-			.toSorted((first, second) => second.id - first.id)
-	);
+	return comments
+		.filter(
+			(comment) =>
+				!comment.body.startsWith(CREWMATE_PREFIX) &&
+				/(?:^|\W)@crewmate\b/i.test(comment.body) &&
+				comment.inReplyToId === undefined &&
+				!seen.has(`${comment.kind}:${comment.id}`) &&
+				!crewmateRepliedIds.has(`${comment.kind}:${comment.id}`) &&
+				(allowedUser === undefined || getLogin(comment.user) === allowedUser),
+		)
+		.toSorted((first, second) => second.id - first.id);
 };
 
 const findNewMention = (...args: Parameters<typeof findNewMentions>): Mention | undefined =>
@@ -245,12 +256,7 @@ const pollMentions = async (
 	const isFresh = (state.get(prUrl)?.length ?? 0) === 0;
 	const crewmateRepliedIds = findCrewmateRepliedIds(comments, isFresh);
 	const mentions = findNewMentions(comments, state.get(prUrl) ?? [], options.allowedUser, isFresh);
-	// Each poll cycle gets a fresh checkout set so a long-running watch re-syncs
-	// the PR branch once per poll while still avoiding repeated checkouts for
-	// multiple mentions handled in the same cycle.
 	const checkedOut = new Set<string>();
-	// Dry-run polls are intentionally stateless so a preview does not advance
-	// the persistent seen-mention cursor.
 	for (const mention of mentions) {
 		await options.logger("mention", {
 			allowFix: options.allowFix,
@@ -785,9 +791,6 @@ const stream = async (
 		{
 			onPr: async (ctx, prUrl) => {
 				const parsed = parsePrUrl(prUrl);
-				// State is saved after stdout is written. If the emit fails, the
-				// mention may appear again on the next poll/run; consumers deduplicate
-				// by `commentId` if at-least-once delivery is a problem.
 				await pollMentions(prUrl, {
 					allowFix: false,
 					allowedUser: ctx.allowedUser,
