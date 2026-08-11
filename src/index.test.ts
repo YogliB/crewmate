@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import run from "./index.js";
-import { CREWMATE_PREFIX, applyFix } from "./fix.js";
+import { CREWMATE_PREFIX, applyFix, dispatchMention } from "./fix.js";
 import { createLogger, type Logger } from "./log.js";
 import { homedir, tmpdir } from "node:os";
 import type { Mention } from "./index.js";
@@ -23,6 +23,8 @@ const SECOND_INDEX = 1;
 const FIRST_ID = 1;
 const SECOND_ID = 2;
 const THIRD_ID = 3;
+let nextReactionId = 100;
+const takeNextReactionId = () => nextReactionId++;
 const FIRST_LINE = 1;
 const EXPLANATION_LINE = 5;
 const INVALID_LOGIN = 123;
@@ -52,6 +54,24 @@ const countCalls = (
 			calledFile === file && (argMatcher === undefined || argMatcher(args, options)),
 	).length;
 
+const isReplyPost = (args: string[]): boolean =>
+	args.includes("POST") && args.some((arg) => typeof arg === "string" && arg.startsWith("body="));
+
+const isReactionPost = (args: string[]): boolean => {
+	const endpoint = findEndpoint(args);
+	return args.includes("POST") && !!endpoint?.includes("/reactions");
+};
+
+const isReactionDelete = (args: string[]): boolean => {
+	const endpoint = findEndpoint(args);
+	return args.includes("DELETE") && !!endpoint?.includes("/reactions");
+};
+
+const getReactionEmoji = (args: string[]): string | undefined => {
+	const content = args.find((arg) => typeof arg === "string" && arg.startsWith("content="));
+	return content?.slice("content=".length);
+};
+
 const warnFn = (logger: Logger) => async (message: string, fields?: Record<string, unknown>) => {
 	await logger("warning", { ...fields, message });
 };
@@ -67,6 +87,19 @@ const getPrompt = (runner: Runner, provider = "claude"): string | undefined => {
 const findEndpoint = (args: string[]): string | undefined =>
 	args.find((arg) => typeof arg === "string" && startsWithRepos(arg));
 
+const resolveReaction = (args: string[]): string | undefined => {
+	const endpoint = findEndpoint(args);
+	if (endpoint?.includes("/reactions")) {
+		if (args.includes("POST")) {
+			return JSON.stringify({ id: takeNextReactionId() });
+		}
+		if (args.includes("DELETE")) {
+			return "";
+		}
+	}
+	return undefined;
+};
+
 const conversationComments = (body?: string): string =>
 	body === undefined || body === ""
 		? "[]"
@@ -78,10 +111,12 @@ const resolveGhExplain = (
 ): Promise<string> => {
 	const [command] = args;
 	if (command === "api" && args.some((arg) => startsWithRepos(arg))) {
-		if (args.includes("POST")) {
+		const reaction = resolveReaction(args);
+		if (reaction !== undefined) return Promise.resolve(reaction);
+		const endpoint = findEndpoint(args);
+		if (args.includes("POST") || args.includes("DELETE")) {
 			return Promise.resolve("");
 		}
-		const endpoint = findEndpoint(args);
 		if (endpoint?.includes("/pulls/")) {
 			return Promise.resolve(
 				JSON.stringify([
@@ -172,10 +207,12 @@ const makeMultiMentionRunner = (
 				return Promise.resolve("");
 			}
 			if (command === "api" && args.some((arg) => startsWithRepos(arg))) {
-				if (args.includes("POST")) {
+				const reaction = resolveReaction(args);
+				if (reaction !== undefined) return Promise.resolve(reaction);
+				const endpoint = findEndpoint(args);
+				if (args.includes("POST") || args.includes("DELETE")) {
 					return Promise.resolve("");
 				}
-				const endpoint = findEndpoint(args);
 				if (endpoint?.includes("/pulls/")) {
 					return Promise.resolve(
 						JSON.stringify([
@@ -214,10 +251,12 @@ const resolveGhFix = (
 ): Promise<string> => {
 	const [command] = args;
 	if (command === "api" && args.some((arg) => startsWithRepos(arg))) {
-		if (args.includes("POST")) {
+		const reaction = resolveReaction(args);
+		if (reaction !== undefined) return Promise.resolve(reaction);
+		const endpoint = findEndpoint(args);
+		if (args.includes("POST") || args.includes("DELETE")) {
 			return Promise.resolve("");
 		}
-		const endpoint = findEndpoint(args);
 		if (endpoint?.includes("/pulls/")) {
 			return Promise.resolve(
 				JSON.stringify([
@@ -475,6 +514,8 @@ describe("run watch flags", () => {
 	it("uses Infinity iterations by default and runs the loop", async () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			if (file === "gh" && args[0] === "api") {
+				const reaction = resolveReaction(args);
+				if (reaction !== undefined) return Promise.resolve(reaction);
 				return Promise.reject(new Error("api fail"));
 			}
 			if (file === "gh" && (args[0] === "--version" || args[0] === "auth" || args[0] === "pr")) {
@@ -531,7 +572,7 @@ describe("run watch flags", () => {
 			iterations: FIRST_ITERATION,
 			runner,
 		});
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 	});
 
 	it("does not let an extra word after --log disable stderr mirroring", async () => {
@@ -746,7 +787,7 @@ describe("run stream flags", () => {
 	it("does not post replies or run gh pr checkout", async () => {
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
 	});
 
@@ -867,6 +908,8 @@ describe("run stream flags", () => {
 			if (file === "gh" && (command === "--version" || command === "auth")) {
 				return Promise.resolve("");
 			}
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				apiCalls += 1;
 				if (apiCalls > 2) {
@@ -910,6 +953,8 @@ describe("run stream flags", () => {
 			if (file === "gh" && (command === "--version" || command === "auth")) {
 				return Promise.resolve("");
 			}
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				return Promise.resolve(
 					JSON.stringify([
@@ -978,6 +1023,8 @@ describe("run stream flags", () => {
 			if (file === "gh" && (command === "--version" || command === "auth")) {
 				return Promise.resolve("");
 			}
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				return Promise.resolve(
 					JSON.stringify([
@@ -1616,9 +1663,71 @@ describe("watch explain", () => {
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
+
+		const reactionPosts = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.filter(([file, args]) => file === "gh" && isReactionPost(args));
+		expect(reactionPosts).toHaveLength(2);
+		expect(getReactionEmoji(reactionPosts[0][1])).toBe("eyes");
+		expect(getReactionEmoji(reactionPosts[1][1])).toBe("+1");
+
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toEqual(["review:1"]);
+	});
+
+	it("warns and continues when the reaction delete fails", async () => {
+		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && args.includes("DELETE")) {
+				return Promise.reject(new Error("delete failed"));
+			}
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
+			return resolveExplain(file, args, { answer: "It does something." });
+		}) as unknown as Runner;
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+
+		const mockRunner = runner as unknown as {
+			mock: {
+				calls: [string, string[]][];
+				results: { value: Promise<string> }[];
+			};
+		};
+
+		const eyesIndex = mockRunner.mock.calls.findIndex(
+			([file, args]) =>
+				file === "gh" &&
+				args.includes("POST") &&
+				args.some((arg) => typeof arg === "string" && arg.includes("/reactions")),
+		);
+		expect(eyesIndex).toBeGreaterThanOrEqual(0);
+		const eyesResult = await mockRunner.mock.results[eyesIndex].value;
+		const eyes = JSON.parse(eyesResult) as { id: number };
+		expect(typeof eyes.id).toBe("number");
+
+		const eyesId = eyes.id;
+		expect(
+			mockRunner.mock.calls.some(
+				([file, args]) =>
+					file === "gh" &&
+					args.includes("DELETE") &&
+					args.some((arg) => typeof arg === "string" && arg.endsWith(`/reactions/${eyesId}`)),
+			),
+		).toBe(true);
+
+		const reactionCalls = mockRunner.mock.calls.filter(
+			([file, args]) =>
+				file === "gh" && args.some((arg) => typeof arg === "string" && arg.includes("/reactions")),
+		);
+		const lastReaction = reactionCalls.at(-1);
+		expect(lastReaction?.[1].some((arg) => typeof arg === "string" && arg === "content=+1")).toBe(
+			true,
+		);
+
+		expect(countCalls(runner, "gh", isReplyPost)).toBe(FIRST_CALL);
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining("failed to remove reaction"));
+		warn.mockRestore();
 	});
 
 	it("emits debug log events when debug mode is enabled", async () => {
@@ -1696,6 +1805,30 @@ describe("watch explain", () => {
 		const runner = makeExplainRunner({ answer: "" });
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 		expect(warn).toHaveBeenCalled();
+		expect(
+			countCalls(
+				runner,
+				"gh",
+				(args) =>
+					args.includes("DELETE") &&
+					args.some((arg) => typeof arg === "string" && arg.includes("/reactions")),
+			),
+		).toBe(FIRST_CALL);
+		warn.mockRestore();
+	});
+
+	it("warns when removing the initial reaction fails", async () => {
+		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && args.includes("DELETE")) {
+				return Promise.reject(new Error("delete failed"));
+			}
+			return resolveExplain(file, args, { answer: "" });
+		}) as unknown as Runner;
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("failed to remove reaction: delete failed"),
+		);
 		warn.mockRestore();
 	});
 
@@ -1707,6 +1840,8 @@ describe("watch explain", () => {
 				return Promise.resolve("It does something.");
 			}
 			if (file === "gh" && args.at(0) === "api") {
+				const reaction = resolveReaction(args);
+				if (reaction !== undefined) return Promise.resolve(reaction);
 				if (args.some((arg) => arg.includes("/pulls/"))) {
 					return Promise.resolve(
 						JSON.stringify([
@@ -1750,6 +1885,8 @@ describe("watch explain", () => {
 				return Promise.resolve("It does something.");
 			}
 			if (file === "gh" && args.at(0) === "api") {
+				const reaction = resolveReaction(args);
+				if (reaction !== undefined) return Promise.resolve(reaction);
 				const endpoint = findEndpoint(args);
 				if (endpoint?.includes("/pulls/")) {
 					return Promise.resolve(
@@ -1813,7 +1950,7 @@ describe("watch explain", () => {
 		const runner = makeExplainRunner({ path: "missing.ts" });
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 	});
 	it("polls once and replies to all new mentions", async () => {
 		const runner = makeMultiMentionRunner();
@@ -1823,7 +1960,7 @@ describe("watch explain", () => {
 			runner,
 		});
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(TWO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toEqual(["review:2", "review:1"]);
 	});
@@ -1836,7 +1973,7 @@ describe("watch explain", () => {
 				runner,
 			}),
 		).rejects.toThrow();
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toEqual(["review:2", "review:1"]);
 	});
@@ -1866,6 +2003,145 @@ describe("watch explain", () => {
 	it("throws when gh auth status --hostname fails without a port", async () => {
 		const runner = makeMultiMentionRunner({ failOn: "gh --hostname" });
 		await expect(run.watch(PR_URL, { iterations: 1, runner })).rejects.toThrow();
+	});
+
+	it("warns when the initial reaction post returns an empty response", async () => {
+		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			if (file === "gh") {
+				const endpoint = findEndpoint(args);
+				if (endpoint?.includes("/reactions") && args.includes("POST")) {
+					return Promise.resolve("");
+				}
+				return resolveGhExplain(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "gh", isReplyPost)).toBe(FIRST_CALL);
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("failed to set reaction: empty response"),
+		);
+		warn.mockRestore();
+	});
+
+	it("warns when the initial reaction post returns a non-numeric id", async () => {
+		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			if (file === "gh") {
+				const endpoint = findEndpoint(args);
+				if (endpoint?.includes("/reactions") && args.includes("POST")) {
+					return Promise.resolve(JSON.stringify({ id: "abc" }));
+				}
+				return resolveGhExplain(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "gh", isReplyPost)).toBe(FIRST_CALL);
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("failed to set reaction: response did not contain a numeric id"),
+		);
+		warn.mockRestore();
+	});
+
+	it("warns when the initial reaction post returns invalid json", async () => {
+		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			if (file === "gh") {
+				const endpoint = findEndpoint(args);
+				if (endpoint?.includes("/reactions") && args.includes("POST")) {
+					return Promise.resolve("not json");
+				}
+				return resolveGhExplain(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "gh", isReplyPost)).toBe(FIRST_CALL);
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining("failed to set reaction:"));
+		warn.mockRestore();
+	});
+
+	it("warns when the initial reaction post fails", async () => {
+		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			if (file === "gh") {
+				const endpoint = findEndpoint(args);
+				if (endpoint?.includes("/reactions") && args.includes("POST")) {
+					return Promise.reject(new Error("reaction post failed"));
+				}
+				return resolveGhExplain(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "gh", isReplyPost)).toBe(FIRST_CALL);
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("failed to set reaction: reaction post failed"),
+		);
+		warn.mockRestore();
+	});
+
+	it("warns when the swap reaction post fails after a successful eyes reaction", async () => {
+		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			if (file === "git") {
+				return resolveGit(args);
+			}
+			if (file === "gh") {
+				const endpoint = findEndpoint(args);
+				const emoji = getReactionEmoji(args);
+				if (endpoint?.includes("/reactions") && args.includes("POST")) {
+					if (emoji === "+1") {
+						return Promise.reject(new Error("+1 reaction post failed"));
+					}
+					return Promise.resolve(JSON.stringify({ id: takeNextReactionId() }));
+				}
+				return resolveGhExplain(args);
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "gh", isReplyPost)).toBe(FIRST_CALL);
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("failed to set reaction: +1 reaction post failed"),
+		);
+		expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("failed to remove reaction"));
+		expect(
+			countCalls(runner, "gh", (args) => {
+				const endpoint = findEndpoint(args);
+				return args.includes("DELETE") && !!endpoint?.includes("/reactions");
+			}),
+		).toBe(FIRST_CALL);
+		warn.mockRestore();
 	});
 });
 
@@ -1904,6 +2180,8 @@ describe("watch users missing", () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
 			const endpoint = findEndpoint(args);
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				return Promise.resolve(
 					JSON.stringify([
@@ -1952,6 +2230,8 @@ describe("watch users invalid", () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
 			const endpoint = findEndpoint(args);
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				return Promise.resolve(
 					JSON.stringify([
@@ -2002,6 +2282,8 @@ describe("watch users null", () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
 			const endpoint = findEndpoint(args);
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				return Promise.resolve(JSON.stringify([[Object.assign(base, nullUser)]]));
 			}
@@ -2053,13 +2335,15 @@ describe("watch iterations", () => {
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: TWO_ITERATIONS, runner });
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 	});
 
 	it("skips a fresh install mention that already has a crewmate reply (async)", async () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
 			const endpoint = findEndpoint(args);
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				return Promise.resolve(
 					JSON.stringify([
@@ -2100,7 +2384,7 @@ describe("watch iterations", () => {
 		}) as unknown as Runner;
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 	});
 });
 
@@ -2143,6 +2427,13 @@ describe("watch fix success", () => {
 			),
 		).toBe(FIRST_CALL);
 
+		const reactionPosts = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.filter(([file, args]) => file === "gh" && isReactionPost(args));
+		expect(reactionPosts).toHaveLength(2);
+		expect(getReactionEmoji(reactionPosts[0][1])).toBe("eyes");
+		expect(getReactionEmoji(reactionPosts[1][1])).toBe("rocket");
+
 		const lines = await parseLogFile(tempDir);
 		expect(lines.some((line) => line.event === "fix" && line.dryRun === false)).toBe(true);
 	});
@@ -2166,10 +2457,10 @@ describe("watch fix success", () => {
 			runner,
 		});
 
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 		const postCall = (
 			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([file, args]) => file === "gh" && args.includes("POST"));
+		).mock.calls.find(([file, args]) => file === "gh" && isReplyPost(args));
 		expect(JSON.stringify(postCall?.[1])).toContain("Fixed.");
 		const lines = await parseLogFile(tempDir);
 		const fixLine = lines.find((line) => line.event === "fix" && line.dryRun === false);
@@ -2227,7 +2518,14 @@ describe("watch fix success", () => {
 		});
 
 		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
+
+		const reactionPosts = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.filter(([file, args]) => file === "gh" && isReactionPost(args));
+		expect(reactionPosts).toHaveLength(2);
+		expect(getReactionEmoji(reactionPosts[0][1])).toBe("eyes");
+		expect(getReactionEmoji(reactionPosts[1][1])).toBe("+1");
 	});
 
 	it("passes a custom prompt when fixing", async () => {
@@ -2327,9 +2625,6 @@ describe("watch fix success", () => {
 	});
 });
 
-const lastDryRunWrite = (write: { mock: { calls: unknown[][] } }): string =>
-	(write.mock.calls.at(-1) as [string])[0];
-
 describe("watch dry-run", () => {
 	let tempDir = "";
 
@@ -2378,7 +2673,7 @@ describe("watch dry-run", () => {
 			runner,
 		});
 
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 		expect(
 			countCalls(
 				runner,
@@ -2388,13 +2683,39 @@ describe("watch dry-run", () => {
 		).toBe(FIRST_CALL);
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 
-		const output = lastDryRunWrite(write);
-		expect(output).toContain("would reply to comment");
-		expect(output).toContain("It does something.");
+		const output = write.mock.calls.map(([line]) => line as string).join("");
+		const changeLines = output
+			.split("\n")
+			.filter((line) => line.startsWith("[dry-run] would change reaction"));
+		expect(changeLines).toHaveLength(2);
+		expect(changeLines[0]).toContain(":none: to :eyes:");
+		expect(changeLines[1]).toContain(":eyes: to :+1:");
+
+		const replyIndex = output.indexOf("would reply to comment");
+		const secondChangeIndex = output.indexOf(changeLines[1]);
+		expect(replyIndex).toBeGreaterThan(secondChangeIndex);
+
 		write.mockRestore();
 
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toBeUndefined();
+	});
+
+	it("removes the eyes reaction in dry-run when the provider returns empty", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
+		const runner = makeExplainRunner({ answer: "" });
+		await run.watch(PR_URL, {
+			dryRun: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+
+		const output = write.mock.calls.map(([line]) => line as string).join("");
+		expect(output).toContain("[dry-run] would change reaction on comment 1 from :none: to :eyes:");
+		expect(output).toContain("[dry-run] would remove reaction :eyes: from comment 1");
+		expect(output).not.toContain("would reply to comment");
+		write.mockRestore();
 	});
 
 	it("fix dry-run produces human-readable preview", async () => {
@@ -2411,7 +2732,7 @@ describe("watch dry-run", () => {
 			runner,
 		});
 
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
 		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "commit")).toBe(NO_CALLS);
 		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "push")).toBe(NO_CALLS);
@@ -2427,10 +2748,15 @@ describe("watch dry-run", () => {
 		const content = await readFile(path.resolve(targetPath), "utf8");
 		expect(content).toBe("old");
 
-		const output = lastDryRunWrite(write);
+		const output = write.mock.calls.map(([line]) => line as string).join("");
 		expect(output).toContain("would write fix to");
 		expect(output).toContain(targetPath);
 		expect(output).toContain("new");
+		expect(output).toContain("[dry-run] would change reaction on comment 1 from :none: to :eyes:");
+		expect(output).toContain(
+			"[dry-run] would change reaction on comment 1 from :eyes: to :rocket:",
+		);
+		expect(output).toContain("[dry-run] would reply to comment 1:");
 		write.mockRestore();
 	});
 });
@@ -2458,7 +2784,7 @@ describe("watch fix missing", () => {
 			iterations: FIRST_ITERATION,
 			runner,
 		});
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 	});
 });
 
@@ -2490,7 +2816,7 @@ describe("watch fix empty", () => {
 			iterations: FIRST_ITERATION,
 			runner,
 		});
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 	});
 });
 
@@ -2581,7 +2907,7 @@ describe("watch fix errors", () => {
 			iterations: FIRST_ITERATION,
 			runner,
 		});
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 	});
 
 	it("reports when the target file is missing in an existing directory", async () => {
@@ -2593,7 +2919,7 @@ describe("watch fix errors", () => {
 			iterations: FIRST_ITERATION,
 			runner,
 		});
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 	});
 
 	it("reports when the fix cannot be pushed", async () => {
@@ -2609,7 +2935,7 @@ describe("watch fix errors", () => {
 			iterations: FIRST_ITERATION,
 			runner,
 		});
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 	});
 
 	it("reports when the fix cannot be pushed and the short hash is missing", async () => {
@@ -2633,7 +2959,7 @@ describe("watch fix errors", () => {
 			iterations: FIRST_ITERATION,
 			runner,
 		});
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 	});
 
 	it("reports when the fix cannot be committed", async () => {
@@ -2651,7 +2977,7 @@ describe("watch fix errors", () => {
 				runner,
 			}),
 		).rejects.toThrow();
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 	});
 });
 
@@ -2677,13 +3003,26 @@ describe("conversation comments", () => {
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 
 		const postCall = (
 			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([file, args]) => file === "gh" && args.includes("POST"));
+		).mock.calls.find(([file, args]) => file === "gh" && isReplyPost(args));
 		expect(postCall?.[1].some((arg) => /\/issues\/\d+\/comments/.test(arg))).toBe(true);
 		expect(postCall?.[1].some((arg) => /\/pulls\/.*\/comments\/.*\/replies/.test(arg))).toBe(false);
+
+		const reactionPosts = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.filter(([file, args]) => file === "gh" && isReactionPost(args));
+		expect(reactionPosts).toHaveLength(2);
+		expect(
+			reactionPosts.every(([_, args]) => findEndpoint(args)?.includes("/issues/comments/")),
+		).toBe(true);
+		expect(
+			reactionPosts.some(([_, args]) => findEndpoint(args)?.includes("/pulls/comments/")),
+		).toBe(false);
+		expect(getReactionEmoji(reactionPosts[0][1])).toBe("eyes");
+		expect(getReactionEmoji(reactionPosts[1][1])).toBe("+1");
 
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toEqual(["conversation:3"]);
@@ -2714,10 +3053,21 @@ describe("conversation comments", () => {
 		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
 		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "commit")).toBe(NO_CALLS);
 		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "push")).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 		expect(warn).toHaveBeenCalledWith(
 			expect.stringContaining("fix requested on conversation comment"),
 		);
+
+		const reactionPosts = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.filter(([file, args]) => file === "gh" && isReactionPost(args));
+		expect(reactionPosts).toHaveLength(2);
+		expect(
+			reactionPosts.every(([_, args]) => findEndpoint(args)?.includes("/issues/comments/")),
+		).toBe(true);
+		expect(getReactionEmoji(reactionPosts[0][1])).toBe("eyes");
+		expect(getReactionEmoji(reactionPosts[1][1])).toBe("-1");
+
 		warn.mockRestore();
 	});
 
@@ -2760,6 +3110,8 @@ describe("conversation comments", () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
 			const endpoint = findEndpoint(args);
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				return Promise.resolve(
 					JSON.stringify([
@@ -2804,7 +3156,7 @@ describe("conversation comments", () => {
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(TWO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
 
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toEqual(["conversation:2", "review:1"]);
@@ -2816,7 +3168,7 @@ describe("conversation comments", () => {
 
 		const postCall = (
 			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([file, args]) => file === "gh" && args.includes("POST"));
+		).mock.calls.find(([file, args]) => file === "gh" && isReplyPost(args));
 		expect(postCall?.[1].some((arg) => /\/pulls\/\d+\/comments\/\d+\/replies/.test(arg))).toBe(
 			true,
 		);
@@ -2835,7 +3187,7 @@ describe("conversation comments", () => {
 			runner,
 		});
 		expect(getPrompt(runner)?.startsWith("CUSTOM\n\n")).toBe(true);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 	});
 
 	it("warns when the provider returns an empty conversation response", async () => {
@@ -2847,7 +3199,7 @@ describe("conversation comments", () => {
 		});
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 		expect(warn).toHaveBeenCalledWith("Warning: claude returned empty conversation response\n");
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 		warn.mockRestore();
 	});
 
@@ -2866,7 +3218,7 @@ describe("conversation comments", () => {
 			runner,
 		});
 		expect(warn).toHaveBeenCalledWith("Warning: my-llm returned empty conversation response\n");
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 		warn.mockRestore();
 	});
 
@@ -2874,6 +3226,8 @@ describe("conversation comments", () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
 			const endpoint = findEndpoint(args);
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				return Promise.resolve(JSON.stringify([[]]));
 			}
@@ -2897,7 +3251,7 @@ describe("conversation comments", () => {
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toBeUndefined();
 	});
@@ -2906,6 +3260,8 @@ describe("conversation comments", () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
 			const endpoint = findEndpoint(args);
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
 				return Promise.resolve(
 					JSON.stringify([
@@ -2940,7 +3296,7 @@ describe("conversation comments", () => {
 		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
 
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toBeUndefined();
 	});
@@ -3192,9 +3548,11 @@ describe("logs", () => {
 			if (file === "git") {
 				return resolveGit(args);
 			}
-			if (file === "gh" && args.includes("POST")) {
+			if (file === "gh" && isReplyPost(args)) {
 				return Promise.reject(new Error("post failed"));
 			}
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
 			return resolveGhExplain(args);
 		}) as unknown as Runner;
 
@@ -3204,6 +3562,8 @@ describe("logs", () => {
 
 		const lines = await parseLogFile(tempDir);
 		expect(lines.some((line) => line.event === "reply" && line.failed === true)).toBe(true);
+		expect(countCalls(runner, "gh", isReactionPost)).toBe(TWO_CALLS);
+		expect(countCalls(runner, "gh", isReactionDelete)).toBe(TWO_CALLS);
 	});
 });
 
@@ -3288,7 +3648,7 @@ describe("watch config", () => {
 			iterations: FIRST_ITERATION,
 			runner,
 		});
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 	});
 
 	it("uses a config fix flag", async () => {
@@ -3331,7 +3691,7 @@ describe("watch config", () => {
 			iterations: FIRST_ITERATION,
 			runner,
 		});
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 	});
 
 	it("uses a config log flag", async () => {
@@ -3522,6 +3882,8 @@ describe("scope targets", () => {
 		const runner = vi.fn(
 			(file: string, args: string[], options?: { env?: Record<string, string | undefined> }) => {
 				if (file === "gh" && args[0] === "api") {
+					const reaction = resolveReaction(args);
+					if (reaction !== undefined) return Promise.resolve(reaction);
 					expect(options?.env?.GH_HOST).toBe("ghe.example.com");
 					expect(args).not.toContain("--hostname");
 					return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
@@ -3540,6 +3902,8 @@ describe("scope targets", () => {
 		const runner = vi.fn(
 			(file: string, args: string[], options?: { env?: Record<string, string | undefined> }) => {
 				if (file === "gh" && args[0] === "api") {
+					const reaction = resolveReaction(args);
+					if (reaction !== undefined) return Promise.resolve(reaction);
 					expect(options?.env?.GH_HOST).toBe("ghe.example.com:8443");
 					expect(args).not.toContain("--hostname");
 					return Promise.resolve(
@@ -3721,6 +4085,8 @@ describe("scope targets", () => {
 				return Promise.resolve("");
 			}
 			if (file === "gh" && args[0] === "api") {
+				const reaction = resolveReaction(args);
+				if (reaction !== undefined) return Promise.resolve(reaction);
 				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
 					return Promise.resolve(JSON.stringify([{ items: [{ html_url: prUrl }] }]));
 				}
@@ -3769,7 +4135,7 @@ describe("scope targets", () => {
 			logger,
 			runner,
 		});
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 	});
@@ -3803,7 +4169,7 @@ describe("scope targets", () => {
 		expect(
 			countCalls(runner, "gh", (args) => args.includes("Accept: application/vnd.github.raw")),
 		).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
 		expect(logger).toHaveBeenCalledWith(
 			"warning",
@@ -3820,7 +4186,7 @@ describe("scope targets", () => {
 			logger,
 			runner,
 		});
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
 	});
 
@@ -3832,6 +4198,8 @@ describe("scope targets", () => {
 				return Promise.resolve("");
 			}
 			if (file === "gh" && args[0] === "api") {
+				const reaction = resolveReaction(args);
+				if (reaction !== undefined) return Promise.resolve(reaction);
 				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
 					return Promise.resolve(
 						JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }, { html_url: SCOPE_PR_URL_2 }] }]),
@@ -3875,7 +4243,7 @@ describe("scope targets", () => {
 			logger,
 			runner,
 		});
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(TWO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
 	});
 
 	it("continues polling when one repo scope PR fails", async () => {
@@ -3886,6 +4254,8 @@ describe("scope targets", () => {
 				return Promise.resolve("");
 			}
 			if (file === "gh" && args[0] === "api") {
+				const reaction = resolveReaction(args);
+				if (reaction !== undefined) return Promise.resolve(reaction);
 				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
 					return Promise.resolve(
 						JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }, { html_url: SCOPE_PR_URL_2 }] }]),
@@ -3932,7 +4302,7 @@ describe("scope targets", () => {
 			logger,
 			runner,
 		});
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 		expect(logger).toHaveBeenCalledWith(
 			"warning",
 			expect.objectContaining({ reason: "pr-poll-failed" }),
@@ -4019,7 +4389,7 @@ describe("scope targets", () => {
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "--version")).toBe(
 			NO_CALLS,
 		);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 		write.mockRestore();
 	});
 
@@ -4086,6 +4456,8 @@ describe("scope targets", () => {
 				return Promise.resolve("");
 			}
 			if (file === "gh" && args[0] === "api") {
+				const reaction = resolveReaction(args);
+				if (reaction !== undefined) return Promise.resolve(reaction);
 				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
 					return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
 				}
@@ -4134,7 +4506,7 @@ describe("scope targets", () => {
 			"warning",
 			expect.objectContaining({ reason: "file-content-api-failed" }),
 		);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 	});
 
 	it("re-throws non-404 raw content API failures", async () => {
@@ -4144,6 +4516,8 @@ describe("scope targets", () => {
 				return Promise.resolve("");
 			}
 			if (file === "gh" && args[0] === "api") {
+				const reaction = resolveReaction(args);
+				if (reaction !== undefined) return Promise.resolve(reaction);
 				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
 					return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
 				}
@@ -4192,7 +4566,7 @@ describe("scope targets", () => {
 			"warning",
 			expect.objectContaining({ reason: "file-content-api-failed" }),
 		);
-		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(0);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(0);
 		expect(logger).toHaveBeenCalledWith(
 			"warning",
 			expect.objectContaining({ reason: "pr-poll-failed" }),
@@ -4209,5 +4583,46 @@ describe("applyFix", () => {
 				"fixed",
 			),
 		).rejects.toThrow("repoRoot is required to apply fixes");
+	});
+});
+
+describe("dispatchMention reaction cleanup", () => {
+	it("warns when removing an eyes reaction that has no id", async () => {
+		const warn = vi.fn() as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const logger = vi.fn() as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && isReactionPost(args)) {
+				return Promise.reject(new Error("reaction post failed"));
+			}
+			if (file === "claude") {
+				return Promise.resolve("");
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const ctx = {
+			checkedOut: new Set<string>(),
+			commentId: FIRST_ID,
+			dryRun: false,
+			ghHost: "github.com",
+			kind: "conversation" as const,
+			logger,
+			number: "123",
+			owner: "owner",
+			prUrl: PR_URL,
+			repo: "repo",
+			reaction: { emoji: "eyes" },
+			runner,
+			warn,
+		};
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate hello", kind: "conversation" }, ctx, {
+			allowFix: false,
+		});
+		expect(warn).toHaveBeenCalledWith(
+			"failed to remove reaction: no reaction id",
+			expect.any(Object),
+		);
 	});
 });

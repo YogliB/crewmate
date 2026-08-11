@@ -16,7 +16,8 @@ You need:
 
 - **Provider default is `claude`**. If you don't have `claude` installed, set a different provider in `crewmate init`, in your config, or with `--provider <command>`.
 - **`--fix` only works for single-PR review comments** that contain the tag `#fix`. It is disabled for repo or org scope, and conversation comments cannot request fixes.
-- **`--dry-run` still runs `gh pr checkout`** for single-PR targets. It skips posting replies and committing/pushing, but it may still touch your working tree.
+- **Crewmate adds an `eyes` reaction to each new `@crewmate` mention** and swaps it for a thumbs-up, thumbs-down, or rocket before posting the reply.
+- **`--dry-run` still runs `gh pr checkout`** for single-PR targets. It skips posting replies and reactions and committing/pushing, but it may still touch your working tree.
 - **Conversation comments may be reprocessed** if the state file is lost, because GitHub does not expose a parent id for top-level conversation replies.
 - **Repo and org scope use the GitHub search API**. Large scopes may hit rate limits; use a longer `--interval` for big organizations.
 
@@ -53,7 +54,7 @@ crewmate init
 - `--provider <command>` — use a specific provider CLI instead of `claude`.
 - `--prompt <text>` — prepend custom instructions to the LLM prompt.
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
-- `--dry-run` — preview the reply or fix on stdout without posting to GitHub or committing/pushing. Dry-run defaults to one iteration.
+- `--dry-run` — preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Dry-run defaults to one iteration.
 - `--user <login>` — only reply to comments from this GitHub user (defaults to the active `gh` user when omitted and not set in config).
 - `--debug` — emit extra poll pipeline detail (`fetched-comments`, `mention-filter`, `new-mentions`) to the log.
 
@@ -145,7 +146,6 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 - **Init-time model selection**: when running `crewmate init`, query the configured provider for its available models and let the user select one.
 - **Connected user by default**: agents run connected to the user by default; to run in a looser mode, an explicit `unsafe` override flag is required.
 - **Sandboxed agents by default**: agents run in a sandbox by default.
-- **React with an emoji before answering**: add an emoji reaction to an `@crewmate` mention before posting a reply.
 - **Dry-run should stay in watch mode**: `crewmate watch --dry-run` should keep polling continuously and only skip posting replies, not exit after a single iteration.
 - **Default to the current GitHub repo from a git working tree**: when `crewmate watch` or `crewmate stream` is run from inside a git repository, default the target to the current repository if its remote points to GitHub.
 
