@@ -146,6 +146,7 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 - **Connected user by default**: agents run connected to the user by default; to run in a looser mode, an explicit `unsafe` override flag is required.
 - **Sandboxed agents by default**: agents run in a sandbox by default.
 - **React with an emoji before answering**: add an emoji reaction to an `@crewmate` mention before posting a reply.
+- **Dry-run should stay in watch mode**: `crewmate watch --dry-run` should keep polling continuously and only skip posting replies, not exit after a single iteration.
 
 ## More docs
 
