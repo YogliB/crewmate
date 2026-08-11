@@ -142,6 +142,7 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 - **Init-time model selection**: when running `crewmate init`, query the configured provider for its available models and let the user select one.
 - **Connected user by default**: agents run connected to the user by default; to run in a looser mode, an explicit `unsafe` override flag is required.
 - **Sandboxed agents by default**: agents run in a sandbox by default.
+- **React with an emoji before answering**: add an emoji reaction to an `@crewmate` mention before posting a reply.
 
 ## More docs
 
