@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Render `--help` output with ANSI terminal styles instead of raw Markdown.
+- `--user` defaults to the authenticated `gh` login when omitted.
+- Add `--debug` flag and `debug` config key for poll pipeline diagnostics.
 
 ## 0.0.1
 

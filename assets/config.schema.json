@@ -41,6 +41,9 @@
 				},
 				"log": {
 					"type": "boolean"
+				},
+				"debug": {
+					"type": "boolean"
 				}
 			},
 			"additionalProperties": true

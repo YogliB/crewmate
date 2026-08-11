@@ -33,6 +33,7 @@ const NO_INTERVAL = 0;
 const NO_CALLS = 0;
 const FIRST_CALL = 1;
 const TWO_CALLS = 2;
+const THREE_CALLS = 3;
 const NO_EXIT_CODE = 0;
 const ERROR_EXIT_CODE = 1;
 const ORIGINAL_CWD = process.cwd();
@@ -488,7 +489,7 @@ describe("run watch flags", () => {
 			return Promise.resolve("");
 		}) as unknown as Runner;
 		await expect(run.watch(PR_URL, { runner })).rejects.toThrow("api fail");
-		expect(countCalls(runner, "gh", (args) => args[0] === "api")).toBe(TWO_CALLS);
+		expect(countCalls(runner, "gh", (args) => args[0] === "api")).toBe(THREE_CALLS);
 	});
 
 	it("uses the default runner when none is provided", async () => {
@@ -1620,6 +1621,25 @@ describe("watch explain", () => {
 		expect(state.get(PR_URL)).toEqual(["review:1"]);
 	});
 
+	it("emits debug log events when debug mode is enabled", async () => {
+		const logger = vi.fn() as unknown as Logger & {
+			mock: { calls: [string, Record<string, unknown>][] };
+		};
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+			debug: true,
+			logger,
+		});
+		const calls = logger.mock.calls.filter(([level]) => level === "debug");
+		expect(calls).toHaveLength(3);
+		expect(calls[0][1]).toMatchObject({ stage: "fetched-comments" });
+		expect(calls[1][1]).toMatchObject({ stage: "mention-filter" });
+		expect(calls[2][1]).toMatchObject({ stage: "new-mentions" });
+	});
+
 	it("skips mentions from other users", async () => {
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run.watch(PR_URL, {
@@ -1631,6 +1651,44 @@ describe("watch explain", () => {
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toBeUndefined();
+	});
+
+	it("defaults allowedUser to the authenticated gh user when --user is not set", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && args[0] === "api" && args.includes("user")) {
+				return Promise.resolve("alice\n");
+			}
+			return resolveExplain(file, args, { answer: "It does something." });
+		}) as unknown as Runner;
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+	});
+
+	it("skips mentions from other users when the authenticated gh user differs", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && args[0] === "api" && args.includes("user")) {
+				return Promise.resolve("bob\n");
+			}
+			return resolveExplain(file, args, { answer: "It does something." });
+		}) as unknown as Runner;
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+	});
+
+	it("warns when the authenticated gh user cannot be determined", async () => {
+		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && args[0] === "api" && args.includes("user")) {
+				return Promise.reject(new Error("not logged in"));
+			}
+			return resolveExplain(file, args, { answer: "It does something." });
+		}) as unknown as Runner;
+		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("could not determine the authenticated gh user"),
+		);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+		warn.mockRestore();
 	});
 
 	it("warns when the provider returns an empty explanation", async () => {
@@ -3716,6 +3774,23 @@ describe("scope targets", () => {
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 	});
 
+	it("watches with the --debug CLI flag and emits debug log events", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger & {
+			mock: { calls: [string, Record<string, unknown>][] };
+		};
+		const runner = makeScopeRunner();
+		await run(["watch", REPO_TARGET, "--debug"], {
+			iterations: FIRST_ITERATION,
+			runner,
+			logger,
+		});
+		const debugCalls = logger.mock.calls.filter(([level]) => level === "debug");
+		expect(debugCalls.length).toBeGreaterThan(0);
+		expect(
+			debugCalls.some(([, fields]) => (fields as { stage: string }).stage === "new-mentions"),
+		).toBe(true);
+	});
+
 	it("rejects an unsafe review file path outside a git tree", async () => {
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const runner = makeScopeRunner({ filePath: "../etc/passwd" });
@@ -3945,6 +4020,21 @@ describe("scope targets", () => {
 			NO_CALLS,
 		);
 		expect(countCalls(runner, "gh", (args) => args.includes("POST"))).toBe(NO_CALLS);
+		write.mockRestore();
+	});
+
+	it("streams with --debug and emits debug log events", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const logger = vi.fn() as unknown as Logger & {
+			mock: { calls: [string, Record<string, unknown>][] };
+		};
+		const runner = makeScopeRunner();
+		await run(["stream", REPO_TARGET, "--debug"], { iterations: FIRST_ITERATION, runner, logger });
+		const debugCalls = logger.mock.calls.filter(([level]) => level === "debug");
+		expect(debugCalls.length).toBeGreaterThan(0);
+		expect(
+			debugCalls.some(([, fields]) => (fields as { stage: string }).stage === "new-mentions"),
+		).toBe(true);
 		write.mockRestore();
 	});
 

@@ -54,7 +54,8 @@ crewmate init
 - `--prompt <text>` — prepend custom instructions to the LLM prompt.
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
 - `--dry-run` — preview the reply or fix on stdout without posting to GitHub or committing/pushing. Dry-run defaults to one iteration.
-- `--user <login>` — only reply to comments from this GitHub user.
+- `--user <login>` — only reply to comments from this GitHub user (defaults to the active `gh` user when omitted and not set in config).
+- `--debug` — emit extra poll pipeline detail (`fetched-comments`, `mention-filter`, `new-mentions`) to the log.
 
 `--fix` only works for single-PR targets. It is disabled for repo or org scope.
 
@@ -64,7 +65,8 @@ Emit new `@crewmate` mentions as NDJSON to stdout without invoking a provider or
 
 - `--interval <seconds>` — seconds between polls. Default is `60`.
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
-- `--user <login>` — only emit mentions from this GitHub user.
+- `--user <login>` — only emit mentions from this GitHub user (defaults to the active `gh` user when omitted and not set in config).
+- `--debug` — emit extra poll pipeline detail (`fetched-comments`, `mention-filter`, `new-mentions`) to the log.
 
 `crewmate stream` can run outside a git working tree and uses only the global config. The `<target>` can be a single PR, a repo, an org, or a GHES full URL. Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and `path`/`line` for review comments.
 
@@ -86,7 +88,7 @@ Precedence, strongest first:
 
 `repo` and `org` scope watches run outside the target repository and therefore use only the global config.
 
-Both files use the same profile keys: `provider`, `model`, `interval`, `user`, `prompt`, `fix`, `dryRun`, and `log`. Unknown keys are ignored. Invalid types for known keys are warned and ignored. In the global file, the `profiles` map keys (owner/repo) are matched case-insensitively. See `assets/config.schema.json` for the full schema; point your IDE at it for validation and autocomplete.
+Both files use the same profile keys: `provider`, `model`, `interval`, `user`, `prompt`, `fix`, `dryRun`, `log`, and `debug`. Unknown keys are ignored. Invalid types for known keys are warned and ignored. In the global file, the `profiles` map keys (owner/repo) are matched case-insensitively. See `assets/config.schema.json` for the full schema; point your IDE at it for validation and autocomplete.
 
 Example `.crewmate.json`:
 
@@ -119,6 +121,7 @@ Each line in `crewmate.log` is an NDJSON object with an `at` ISO-8601 timestamp 
 - `warning` — a recoverable problem such as an empty provider response or corrupted state file.
 - `error` — an unhandled failure that stops the watch loop (`errorType`, `message`, `stack`).
 - `info` — a notice such as dry-run mode.
+- `debug` — diagnostic detail about the poll pipeline (`stage: fetched-comments|mention-filter|new-mentions`), useful for figuring out why a mention was or wasn't picked up.
 
 Additional fields vary by event (e.g., `owner`, `repo`, `number`, `commentId`, `url`, `path`).
 
