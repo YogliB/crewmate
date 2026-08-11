@@ -21,7 +21,7 @@ A CLI that watches GitHub PR comments (review and conversation) for `@crewmate` 
 - `--provider <command>` Use a specific provider CLI instead of the default `claude`.
 - `--prompt <text>` Prepend custom instructions to the LLM prompt.
 - `--log` Also mirror structured log lines to stderr.
-- `--dry-run` Preview the reply or fix on stdout without posting to GitHub or committing/pushing. Defaults to one iteration.
+- `--dry-run` Preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Defaults to one iteration.
 - `--user <login>` Only respond to comments from this GitHub login (defaults to the active `gh` user when omitted and not set in config)
 - `--debug` Emit extra poll pipeline detail (fetched comments, mention-filter results, new mentions) to the log.
 
@@ -70,7 +70,7 @@ Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, `info`
 - Scope mode fetches file content from the GitHub API, so it does not need a local clone.
 - Each poll processes every new unseen `@crewmate` mention; additional polls handle comments added after the current poll.
 - For single-PR targets, run from a clean repository; `gh pr checkout` will fail if the working tree has uncommitted changes.
-- For single-PR targets, `--dry-run` still runs `gh pr checkout`; it only skips posting replies and committing/pushing fixes.
+- For single-PR targets, `--dry-run` still runs `gh pr checkout`; it only skips posting replies and reactions and committing/pushing fixes.
 - If `git push` fails after a fix is committed, the commit remains local and must be pushed manually.
 - `--provider` expects a CLI with the same flags as `claude` (`--version`, `--model`, `-p`).
 - General PR conversation comments are handled too. Conversation replies are not threaded, do not support `#fix`, and cannot be matched to their original mention on a fresh install, so they may be reprocessed if state is lost.

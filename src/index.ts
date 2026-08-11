@@ -774,12 +774,13 @@ const runScope = async (
 			if (!toStderr) {
 				try {
 					process.stderr.write(
-						"Dry-run mode: no GitHub comments or git add/commit/push will be made.\n",
+						"Dry-run mode: no GitHub comments, reactions, or git add/commit/push will be made.\n",
 					);
 				} catch {}
 			}
 			await logger("info", {
-				message: "Dry-run mode: no GitHub comments or git add/commit/push will be made.",
+				message:
+					"Dry-run mode: no GitHub comments, reactions, or git add/commit/push will be made.",
 			});
 		}
 

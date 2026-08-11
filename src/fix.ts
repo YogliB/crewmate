@@ -83,6 +83,7 @@ type ReplyContext = {
 	prUrl: string;
 	prompt?: string;
 	provider?: string;
+	reaction?: { id?: number; emoji: string };
 	repo: string;
 	repoRoot?: string;
 	runner: Runner;
@@ -100,6 +101,105 @@ const logContext = (
 	owner: ctx.owner,
 	repo: ctx.repo,
 });
+
+const setReaction = async (ctx: ReplyContext, emoji: string): Promise<void> => {
+	const base = logContext(ctx, { emoji });
+	if (ctx.dryRun) {
+		const from = ctx.reaction?.emoji ?? "none";
+		process.stdout.write(
+			`[dry-run] would change reaction on comment ${ctx.commentId} from :${from}: to :${emoji}:\n`,
+		);
+		ctx.reaction = { emoji };
+		return;
+	}
+	const kind = ctx.kind === "conversation" ? "issues" : "pulls";
+	const previousId = ctx.reaction?.id;
+	if (previousId !== undefined) {
+		try {
+			await ctx.runner(
+				"gh",
+				[
+					"api",
+					"--method",
+					"DELETE",
+					`repos/${ctx.owner}/${ctx.repo}/${kind}/comments/${ctx.commentId}/reactions/${previousId}`,
+				],
+				{ env: { GH_HOST: ctx.ghHost } },
+			);
+		} catch (error) {
+			await ctx.warn(`failed to remove reaction: ${errorMessage(error)}`, {
+				...base,
+				reactionId: previousId,
+			});
+		}
+	}
+	ctx.reaction = { emoji };
+	try {
+		const output = await ctx.runner(
+			"gh",
+			[
+				"api",
+				"--method",
+				"POST",
+				`repos/${ctx.owner}/${ctx.repo}/${kind}/comments/${ctx.commentId}/reactions`,
+				"-f",
+				`content=${emoji}`,
+			],
+			{ env: { GH_HOST: ctx.ghHost } },
+		);
+		if (output.trim() === "") {
+			await ctx.warn("failed to set reaction: empty response", base);
+			return;
+		}
+		try {
+			const json = JSON.parse(output) as { id?: unknown };
+			if (typeof json.id === "number") {
+				ctx.reaction = { id: json.id, emoji };
+			} else {
+				await ctx.warn("failed to set reaction: response did not contain a numeric id", base);
+			}
+		} catch (error) {
+			await ctx.warn(`failed to set reaction: ${errorMessage(error)}`, base);
+		}
+	} catch (error) {
+		await ctx.warn(`failed to set reaction: ${errorMessage(error)}`, base);
+	}
+};
+
+const removeReaction = async (ctx: ReplyContext): Promise<void> => {
+	const base = logContext(ctx);
+	if (ctx.dryRun) {
+		process.stdout.write(
+			`[dry-run] would remove reaction :${ctx.reaction!.emoji}: from comment ${ctx.commentId}\n`,
+		);
+		ctx.reaction = undefined;
+		return;
+	}
+	if (ctx.reaction?.id === undefined) {
+		await ctx.warn("failed to remove reaction: no reaction id", base);
+		return;
+	}
+	const kind = ctx.kind === "conversation" ? "issues" : "pulls";
+	try {
+		await ctx.runner(
+			"gh",
+			[
+				"api",
+				"--method",
+				"DELETE",
+				`repos/${ctx.owner}/${ctx.repo}/${kind}/comments/${ctx.commentId}/reactions/${ctx.reaction.id}`,
+			],
+			{ env: { GH_HOST: ctx.ghHost } },
+		);
+	} catch (error) {
+		await ctx.warn(`failed to remove reaction: ${errorMessage(error)}`, {
+			...base,
+			reactionId: ctx.reaction.id,
+		});
+	} finally {
+		ctx.reaction = undefined;
+	}
+};
 
 const stripFences = (content: string): string => {
 	const trimmed = content.trim();
@@ -119,6 +219,8 @@ const postReply = async (
 	body: string,
 	kind: "explain" | "error" | "fix" | "nochange",
 ): Promise<void> => {
+	const emoji = kind === "error" ? "-1" : kind === "fix" ? "rocket" : "+1";
+	await setReaction(ctx, emoji);
 	const prefixedBody = `${CREWMATE_PREFIX} ${body}`;
 	const base = logContext(ctx, { kind });
 	const dryRunLabel =
@@ -141,6 +243,7 @@ const postReply = async (
 		await ctx.logger("reply", { ...base, failed: false });
 	} catch (error) {
 		await ctx.logger("reply", { ...base, failed: true, error: errorMessage(error) });
+		await removeReaction(ctx);
 		throw error;
 	}
 };
@@ -282,7 +385,7 @@ export const applyFix = async (
 	if (ctx.dryRun) {
 		process.stdout.write(`[dry-run] would write fix to ${safePath}:\n${stripped}\n`);
 		await ctx.logger("fix", { ...base, sha: null });
-		await ctx.logger("reply", { ...logContext(ctx), kind: "fix", failed: false });
+		await postReply(ctx, "Fixed.", "fix");
 		return;
 	}
 	try {
@@ -358,23 +461,30 @@ const dispatchMention = async (
 	ctx: ReplyContext,
 	{ allowFix }: { allowFix: boolean },
 ): Promise<void> => {
-	const wantsFix = allowFix && /#fix\b/i.test(mention.body);
-	if (mention.kind === "conversation") {
-		if (wantsFix) {
-			await ctx.warn(
-				"fix requested on conversation comment; only review comments can be fixed",
-				logContext(ctx),
-			);
-			await postReply(ctx, NO_FIX_IN_CONVERSATION, "error");
+	try {
+		await setReaction(ctx, "eyes");
+		const wantsFix = allowFix && /#fix\b/i.test(mention.body);
+		if (mention.kind === "conversation") {
+			if (wantsFix) {
+				await ctx.warn(
+					"fix requested on conversation comment; only review comments can be fixed",
+					logContext(ctx),
+				);
+				await postReply(ctx, NO_FIX_IN_CONVERSATION, "error");
+				return;
+			}
+			await handleConversation(mention, ctx);
 			return;
 		}
-		await handleConversation(mention, ctx);
-		return;
-	}
-	if (wantsFix) {
-		await handleFix(mention, ctx);
-	} else {
-		await handleExplain(mention, ctx);
+		if (wantsFix) {
+			await handleFix(mention, ctx);
+		} else {
+			await handleExplain(mention, ctx);
+		}
+	} finally {
+		if (ctx.reaction?.emoji === "eyes") {
+			await removeReaction(ctx);
+		}
 	}
 };
 
