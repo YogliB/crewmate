@@ -7,6 +7,22 @@ description: Run crewmate in stream mode and handle incoming @crewmate PR mentio
 
 `crewmate stream <pr-url-or-shorthand>` emits one JSON object per new `@crewmate` mention on stdout. It does not invoke the provider, post replies, or run `gh pr checkout`.
 
+## Install
+
+If `crewmate` is not installed, install the CLI first:
+
+```bash
+npm install -g crewmate
+```
+
+If this skill is not installed, add it from the repository:
+
+```bash
+npx skills add YogliB/crewmate --skill crewmate
+```
+
+You can also copy `.agents/skills/crewmate/SKILL.md` from the repository into your agent's skills directory.
+
 ## Start the stream
 
 ```bash
