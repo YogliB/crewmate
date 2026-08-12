@@ -27,10 +27,10 @@ You need:
 npm install -g crewmate
 ```
 
-If you use Devin CLI, install the `crewmate` skill from this repository:
+You can also install the `crewmate` skill from this repository:
 
 ```bash
-npx skills add YogliB/crewmate -g -a devin -s crewmate
+npx skills add YogliB/crewmate --skill crewmate
 ```
 
 If you are building from source, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
