@@ -1,6 +1,6 @@
 # crewmate changelog
 
-## Unreleased
+## 0.1.0
 
 - `crewmate watch --dry-run` now polls continuously instead of exiting after one iteration.
 - Render `--help` output with ANSI terminal styles instead of raw Markdown.
