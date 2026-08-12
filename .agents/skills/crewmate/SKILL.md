@@ -1,5 +1,5 @@
 ---
-name: crewmate-stream
+name: crewmate
 description: Run crewmate in stream mode and handle incoming @crewmate PR mentions as NDJSON events. Use when the user wants to poll a PR for crewmate mentions, consume the crewmate NDJSON stream, or build an agent that responds to review and conversation comments.
 ---
 
