@@ -2642,12 +2642,18 @@ describe("watch dry-run", () => {
 		vi.unstubAllEnvs();
 	});
 
-	it("defaults dry-run to one iteration", async () => {
+	it("dry-run polls for two iterations", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
 		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, { dryRun: true, interval: NO_INTERVAL, runner });
+		await run.watch(PR_URL, {
+			dryRun: true,
+			interval: NO_INTERVAL,
+			iterations: TWO_ITERATIONS,
+			runner,
+		});
 
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 		expect(write).toHaveBeenCalled();
 		write.mockRestore();
 	});

@@ -21,7 +21,7 @@ A CLI that watches GitHub PR comments (review and conversation) for `@crewmate` 
 - `--provider <command>` Use a specific provider CLI instead of the default `claude`.
 - `--prompt <text>` Prepend custom instructions to the LLM prompt.
 - `--log` Also mirror structured log lines to stderr.
-- `--dry-run` Preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Defaults to one iteration.
+- `--dry-run` Preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Polls continuously like regular watch mode.
 - `--user <login>` Only respond to comments from this GitHub login (defaults to the active `gh` user when omitted and not set in config)
 - `--debug` Emit extra poll pipeline detail (fetched comments, mention-filter results, new mentions) to the log.
 
