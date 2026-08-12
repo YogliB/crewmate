@@ -768,7 +768,7 @@ const runScope = async (
 			await runner(provider || "claude", ["--version"]);
 		}
 
-		const iterations = options.iterations ?? (dryRun ? 1 : Infinity);
+		const iterations = options.iterations ?? Infinity;
 
 		if (dryRun) {
 			if (!toStderr) {

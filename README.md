@@ -54,7 +54,7 @@ crewmate init
 - `--provider <command>` — use a specific provider CLI instead of `claude`.
 - `--prompt <text>` — prepend custom instructions to the LLM prompt.
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
-- `--dry-run` — preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Dry-run defaults to one iteration.
+- `--dry-run` — preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Polls continuously like regular watch mode.
 - `--user <login>` — only reply to comments from this GitHub user (defaults to the active `gh` user when omitted and not set in config).
 - `--debug` — emit extra poll pipeline detail (`fetched-comments`, `mention-filter`, `new-mentions`) to the log.
 
@@ -146,7 +146,6 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 - **Init-time model selection**: when running `crewmate init`, query the configured provider for its available models and let the user select one.
 - **Connected user by default**: agents run connected to the user by default; to run in a looser mode, an explicit `unsafe` override flag is required.
 - **Sandboxed agents by default**: agents run in a sandbox by default.
-- **Dry-run should stay in watch mode**: `crewmate watch --dry-run` should keep polling continuously and only skip posting replies, not exit after a single iteration.
 - **Default to the current GitHub repo from a git working tree**: when `crewmate watch` or `crewmate stream` is run from inside a git repository, default the target to the current repository if its remote points to GitHub.
 
 ## More docs

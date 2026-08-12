@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `crewmate watch --dry-run` now polls continuously instead of exiting after one iteration.
 - Render `--help` output with ANSI terminal styles instead of raw Markdown.
 - `--user` defaults to the authenticated `gh` login when omitted.
 - Add `--debug` flag and `debug` config key for poll pipeline diagnostics.
