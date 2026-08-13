@@ -44,6 +44,9 @@
 				},
 				"debug": {
 					"type": "boolean"
+				},
+				"unsafeNoUser": {
+					"type": "boolean"
 				}
 			},
 			"additionalProperties": true
