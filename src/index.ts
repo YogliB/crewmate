@@ -408,9 +408,14 @@ const hostWithPort = (host: string, port?: string): string => (port ? `${host}:$
 const parseGitRemoteUrl = (
 	url: string,
 ): { host: string; owner: string; port?: string; repo: string } | undefined => {
-	const normalized = /^[^/]+@[^/]+:/.test(url)
-		? url.replace(/^([^/]+)@([^/]+):/, "ssh://$1@$2/")
-		: url;
+	let normalized = url;
+	if (!url.includes("://") && url.includes("@")) {
+		const at = url.indexOf("@");
+		const colon = url.indexOf(":", at + 1);
+		if (colon !== -1) {
+			normalized = `ssh://${url.slice(0, at)}@${url.slice(at + 1, colon)}/${url.slice(colon + 1)}`;
+		}
+	}
 	try {
 		const parsed = new URL(normalized);
 		const parts = parsed.pathname.split("/").filter(Boolean);

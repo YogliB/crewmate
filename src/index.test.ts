@@ -1469,6 +1469,10 @@ describe("parseGitRemoteUrl", () => {
 			repo: "repo",
 		});
 	});
+
+	it("returns undefined for an SCP-style remote without a colon", () => {
+		expect(run.parseGitRemoteUrl("git@github.com/owner/repo.git")).toBeUndefined();
+	});
 });
 
 describe("state errors", () => {
