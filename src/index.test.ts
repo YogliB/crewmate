@@ -148,8 +148,68 @@ const resolveGit = (args: string[]): Promise<string> => {
 	if (command === "rev-parse" && subcommand === "--short") {
 		return Promise.resolve("abc123");
 	}
+	if (command === "remote" && subcommand === "get-url" && args.at(2) === "origin") {
+		return Promise.resolve("https://github.com/owner/repo.git");
+	}
 	return Promise.resolve("");
 };
+
+const makeScopeRunner = ({
+	prUrl = PR_URL,
+	rawContent = "example",
+	body = "@crewmate hello",
+	filePath = "src/index.ts",
+}: {
+	prUrl?: string;
+	rawContent?: string;
+	body?: string;
+	filePath?: string;
+} = {}): Runner =>
+	vi.fn((file: string, args: string[]) => {
+		if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+			return Promise.resolve("");
+		}
+		if (file === "gh" && args[0] === "api") {
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
+			if (args.some((arg) => arg.startsWith("search/issues?q="))) {
+				return Promise.resolve(JSON.stringify([{ items: [{ html_url: prUrl }] }]));
+			}
+			if (args.includes("Accept: application/vnd.github.raw")) {
+				return Promise.resolve(rawContent);
+			}
+			if (args.includes("POST")) {
+				return Promise.resolve("");
+			}
+			const endpoint = args.find((arg) => arg.startsWith("repos/"));
+			if (endpoint?.includes("/pulls/")) {
+				return Promise.resolve(
+					JSON.stringify([
+						[
+							{
+								body,
+								id: FIRST_ID,
+								in_reply_to_id: null,
+								line: FIRST_LINE,
+								path: filePath,
+								user: { login: "alice" },
+							},
+						],
+					]),
+				);
+			}
+			if (endpoint?.includes("/issues/")) {
+				return Promise.resolve("[]");
+			}
+		}
+		if (file === "claude") {
+			return Promise.resolve("It does something.");
+		}
+		if (file === "git") {
+			return resolveGit(args);
+		}
+		return Promise.resolve("");
+	}) as unknown as Runner;
 
 const resolveExplain = (
 	file: string,
@@ -418,12 +478,13 @@ describe("run watch missing", () => {
 		vi.unstubAllEnvs();
 	});
 
-	it("exits with an error when watch is missing a PR URL", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		await run(["watch"]);
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		process.exitCode = previousExitCode;
+	it("watches the current repo when no target is provided", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeScopeRunner();
+		await run(["watch"], { iterations: FIRST_ITERATION, runner, logger });
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 	});
 
 	it("exits with an error when watch rejects a non-Error", async () => {
@@ -439,11 +500,63 @@ describe("run watch missing", () => {
 		process.exitCode = previousExitCode;
 	});
 
-	it("exits with an error when watch has an empty PR URL", async () => {
+	it("watches the current repo when an empty target is provided", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeScopeRunner();
+		await run(["watch", ""], { iterations: FIRST_ITERATION, runner, logger });
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+	});
+
+	it("exits with an error when no target is provided and the origin remote is missing", async () => {
 		const previousExitCode = process.exitCode;
 		process.exitCode = NO_EXIT_CODE;
-		await run(["watch", ""]);
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "git" && args[0] === "remote") {
+				return Promise.reject(new Error("No such remote 'origin'"));
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run(["watch"], { runner });
 		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		expect(stderr).toHaveBeenCalledWith("Error: Target is required: No such remote 'origin'\n");
+		stderr.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+
+	it("exits with an error when the origin remote lookup rejects a non-Error", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "git" && args[0] === "remote") {
+				return Promise.reject("not an error");
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run(["watch"], { runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		expect(stderr).toHaveBeenCalledWith("Error: Target is required: not an error\n");
+		stderr.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+
+	it("exits with an error when no target is provided and the origin remote is empty", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "git" && args[0] === "remote") {
+				return Promise.resolve("");
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run(["watch"], { runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		expect(stderr).toHaveBeenCalledWith("Error: Target is required\n");
+		stderr.mockRestore();
 		process.exitCode = previousExitCode;
 	});
 
@@ -735,19 +848,40 @@ describe("run stream missing", () => {
 		vi.unstubAllEnvs();
 	});
 
-	it("exits with an error when stream is missing a PR URL", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		await run(["stream"]);
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		process.exitCode = previousExitCode;
+	it("streams the current repo when no target is provided", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeScopeRunner();
+		await run(["stream"], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		expect(calls.some((line) => line.includes('"commentId":1'))).toBe(true);
+		write.mockRestore();
 	});
 
-	it("exits with an error when stream has an empty PR URL", async () => {
+	it("streams the current repo when an empty target is provided", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeScopeRunner();
+		await run(["stream", ""], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		expect(calls.some((line) => line.includes('"commentId":1'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("exits with an error when no target is provided and the origin remote is missing", async () => {
 		const previousExitCode = process.exitCode;
 		process.exitCode = NO_EXIT_CODE;
-		await run(["stream", ""]);
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "git" && args[0] === "remote") {
+				return Promise.reject(new Error("No such remote 'origin'"));
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run(["stream"], { runner });
 		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		expect(stderr).toHaveBeenCalledWith("Error: Target is required: No such remote 'origin'\n");
+		stderr.mockRestore();
 		process.exitCode = previousExitCode;
 	});
 });
@@ -1275,6 +1409,69 @@ describe("parseInterval", () => {
 
 	it("returns undefined for non-positive input when no fallback", () => {
 		expect(run.parseInterval(["--interval", "0"], { fallback: undefined })).toBeUndefined();
+	});
+});
+
+describe("parseGitRemoteUrl", () => {
+	it("parses an HTTPS GitHub remote", () => {
+		expect(run.parseGitRemoteUrl("https://github.com/owner/repo.git")).toEqual({
+			host: "github.com",
+			owner: "owner",
+			repo: "repo",
+		});
+	});
+
+	it("parses an HTTPS remote without the .git suffix", () => {
+		expect(run.parseGitRemoteUrl("https://github.com/owner/repo")).toEqual({
+			host: "github.com",
+			owner: "owner",
+			repo: "repo",
+		});
+	});
+
+	it("parses an SSH remote", () => {
+		expect(run.parseGitRemoteUrl("git@github.com:owner/repo.git")).toEqual({
+			host: "github.com",
+			owner: "owner",
+			repo: "repo",
+		});
+	});
+
+	it("preserves a non-default port", () => {
+		expect(run.parseGitRemoteUrl("https://ghe.example.com:8443/owner/repo.git")).toEqual({
+			host: "ghe.example.com",
+			port: "8443",
+			owner: "owner",
+			repo: "repo",
+		});
+	});
+
+	it("returns undefined for an unparseable remote", () => {
+		expect(run.parseGitRemoteUrl("not-a-url")).toBeUndefined();
+	});
+
+	it("returns undefined for a remote with only an owner", () => {
+		expect(run.parseGitRemoteUrl("https://github.com/owner")).toBeUndefined();
+	});
+
+	it("returns undefined for a remote that resolves to an invalid name", () => {
+		expect(run.parseGitRemoteUrl("https://github.com/owner/.git")).toBeUndefined();
+	});
+
+	it("returns undefined for a remote with extra path segments", () => {
+		expect(run.parseGitRemoteUrl("https://github.com/owner/repo/extra")).toBeUndefined();
+	});
+
+	it("ignores the port for an SSH remote", () => {
+		expect(run.parseGitRemoteUrl("ssh://git@ghe.example.com:122/owner/repo.git")).toEqual({
+			host: "ghe.example.com",
+			owner: "owner",
+			repo: "repo",
+		});
+	});
+
+	it("returns undefined for an SCP-style remote without a colon", () => {
+		expect(run.parseGitRemoteUrl("git@github.com/owner/repo.git")).toBeUndefined();
 	});
 });
 
@@ -4074,63 +4271,6 @@ describe("scope targets", () => {
 		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
 		expect(prUrls).toEqual([]);
 	});
-
-	const makeScopeRunner = ({
-		prUrl = SCOPE_PR_URL,
-		rawContent = "example",
-		body = "@crewmate hello",
-		filePath = "src/index.ts",
-	}: {
-		prUrl?: string;
-		rawContent?: string;
-		body?: string;
-		filePath?: string;
-	} = {}): Runner =>
-		vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "gh" && args[0] === "api") {
-				const reaction = resolveReaction(args);
-				if (reaction !== undefined) return Promise.resolve(reaction);
-				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
-					return Promise.resolve(JSON.stringify([{ items: [{ html_url: prUrl }] }]));
-				}
-				if (args.includes("Accept: application/vnd.github.raw")) {
-					return Promise.resolve(rawContent);
-				}
-				if (args.includes("POST")) {
-					return Promise.resolve("");
-				}
-				const endpoint = args.find((arg) => arg.startsWith("repos/"));
-				if (endpoint?.includes("/pulls/")) {
-					return Promise.resolve(
-						JSON.stringify([
-							[
-								{
-									body,
-									id: FIRST_ID,
-									in_reply_to_id: null,
-									line: FIRST_LINE,
-									path: filePath,
-									user: { login: "alice" },
-								},
-							],
-						]),
-					);
-				}
-				if (endpoint?.includes("/issues/")) {
-					return Promise.resolve("[]");
-				}
-			}
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
 
 	it("watches a repo scope and replies to mentions", async () => {
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;

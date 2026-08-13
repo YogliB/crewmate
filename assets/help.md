@@ -4,9 +4,9 @@ A CLI that watches GitHub PR comments (review and conversation) for `@crewmate` 
 
 ## Commands
 
-### `crewmate watch <target> [options]`
+### `crewmate watch [<target>] [options]`
 
-`<target>` can be:
+`<target>` is optional when run inside a git repository whose `origin` remote points to GitHub; it defaults to that repository. When provided, it can be:
 
 - A single PR: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`.
 - A repository: `https://github.com/owner/repo` or `owner/repo`.
@@ -27,11 +27,11 @@ A CLI that watches GitHub PR comments (review and conversation) for `@crewmate` 
 
 `--fix` is only supported for single-PR targets. It is disabled for repo or org scope.
 
-### `crewmate stream <target> [options]`
+### `crewmate stream [<target>] [options]`
 
 Emit new `@crewmate` mentions as NDJSON to stdout without invoking the provider or posting replies. Use this to feed an agent or another pipeline.
 
-`<target>` can be a single PR, a repo, an org, or a GHES full URL, the same as for `watch`.
+`<target>` is optional when run inside a git repository whose `origin` remote points to GitHub; it defaults to that repository. When provided, it can be a single PR, a repo, an org, or a GHES full URL, the same as for `watch`.
 
 #### Options
 

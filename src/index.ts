@@ -405,6 +405,48 @@ const pollScope: PollScope = async (scope, options, onPr, runner, warn) => {
 
 const hostWithPort = (host: string, port?: string): string => (port ? `${host}:${port}` : host);
 
+const parseGitRemoteUrl = (
+	url: string,
+): { host: string; owner: string; port?: string; repo: string } | undefined => {
+	let normalized = url;
+	if (!url.includes("://") && url.includes("@")) {
+		const at = url.indexOf("@");
+		const colon = url.indexOf(":", at + 1);
+		if (colon !== -1) {
+			normalized = `ssh://${url.slice(0, at)}@${url.slice(at + 1, colon)}/${url.slice(colon + 1)}`;
+		}
+	}
+	try {
+		const parsed = new URL(normalized);
+		const parts = parsed.pathname.split("/").filter(Boolean);
+		if (parts.length !== 2) return undefined;
+		const [owner, repoPart] = parts;
+		const repo = repoPart.replace(/\.git$/, "");
+		if (!isValidName(owner) || !isValidName(repo)) return undefined;
+		return {
+			host: parsed.hostname,
+			owner,
+			repo,
+			...(parsed.protocol === "https:" && parsed.port ? { port: parsed.port } : {}),
+		};
+	} catch {
+		return undefined;
+	}
+};
+
+const resolveDefaultTarget = async (runner: Runner): Promise<string> => {
+	let remote: string;
+	try {
+		remote = (await runner("git", ["remote", "get-url", "origin"])).trim();
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new TypeError(`Target is required: ${message}`, { cause: error });
+	}
+	const parsed = remote ? parseGitRemoteUrl(remote) : undefined;
+	if (!parsed) throw new TypeError("Target is required");
+	return `https://${hostWithPort(parsed.host, parsed.port)}/${parsed.owner}/${parsed.repo}`;
+};
+
 const authenticateHost = async (
 	runner: Runner,
 	host: string,
@@ -924,8 +966,11 @@ const stream = async (
 
 const VALUE_FLAGS = new Set(["--interval", "--user", "--prompt", "--model", "--provider"]);
 
-const parseArgs = (argv: string[]): { booleans: Set<string>; values: Map<string, string> } => {
+const parseArgs = (
+	argv: string[],
+): { booleans: Set<string>; positionals: string[]; values: Map<string, string> } => {
 	const booleans = new Set<string>();
+	const positionals: string[] = [];
 	const values = new Map<string, string>();
 	for (let i = 0; i < argv.length; i += 1) {
 		// oxlint-disable-next-line security/detect-object-injection -- array index read, not property injection
@@ -935,6 +980,7 @@ const parseArgs = (argv: string[]): { booleans: Set<string>; values: Map<string,
 			continue;
 		}
 		if (!arg.startsWith("--")) {
+			positionals.push(arg);
 			continue;
 		}
 		const eq = arg.indexOf("=");
@@ -949,7 +995,7 @@ const parseArgs = (argv: string[]): { booleans: Set<string>; values: Map<string,
 			booleans.add(arg);
 		}
 	}
-	return { booleans, values };
+	return { booleans, positionals, values };
 };
 
 const findFlag = (argv: string[], flag: string): string | undefined =>
@@ -971,21 +1017,14 @@ const parseInterval = (
 const parseRunArgs = (
 	rest: string[],
 ):
-	| { kind: "args"; booleans: Set<string>; values: Map<string, string>; target: string }
+	| { kind: "args"; booleans: Set<string>; values: Map<string, string>; target: string | undefined }
 	| { kind: "help" } => {
-	const [target, ...flagArgs] = rest;
-	if (target === "--help" || target === "-h") {
-		showHelp();
-		return { kind: "help" };
-	}
-	if (!target || typeof target !== "string") {
-		throw new TypeError("Target is required");
-	}
-	const { booleans, values } = parseArgs(flagArgs);
+	const { booleans, positionals, values } = parseArgs(rest);
 	if (booleans.has("--help") || booleans.has("-h")) {
 		showHelp();
 		return { kind: "help" };
 	}
+	const target = positionals[0];
 	return { kind: "args", booleans, values, target };
 };
 
@@ -1002,7 +1041,9 @@ const runWatch = async (
 	if (parsed.kind === "help") {
 		return;
 	}
-	const { booleans, values, target } = parsed;
+	const { booleans, values, target: rawTarget } = parsed;
+	const runner = options.runner ?? exec;
+	const target = rawTarget || (await resolveDefaultTarget(runner));
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
 	const allowFix = booleans.has("--fix") ? true : undefined;
 	const debug = booleans.has("--debug") ? true : undefined;
@@ -1042,7 +1083,9 @@ const runStream = async (
 	if (parsed.kind === "help") {
 		return;
 	}
-	const { booleans, values, target } = parsed;
+	const { booleans, values, target: rawTarget } = parsed;
+	const runner = options.runner ?? exec;
+	const target = rawTarget || (await resolveDefaultTarget(runner));
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
 	const debug = booleans.has("--debug") ? true : undefined;
 	const toStderr = booleans.has("--log") ? true : undefined;
@@ -1118,6 +1161,7 @@ const run = Object.assign(
 		findNewMentions,
 		getLogin,
 		loadState,
+		parseGitRemoteUrl,
 		parseInterval,
 		parsePrUrl,
 		parseTarget,

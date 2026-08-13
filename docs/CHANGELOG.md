@@ -1,5 +1,9 @@
 # crewmate changelog
 
+## Unreleased
+
+- `crewmate watch` and `crewmate stream` now default to the current GitHub repository when run inside a git working tree with a GitHub `origin` remote.
+
 ## 0.1.0
 
 - `crewmate watch --dry-run` now polls continuously instead of exiting after one iteration.
