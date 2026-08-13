@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.0
+
 - Add GitHub issue support with `issue` and `conversation` mention kinds.
 - Add `--unsafe-no-user` / `unsafeNoUser` to skip the user filter.
 
