@@ -15,7 +15,7 @@ You need:
 ## Caveats
 
 - **Provider default is `claude`**. If you don't have `claude` installed, set a different provider in `crewmate init`, in your config, or with `--provider <command>`.
-- **`--fix` only works for single-PR review comments** that contain the tag `#fix`. It is disabled for repo or org scope, and conversation comments and issue bodies/comments cannot request fixes.
+- **`--fix` works for single-PR review and conversation comments** that contain the tag `#fix`. It is disabled for repo or org scope, and issue bodies/comments cannot request fixes.
 - **Crewmate adds an `eyes` reaction to each new `@crewmate` mention** and swaps it for a thumbs-up, thumbs-down, or rocket before posting the reply.
 - **`--dry-run` still runs `gh pr checkout`** for single-PR targets. It skips posting replies and reactions and committing/pushing, but it may still touch your working tree.
 - **Conversation comments and issue bodies/comments may be reprocessed** if the state file is lost, because GitHub does not expose a parent id for top-level conversation replies or issue body edits.
@@ -56,7 +56,7 @@ crewmate init
 ### `crewmate watch`
 
 - `--interval <seconds>` — seconds between polls. Default is `60`.
-- `--fix` — try to generate, commit, and push a fix. The review comment must also contain the tag `#fix`.
+- `--fix` — try to generate, commit, and push a fix. The comment must also contain the tag `#fix`.
 - `--model <model>` — use a specific model for explanations and fixes.
 - `--provider <command>` — use a specific provider CLI instead of `claude`.
 - `--prompt <text>` — prepend custom instructions to the LLM prompt.
@@ -66,7 +66,7 @@ crewmate init
 - `--unsafe-no-user` — reply to comments from any GitHub user. Disables the default filter that falls back to the active `gh` user. This flag wins over `--user`.
 - `--debug` — emit extra poll pipeline detail (`fetched-comments`, `mention-filter`, `new-mentions`) to the log.
 
-`--fix` only works for single-PR review comments. It is disabled for repo, org, or issue scope, and conversation comments and issue bodies/comments cannot request fixes.
+`--fix` works for single-PR review and conversation comments. It is disabled for repo, org, or issue scope, and issue bodies/comments cannot request fixes.
 
 ### `crewmate stream`
 
@@ -150,7 +150,6 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 ## TBD
 
 - **Degit integration**: keep a fast, minimal copy of the target repo in the CLI config folder so agents have code context without a full clone.
-- **Allow `#fix` from general PR conversation comments**: support generating and applying fixes from top-level PR comments, not only from diff-level review comments.
 - **Init-time model selection**: when running `crewmate init`, query the configured provider for its available models and let the user select one.
 - **Sandboxed agents by default**: agents run in a sandbox by default.
 - **Add `--once` / `--iterations` flag for `watch` and `stream`**: so the CLI can stop after a single poll (or N polls) instead of running forever. Useful for CI and manual testing.

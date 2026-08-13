@@ -17,7 +17,7 @@ A CLI that watches GitHub PR comments (review and conversation) and issues for `
 #### Options
 
 - `--interval <seconds>` Seconds between polls (default: 60)
-- `--fix` Attempt to apply a generated fix and push a commit. The review comment body must also contain the tag `#fix` (case-insensitive).
+- `--fix` Attempt to apply a generated fix and push a commit. The PR comment body must also contain the tag `#fix` (case-insensitive).
 - `--model <model>` Use a specific model for explanations and fixes.
 - `--provider <command>` Use a specific provider CLI instead of the default `claude`.
 - `--prompt <text>` Prepend custom instructions to the LLM prompt.
@@ -67,7 +67,7 @@ Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, `info`
 ## Caveats
 
 - The default LLM provider is `claude`. Set a different one with `--provider <command>` or in your config; it must be a `claude`-shaped CLI (`--version`, `--model`, `-p`).
-- `--fix` only works for single-PR review comments and the comment body must contain the tag `#fix`. It is disabled for repo, org, or issue scope, and conversation comments and issue bodies/comments cannot request fixes.
+- `--fix` works for single-PR review and conversation comments, and the comment body must contain the tag `#fix`. It is disabled for repo, org, or issue scope, and issue bodies/comments cannot request fixes.
 - Repo and org scope discover open PRs and open issues with the GitHub search API; large scopes may hit rate limits. Use a longer `--interval` for big organizations.
 - `--fix` is disabled for repo, org, or issue scope; only single-PR mode can generate and push fixes.
 - Scope mode fetches file content from the GitHub API, so it does not need a local clone.
@@ -76,4 +76,4 @@ Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, `info`
 - For single-PR targets, `--dry-run` still runs `gh pr checkout`; it only skips posting replies and reactions and committing/pushing fixes.
 - If `git push` fails after a fix is committed, the commit remains local and must be pushed manually.
 - `--provider` expects a CLI with the same flags as `claude` (`--version`, `--model`, `-p`).
-- General PR conversation comments and issue bodies/comments are handled too. Replies are not threaded, do not support `#fix`, and cannot be matched to their original mention on a fresh install, so they may be reprocessed if state is lost.
+- General PR conversation comments and issue bodies/comments are handled too. Replies are not threaded and cannot be matched to their original mention on a fresh install, so they may be reprocessed if state is lost.

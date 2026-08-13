@@ -91,6 +91,7 @@ const findEndpoint = (args: string[]): string | undefined =>
 const endpointPath = (endpoint: string): string => endpoint.split("?")[0] ?? endpoint;
 
 const PULLS_COMMENTS_PATTERN = /^repos\/[^/]+\/[^/]+\/pulls\/\d+\/comments$/;
+const PULLS_FILES_PATTERN = /^repos\/[^/]+\/[^/]+\/pulls\/\d+\/files$/;
 const ISSUE_BODY_PATTERN = /^repos\/[^/]+\/[^/]+\/issues\/(\d+)$/;
 const ISSUE_COMMENTS_PATTERN = /^repos\/[^/]+\/[^/]+\/issues\/\d+\/comments$/;
 const REACTION_PATTERN =
@@ -424,6 +425,11 @@ const resolveGhFix = (
 						},
 					],
 				]),
+			);
+		}
+		if (PULLS_FILES_PATTERN.test(endpointPathValue)) {
+			return Promise.resolve(
+				JSON.stringify([[{ filename: request.targetPath, status: "modified" }]]),
 			);
 		}
 		const issueMatch = ISSUE_BODY_PATTERN.exec(endpointPathValue);
@@ -3591,9 +3597,13 @@ describe("conversation comments", () => {
 	beforeEach(async () => {
 		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
 		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+		process.chdir(tempDir);
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "example");
 	});
 
 	afterEach(async () => {
+		process.chdir(ORIGINAL_CWD);
 		await rm(tempDir, { force: true, recursive: true });
 		vi.unstubAllEnvs();
 	});
@@ -3632,40 +3642,36 @@ describe("conversation comments", () => {
 		expect(state.get(PR_URL)).toEqual(["conversation:3"]);
 	});
 
-	it("warns and skips git commands for a conversation #fix with --fix", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeFixRunner("src/index.ts", {
+	it("applies a fix from a conversation #fix with --fix", async () => {
+		const targetPath = path.join("src", "index.ts");
+		const targetDir = path.resolve("src");
+		await mkdir(targetDir, { recursive: true });
+		await writeFile(path.resolve(targetPath), "old");
+
+		const runner = makeFixRunner(targetPath, {
 			body: "hello",
 			conversationBody: "@crewmate #fix",
-			fixed: "No problem.",
 		});
 		await run.watch(PR_URL, {
 			allowFix: true,
 			interval: NO_INTERVAL,
 			iterations: FIRST_ITERATION,
-			logger,
 			runner,
-			toStderr: true,
 		});
 
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+		const content = await readFile(path.resolve(targetPath), "utf8");
+		expect(content).toBe("new");
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 		expect(
 			countCalls(
 				runner,
 				"gh",
 				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
 			),
-		).toBe(NO_CALLS);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "commit")).toBe(NO_CALLS);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "push")).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({
-				message: expect.stringContaining("fix requested on conversation or issue comment"),
-			}),
-		);
+		).toBe(FIRST_CALL);
+		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(FIRST_CALL);
+		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "commit")).toBe(FIRST_CALL);
+		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "push")).toBe(FIRST_CALL);
 
 		const reactionPosts = (
 			runner as unknown as { mock: { calls: [string, string[]][] } }
@@ -3675,7 +3681,7 @@ describe("conversation comments", () => {
 			reactionPosts.every(([_, args]) => findEndpoint(args)?.includes("/issues/comments/")),
 		).toBe(true);
 		expect(getReactionEmoji(reactionPosts[0][1])).toBe("eyes");
-		expect(getReactionEmoji(reactionPosts[1][1])).toBe("-1");
+		expect(getReactionEmoji(reactionPosts[1][1])).toBe("rocket");
 	});
 
 	it("does not treat #fixme as a fix request in conversation comments", async () => {
@@ -5527,5 +5533,305 @@ describe("dispatchMention reaction cleanup", () => {
 			"failed to remove reaction: no reaction id",
 			expect.any(Object),
 		);
+	});
+});
+
+describe("dispatchMention conversation fix", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+		process.chdir(tempDir);
+	});
+
+	afterEach(async () => {
+		process.chdir(ORIGINAL_CWD);
+		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
+	});
+
+	const makeConversationFixRunner = ({
+		files = ["src/index.ts"],
+		fixed = "```\nnew\n```",
+	}: {
+		files?: string[];
+		fixed?: string;
+	} = {}): Runner =>
+		vi.fn((file: string, args: string[]) => {
+			const [command] = args;
+			const endpoint = findEndpoint(args);
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
+			if (file === "gh" && command === "pr") return Promise.resolve("");
+			if (file === "gh" && command === "api") {
+				if (endpoint?.includes("/reactions")) return Promise.resolve(JSON.stringify({ id: 1 }));
+				if (PULLS_FILES_PATTERN.test(endpointPath(endpoint))) {
+					return Promise.resolve(
+						JSON.stringify([files.map((filename) => ({ filename, status: "modified" }))]),
+					);
+				}
+			}
+			if (file === "claude") return Promise.resolve(fixed);
+			if (file === "git") return resolveGit(args);
+			return Promise.resolve("");
+		}) as unknown as Runner;
+
+	const dispatchConversationFix = async ({
+		fixed,
+		files,
+	}: {
+		fixed: string;
+		files?: string[];
+	}): Promise<Runner> => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const runner = makeConversationFixRunner({ files, fixed });
+		const ctx = {
+			checkedOut: new Set<string>(),
+			commentId: FIRST_ID,
+			dryRun: false,
+			ghHost: "github.com",
+			kind: "conversation" as const,
+			logger,
+			number: "123",
+			owner: "owner",
+			prUrl: PR_URL,
+			repo: "repo",
+			repoRoot: tempDir,
+			runner,
+			warn,
+		};
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+		return runner;
+	};
+
+	it("reports when the provider returns empty for a conversation #fix", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		const runner = await dispatchConversationFix({ fixed: "" });
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("Could not generate a fix.");
+	});
+
+	it("reports when the provider returns plain text for a multi-file conversation #fix", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		await writeFile(path.resolve("src", "other.ts"), "old");
+		const runner = await dispatchConversationFix({
+			files: ["src/index.ts", "src/other.ts"],
+			fixed: "plain text",
+		});
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("Could not generate a fix.");
+	});
+
+	it("rejects an unsafe path returned for a conversation #fix", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		await expect(dispatchConversationFix({ fixed: "```../outside\nnew\n```" })).rejects.toThrow();
+	});
+
+	it("applies a plain provider response to the only changed file", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		await dispatchConversationFix({ fixed: "new" });
+
+		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
+		expect(content).toBe("new");
+	});
+
+	it("applies a fenced provider response with no language tag", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		await dispatchConversationFix({ fixed: "```\nnew\n```" });
+
+		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
+		expect(content).toBe("new");
+	});
+
+	it("applies multiple fenced fixes returned by the provider", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		await writeFile(path.resolve("src", "other.ts"), "old");
+		const runner = await dispatchConversationFix({
+			files: ["src/index.ts", "src/other.ts"],
+			fixed: "```src/index.ts\nnew1\n```\n```src/other.ts\nnew2\n```",
+		});
+
+		const content1 = await readFile(path.resolve("src", "index.ts"), "utf8");
+		const content2 = await readFile(path.resolve("src", "other.ts"), "utf8");
+		expect(content1).toBe("new1");
+		expect(content2).toBe("new2");
+		const commits = countCalls(runner, "git", (args) => args.at(0) === "commit");
+		expect(commits).toBe(FIRST_CALL);
+	});
+
+	it("reports when the changed files cannot be read", async () => {
+		const runner = await dispatchConversationFix({
+			files: ["missing.ts"],
+			fixed: "```\nnew\n```",
+		});
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("No files changed in this PR.");
+	});
+
+	it("handles nested fences when parsing provider responses", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		const outer = "````";
+		const inner = "```foo";
+		const fixed = `${outer}\n${inner}\nnew\n${outer}\n\`\`\``;
+		await dispatchConversationFix({ fixed });
+
+		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
+		expect(content).toBe(`${inner}\nnew`);
+	});
+
+	it("reports when the changed files cannot be read in a missing directory", async () => {
+		const runner = await dispatchConversationFix({
+			files: ["missing/missing.ts"],
+			fixed: "```\nnew\n```",
+		});
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("No files changed in this PR.");
+	});
+
+	it("silently skips unsafe files when reading changed files without a checkout", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const runner = makeConversationFixRunner({ files: ["../etc/passwd"] });
+		const ctx = {
+			checkedOut: new Set<string>(),
+			commentId: FIRST_ID,
+			dryRun: false,
+			ghHost: "github.com",
+			kind: "conversation" as const,
+			logger,
+			number: "123",
+			owner: "owner",
+			prUrl: PR_URL,
+			repo: "repo",
+			runner,
+			warn,
+		};
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("No files changed in this PR.");
+	});
+
+	it("silently skips missing files when reading changed files without a checkout", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const runner = vi.fn((file: string, args: string[]) => {
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
+			if (file === "gh" && PULLS_FILES_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))) {
+				return Promise.resolve(
+					JSON.stringify([[{ filename: "src/index.ts", status: "modified" }]]),
+				);
+			}
+			if (file === "gh" && args.includes("Accept: application/vnd.github.raw")) {
+				return Promise.reject(new Error("Not Found"));
+			}
+			if (file === "claude") return Promise.resolve("```\nnew\n```");
+			if (file === "git") return resolveGit(args);
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const ctx = {
+			checkedOut: new Set<string>(),
+			commentId: FIRST_ID,
+			dryRun: false,
+			ghHost: "github.com",
+			kind: "conversation" as const,
+			logger,
+			number: "123",
+			owner: "owner",
+			prUrl: PR_URL,
+			repo: "repo",
+			runner,
+			warn,
+		};
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("No files changed in this PR.");
+	});
+
+	it("rejects a fix requested on an issue body", async () => {
+		const warn = vi.fn() as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
+			if (file === "gh" && args.includes("/reactions"))
+				return Promise.resolve(JSON.stringify({ id: 1 }));
+			if (file === "gh" && args.includes("/issues/"))
+				return Promise.resolve(issueBodyResponse("@crewmate #fix", 4));
+			if (file === "gh" && args.includes("/issues/4/comments")) return Promise.resolve("[]");
+			if (file === "claude") return Promise.resolve("No problem.");
+			if (file === "git") return resolveGit(args);
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const ctx = {
+			checkedOut: new Set<string>(),
+			commentId: FIRST_ID,
+			dryRun: false,
+			ghHost: "github.com",
+			kind: "issue" as const,
+			logger,
+			number: "4",
+			owner: "owner",
+			prUrl: ISSUE_URL,
+			repo: "repo",
+			runner,
+			warn,
+		};
+		await dispatchMention({ id: 4, body: "@crewmate #fix", kind: "issue" }, ctx, {
+			allowFix: true,
+		});
+		expect(warn).toHaveBeenCalledWith(
+			"fix requested on issue body or comment; only PR comments support #fix",
+			expect.any(Object),
+		);
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("I can't apply fixes");
 	});
 });
