@@ -152,7 +152,6 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 - **Listen to issues alongside PR mentions**: respond to `@crewmate` mentions in issue bodies and comments, not just pull request review threads.
 - **Allow `#fix` from general PR conversation comments**: support generating and applying fixes from top-level PR comments, not only from diff-level review comments.
 - **Init-time model selection**: when running `crewmate init`, query the configured provider for its available models and let the user select one.
-- **Connected user by default**: `watch` and `stream` default to the active `gh` user; use `--unsafe-no-user` (or the `unsafeNoUser` config key) to opt out of user filtering.
 - **Sandboxed agents by default**: agents run in a sandbox by default.
 
 ## More docs
