@@ -23,6 +23,7 @@ A CLI that watches GitHub PR comments (review and conversation) for `@crewmate` 
 - `--log` Also mirror structured log lines to stderr.
 - `--dry-run` Preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Polls continuously like regular watch mode.
 - `--user <login>` Only respond to comments from this GitHub login (defaults to the active `gh` user when omitted and not set in config)
+- `--unsafe-no-user` Respond to comments from any GitHub user. Disables the default filter that is set to the active `gh` user.
 - `--debug` Emit extra poll pipeline detail (fetched comments, mention-filter results, new mentions) to the log.
 
 `--fix` is only supported for single-PR targets. It is disabled for repo or org scope.
@@ -38,6 +39,7 @@ Emit new `@crewmate` mentions as NDJSON to stdout without invoking the provider 
 - `--interval <seconds>` Seconds between polls (default: 60)
 - `--log` Also mirror structured log lines to stderr.
 - `--user <login>` Only emit mentions from this GitHub login (defaults to the active `gh` user when omitted and not set in config)
+- `--unsafe-no-user` Emit mentions from any GitHub user. Disables the default filter that is set to the active `gh` user.
 - `--debug` Emit extra poll pipeline detail (fetched comments, mention-filter results, new mentions) to the log.
 
 Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and for review comments `path` and `line`. State is saved after the line is written, so a restart re-fetches but does not re-emit already seen mentions.

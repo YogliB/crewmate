@@ -61,7 +61,8 @@ crewmate init
 - `--prompt <text>` — prepend custom instructions to the LLM prompt.
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
 - `--dry-run` — preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Polls continuously like regular watch mode.
-- `--user <login>` — only reply to comments from this GitHub user (defaults to the active `gh` user when omitted and not set in config).
+- `--user <login>` — only reply to comments from this GitHub user (defaults to the active `gh` user when omitted and not set in config). Always respected.
+- `--unsafe-no-user` — reply to comments from any GitHub user. Disables the default filter that falls back to the active `gh` user. This flag wins over `--user`.
 - `--debug` — emit extra poll pipeline detail (`fetched-comments`, `mention-filter`, `new-mentions`) to the log.
 
 `--fix` only works for single-PR targets. It is disabled for repo or org scope.
@@ -72,7 +73,8 @@ Emit new `@crewmate` mentions as NDJSON to stdout without invoking a provider or
 
 - `--interval <seconds>` — seconds between polls. Default is `60`.
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
-- `--user <login>` — only emit mentions from this GitHub user (defaults to the active `gh` user when omitted and not set in config).
+- `--user <login>` — only emit mentions from this GitHub user (defaults to the active `gh` user when omitted and not set in config). Always respected.
+- `--unsafe-no-user` — emit mentions from any GitHub user. Disables the default filter that falls back to the active `gh` user. This flag wins over `--user`.
 - `--debug` — emit extra poll pipeline detail (`fetched-comments`, `mention-filter`, `new-mentions`) to the log.
 
 `crewmate stream` can run outside a git working tree and uses only the global config. The `<target>` can be a single PR, a repo, an org, or a GHES full URL. Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and `path`/`line` for review comments.
@@ -150,7 +152,7 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 - **Listen to issues alongside PR mentions**: respond to `@crewmate` mentions in issue bodies and comments, not just pull request review threads.
 - **Allow `#fix` from general PR conversation comments**: support generating and applying fixes from top-level PR comments, not only from diff-level review comments.
 - **Init-time model selection**: when running `crewmate init`, query the configured provider for its available models and let the user select one.
-- **Connected user by default**: agents run connected to the user by default; to run in a looser mode, an explicit `unsafe` override flag is required.
+- **Connected user by default**: `watch` and `stream` default to the active `gh` user; use `--unsafe-no-user` (or the `unsafeNoUser` config key) to opt out of user filtering.
 - **Sandboxed agents by default**: agents run in a sandbox by default.
 
 ## More docs

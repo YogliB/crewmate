@@ -100,16 +100,19 @@ const resolveReaction = (args: string[]): string | undefined => {
 	return undefined;
 };
 
-const conversationComments = (body?: string): string =>
+const conversationComments = (body?: string, user = "alice"): string =>
 	body === undefined || body === ""
 		? "[]"
-		: JSON.stringify([[{ body, id: THIRD_ID, user: { login: "alice" } }]]);
+		: JSON.stringify([[{ body, id: THIRD_ID, user: { login: user } }]]);
 
 const resolveGhExplain = (
 	args: string[],
-	request: { body?: string; conversationBody?: string; path?: string } = {},
+	request: { body?: string; conversationBody?: string; path?: string; user?: string } = {},
 ): Promise<string> => {
 	const [command] = args;
+	if (command === "api" && args.includes("user")) {
+		return Promise.resolve("alice");
+	}
 	if (command === "api" && args.some((arg) => startsWithRepos(arg))) {
 		const reaction = resolveReaction(args);
 		if (reaction !== undefined) return Promise.resolve(reaction);
@@ -127,14 +130,14 @@ const resolveGhExplain = (
 							in_reply_to_id: null,
 							line: EXPLANATION_LINE,
 							path: request.path ?? "src/index.ts",
-							user: { login: "alice" },
+							user: { login: request.user ?? "alice" },
 						},
 					],
 				]),
 			);
 		}
 		if (endpoint?.includes("/issues/")) {
-			return Promise.resolve(conversationComments(request.conversationBody));
+			return Promise.resolve(conversationComments(request.conversationBody, request.user));
 		}
 	}
 	return Promise.resolve("");
@@ -159,17 +162,22 @@ const makeScopeRunner = ({
 	rawContent = "example",
 	body = "@crewmate hello",
 	filePath = "src/index.ts",
+	user = "alice",
 }: {
 	prUrl?: string;
 	rawContent?: string;
 	body?: string;
 	filePath?: string;
+	user?: string;
 } = {}): Runner =>
 	vi.fn((file: string, args: string[]) => {
 		if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
 			return Promise.resolve("");
 		}
 		if (file === "gh" && args[0] === "api") {
+			if (args.includes("user")) {
+				return Promise.resolve("alice");
+			}
 			const reaction = resolveReaction(args);
 			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (args.some((arg) => arg.startsWith("search/issues?q="))) {
@@ -192,7 +200,7 @@ const makeScopeRunner = ({
 								in_reply_to_id: null,
 								line: FIRST_LINE,
 								path: filePath,
-								user: { login: "alice" },
+								user: { login: user },
 							},
 						],
 					]),
@@ -220,6 +228,7 @@ const resolveExplain = (
 		conversationBody?: string;
 		path?: string;
 		provider?: string;
+		user?: string;
 	} = {},
 ): Promise<string> => {
 	if (file === (request.provider || "claude")) {
@@ -241,12 +250,13 @@ const makeExplainRunner = (
 		conversationBody?: string;
 		path?: string;
 		provider?: string;
+		user?: string;
 	} = {},
 ): Runner =>
 	vi.fn((file: string, args: string[]) => resolveExplain(file, args, request)) as unknown as Runner;
 
 const makeMultiMentionRunner = (
-	options: { conversationBody?: string; failOn?: string; provider?: string } = {},
+	options: { conversationBody?: string; failOn?: string; provider?: string; user?: string } = {},
 ): Runner =>
 	vi.fn((file: string, args: string[]) => {
 		if (options.failOn && willFail(file, args, options.failOn)) {
@@ -266,6 +276,9 @@ const makeMultiMentionRunner = (
 			if (command === "--version" || command === "auth") {
 				return Promise.resolve("");
 			}
+			if (command === "api" && args.includes("user")) {
+				return Promise.resolve("alice");
+			}
 			if (command === "api" && args.some((arg) => startsWithRepos(arg))) {
 				const reaction = resolveReaction(args);
 				if (reaction !== undefined) return Promise.resolve(reaction);
@@ -283,7 +296,7 @@ const makeMultiMentionRunner = (
 									in_reply_to_id: null,
 									line: EXPLANATION_LINE,
 									path: "src/index.ts",
-									user: { login: "alice" },
+									user: { login: options.user ?? "alice" },
 								},
 								{
 									body: "@crewmate hi",
@@ -291,14 +304,14 @@ const makeMultiMentionRunner = (
 									in_reply_to_id: null,
 									line: EXPLANATION_LINE,
 									path: "src/index.ts",
-									user: { login: "alice" },
+									user: { login: options.user ?? "alice" },
 								},
 							],
 						]),
 					);
 				}
 				if (endpoint?.includes("/issues/")) {
-					return Promise.resolve(conversationComments(options.conversationBody));
+					return Promise.resolve(conversationComments(options.conversationBody, options.user));
 				}
 			}
 		}
@@ -307,9 +320,14 @@ const makeMultiMentionRunner = (
 
 const resolveGhFix = (
 	args: string[],
-	request: { body?: string; conversationBody?: string; targetPath: string } = { targetPath: "" },
+	request: { body?: string; conversationBody?: string; targetPath: string; user?: string } = {
+		targetPath: "",
+	},
 ): Promise<string> => {
 	const [command] = args;
+	if (command === "api" && args.includes("user")) {
+		return Promise.resolve("alice");
+	}
 	if (command === "api" && args.some((arg) => startsWithRepos(arg))) {
 		const reaction = resolveReaction(args);
 		if (reaction !== undefined) return Promise.resolve(reaction);
@@ -327,14 +345,14 @@ const resolveGhFix = (
 							in_reply_to_id: null,
 							line: FIRST_LINE,
 							path: request.targetPath,
-							user: { login: "alice" },
+							user: { login: request.user ?? "alice" },
 						},
 					],
 				]),
 			);
 		}
 		if (endpoint?.includes("/issues/")) {
-			return Promise.resolve(conversationComments(request.conversationBody));
+			return Promise.resolve(conversationComments(request.conversationBody, request.user));
 		}
 	}
 	if (command === "pr") {
@@ -361,6 +379,7 @@ const resolveFix = (
 		fixed?: string;
 		targetPath: string;
 		provider?: string;
+		user?: string;
 	},
 ): Promise<string> => {
 	if (willFail(file, args, request.failOn)) {
@@ -386,6 +405,7 @@ const makeFixRunner = (
 		failOn?: string;
 		fixed?: string;
 		provider?: string;
+		user?: string;
 	} = {},
 ): Runner =>
 	vi.fn((file: string, args: string[]) =>
@@ -642,7 +662,7 @@ describe("run watch flags", () => {
 			}
 			return Promise.resolve("");
 		}) as unknown as Runner;
-		await expect(run.watch(PR_URL, { runner })).rejects.toThrow("api fail");
+		await expect(run.watch(PR_URL, { allowedUser: "alice", runner })).rejects.toThrow("api fail");
 		expect(countCalls(runner, "gh", (args) => args[0] === "api")).toBe(THREE_CALLS);
 	});
 
@@ -832,6 +852,67 @@ describe("run watch flags", () => {
 		await run(["watch", PR_URL, "--help"]);
 		expect(write).toHaveBeenCalledWith(expect.stringContaining("crewmate watch"));
 		write.mockRestore();
+	});
+
+	it("allows --unsafe-no-user to disable the user filter", async () => {
+		const runner = makeExplainRunner({ answer: "It does something.", user: "bob" });
+		await run(["watch", PR_URL, "--unsafe-no-user"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+	});
+
+	it("makes --unsafe-no-user override --user", async () => {
+		const runner = makeExplainRunner({ answer: "It does something.", user: "charlie" });
+		await run(["watch", PR_URL, "--user", "bob", "--unsafe-no-user"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+	});
+
+	it("makes --user override a config unsafeNoUser flag", async () => {
+		const runner = makeMultiMentionRunner({ user: "alice" });
+		await run(["watch", PR_URL, "--user", "bob"], {
+			config: { unsafeNoUser: true },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
+	});
+
+	it("exits when the gh user cannot be determined and no filter is set", async () => {
+		const previousExitCode = process.exitCode;
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && args[0] === "api" && args.includes("user")) {
+				return Promise.resolve("");
+			}
+			return resolveExplain(file, args, {});
+		}) as unknown as Runner;
+		process.exitCode = NO_EXIT_CODE;
+		await run(["watch", PR_URL], { iterations: FIRST_ITERATION, runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		expect(stderr).toHaveBeenCalledWith(
+			expect.stringContaining("Could not determine a GitHub user"),
+		);
+		stderr.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+
+	it("proceeds when --unsafe-no-user is set and gh user is missing", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && args[0] === "api" && args.includes("user")) {
+				return Promise.resolve("");
+			}
+			return resolveExplain(file, args, { answer: "It does something.", user: "bob" });
+		}) as unknown as Runner;
+		await run(["watch", PR_URL, "--unsafe-no-user"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 	});
 });
 
@@ -1072,9 +1153,9 @@ describe("run stream flags", () => {
 			}
 			return Promise.resolve("");
 		}) as unknown as Runner;
-		await expect(run.stream(PR_URL, { interval: NO_INTERVAL, runner })).rejects.toThrow(
-			"second iteration",
-		);
+		await expect(
+			run.stream(PR_URL, { allowedUser: "alice", interval: NO_INTERVAL, runner }),
+		).rejects.toThrow("second iteration");
 		expect(apiCalls).toBeGreaterThan(2);
 	});
 
@@ -1086,6 +1167,9 @@ describe("run stream flags", () => {
 			const endpoint = findEndpoint(args);
 			if (file === "gh" && (command === "--version" || command === "auth")) {
 				return Promise.resolve("");
+			}
+			if (file === "gh" && command === "api" && args.includes("user")) {
+				return Promise.resolve("alice");
 			}
 			const reaction = resolveReaction(args);
 			if (reaction !== undefined) return Promise.resolve(reaction);
@@ -1156,6 +1240,9 @@ describe("run stream flags", () => {
 			const endpoint = findEndpoint(args);
 			if (file === "gh" && (command === "--version" || command === "auth")) {
 				return Promise.resolve("");
+			}
+			if (file === "gh" && command === "api" && args.includes("user")) {
+				return Promise.resolve("alice");
 			}
 			const reaction = resolveReaction(args);
 			if (reaction !== undefined) return Promise.resolve(reaction);
@@ -1249,6 +1336,79 @@ describe("run stream flags", () => {
 				runner,
 			}),
 		).rejects.toThrow("string error");
+	});
+
+	it("allows --unsafe-no-user to emit mentions from any user", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ user: "bob" });
+		await run(["stream", PR_URL, "--unsafe-no-user"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("makes --unsafe-no-user override --user for stream", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ user: "charlie" });
+		await run(["stream", PR_URL, "--user", "bob", "--unsafe-no-user"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("makes --user override a config unsafeNoUser flag for stream", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ user: "alice" });
+		await run(["stream", PR_URL, "--user", "bob"], {
+			config: { unsafeNoUser: true },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(false);
+		write.mockRestore();
+	});
+
+	it("exits when the gh user cannot be determined in stream mode", async () => {
+		const previousExitCode = process.exitCode;
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && args[0] === "api" && args.includes("user")) {
+				return Promise.resolve("");
+			}
+			return resolveExplain(file, args, {});
+		}) as unknown as Runner;
+		process.exitCode = NO_EXIT_CODE;
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		expect(stderr).toHaveBeenCalledWith(
+			expect.stringContaining("Could not determine a GitHub user"),
+		);
+		stderr.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+
+	it("proceeds in stream mode when --unsafe-no-user is set and gh user is missing", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && args[0] === "api" && args.includes("user")) {
+				return Promise.resolve("");
+			}
+			return resolveExplain(file, args, { user: "bob" });
+		}) as unknown as Runner;
+		await run(["stream", PR_URL, "--unsafe-no-user"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		write.mockRestore();
 	});
 });
 
@@ -1989,11 +2149,12 @@ describe("watch explain", () => {
 			}
 			return resolveExplain(file, args, { answer: "It does something." });
 		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		await expect(
+			run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner }),
+		).rejects.toThrow("Could not determine a GitHub user");
 		expect(warn).toHaveBeenCalledWith(
 			expect.stringContaining("could not determine the authenticated gh user"),
 		);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 		warn.mockRestore();
 	});
 
@@ -2072,7 +2233,12 @@ describe("watch explain", () => {
 			}
 			return Promise.resolve("");
 		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		await run.watch(PR_URL, {
+			allowedUser: "alice",
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
 	});
 
@@ -2133,6 +2299,7 @@ describe("watch explain", () => {
 		}) as unknown as Runner;
 
 		await run.watch(PR_URL, {
+			allowedUser: "alice",
 			interval: NO_INTERVAL,
 			iterations: TWO_ITERATIONS,
 			runner,
@@ -2405,7 +2572,12 @@ describe("watch users missing", () => {
 			}
 			return Promise.resolve("");
 		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+			unsafeNoUser: true,
+		});
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 	});
 });
@@ -2455,7 +2627,12 @@ describe("watch users invalid", () => {
 			}
 			return Promise.resolve("");
 		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+			unsafeNoUser: true,
+		});
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 	});
 });
@@ -2495,7 +2672,12 @@ describe("watch users null", () => {
 			}
 			return Promise.resolve("");
 		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+			unsafeNoUser: true,
+		});
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 	});
 });
@@ -2579,7 +2761,12 @@ describe("watch iterations", () => {
 			}
 			return Promise.resolve("");
 		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		await run.watch(PR_URL, {
+			allowedUser: "alice",
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
 		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 	});
@@ -3356,7 +3543,12 @@ describe("conversation comments", () => {
 			return Promise.resolve("");
 		}) as unknown as Runner;
 
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		await run.watch(PR_URL, {
+			allowedUser: "alice",
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
 
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
 		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
@@ -3451,7 +3643,12 @@ describe("conversation comments", () => {
 			return Promise.resolve("");
 		}) as unknown as Runner;
 
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+			unsafeNoUser: true,
+		});
 
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
 		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
@@ -3496,7 +3693,12 @@ describe("conversation comments", () => {
 			return Promise.resolve("");
 		}) as unknown as Runner;
 
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+		await run.watch(PR_URL, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+			unsafeNoUser: true,
+		});
 
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
 		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
@@ -3854,6 +4056,25 @@ describe("watch config", () => {
 		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
 	});
 
+	it("warns when the config user does not match the authenticated gh user", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeMultiMentionRunner({ user: "alice" });
+		await run.watch(PR_URL, {
+			config: { user: "bob" },
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({
+				message: "filtering for user bob who is not the authenticated gh user alice",
+				allowedUser: "bob",
+				ghUser: "alice",
+			}),
+		);
+	});
+
 	it("uses a config fix flag", async () => {
 		const targetPath = path.join("src", "index.ts");
 		const runner = makeFixRunner(targetPath, { provider: "my-llm" });
@@ -3915,6 +4136,44 @@ describe("watch config", () => {
 			),
 		).toBe(true);
 		write.mockRestore();
+	});
+
+	it("uses a config unsafeNoUser flag", async () => {
+		const runner = makeMultiMentionRunner({ user: "alice" });
+		await run.watch(PR_URL, {
+			config: { unsafeNoUser: true, user: "bob" },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
+	});
+
+	it("exits when gh user is missing and no filter is configured", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && args[0] === "api" && args.includes("user")) {
+				return Promise.resolve("");
+			}
+			return resolveExplain(file, args, { user: "bob" });
+		}) as unknown as Runner;
+		await expect(run.watch(PR_URL, { iterations: FIRST_ITERATION, runner })).rejects.toThrow(
+			"Could not determine a GitHub user",
+		);
+	});
+
+	it("proceeds with config unsafeNoUser when gh user is missing", async () => {
+		const baseRunner = makeMultiMentionRunner({ user: "bob" });
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && args[0] === "api" && args.includes("user")) {
+				return Promise.resolve("");
+			}
+			return baseRunner(file, args);
+		}) as unknown as Runner;
+		await run.watch(PR_URL, {
+			config: { unsafeNoUser: true },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
 	});
 });
 
@@ -4388,6 +4647,7 @@ describe("scope targets", () => {
 			iterations: FIRST_ITERATION,
 			logger,
 			runner,
+			unsafeNoUser: true,
 		});
 		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
 	});
@@ -4447,6 +4707,7 @@ describe("scope targets", () => {
 			iterations: FIRST_ITERATION,
 			logger,
 			runner,
+			unsafeNoUser: true,
 		});
 		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 		expect(logger).toHaveBeenCalledWith(
@@ -4475,6 +4736,7 @@ describe("scope targets", () => {
 			iterations: TWO_CALLS,
 			logger,
 			runner,
+			unsafeNoUser: true,
 		});
 		expect(logger).toHaveBeenCalledWith(
 			"warning",
@@ -4588,7 +4850,13 @@ describe("scope targets", () => {
 			}
 			return Promise.resolve("");
 		}) as unknown as Runner;
-		await run.stream(REPO_TARGET, { interval: NO_INTERVAL, iterations: TWO_CALLS, logger, runner });
+		await run.stream(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: TWO_CALLS,
+			logger,
+			runner,
+			unsafeNoUser: true,
+		});
 		expect(logger).toHaveBeenCalledWith(
 			"warning",
 			expect.objectContaining({ reason: "no-open-prs" }),
@@ -4647,6 +4915,7 @@ describe("scope targets", () => {
 			iterations: FIRST_ITERATION,
 			logger,
 			runner,
+			unsafeNoUser: true,
 		});
 		expect(logger).toHaveBeenCalledWith(
 			"warning",
@@ -4707,6 +4976,7 @@ describe("scope targets", () => {
 			iterations: FIRST_ITERATION,
 			logger,
 			runner,
+			unsafeNoUser: true,
 		});
 		expect(logger).toHaveBeenCalledWith(
 			"warning",

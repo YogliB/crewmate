@@ -1,5 +1,9 @@
 # crewmate changelog
 
+## Unreleased
+
+- Add `--unsafe-no-user` CLI flag and `unsafeNoUser` config key to disable the default user filter. When user filtering is on, `watch` and `stream` require a user (explicit, configured, or authenticated) and will exit with an actionable error if none can be determined.
+
 ## 0.2.0
 
 - `crewmate watch` and `crewmate stream` now default to the current GitHub repository when run inside a git working tree with a GitHub `origin` remote.

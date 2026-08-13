@@ -474,7 +474,7 @@ const fetchGhUser = async (
 		return login || undefined;
 	} catch (error) {
 		await warn(
-			"could not determine the authenticated gh user; --user will default to matching every user",
+			"could not determine the authenticated gh user; set --user, add a user to your config, or pass --unsafe-no-user",
 			{ error: errorMessage(error), reason: "gh-user-unresolved" },
 		);
 		return undefined;
@@ -724,6 +724,7 @@ type ScopeRunOptions = {
 	provider?: string;
 	runner?: Runner;
 	toStderr?: boolean;
+	unsafeNoUser?: boolean;
 };
 
 type ScopeContext = {
@@ -782,12 +783,19 @@ const runScope = async (
 			const repo = scope.kind === "org" ? undefined : scope.repo;
 			profile = options.config ?? (await resolveProfile(owner, repo, undefined, configWarn));
 		}
-		const ghUser = await fetchGhUser(runner, ghHostEnv, configWarn);
+		const unsafeNoUser =
+			options.unsafeNoUser ??
+			(options.allowedUser === undefined ? profile.unsafeNoUser : false) ??
+			false;
+
+		let ghUser: string | undefined;
+		if (!unsafeNoUser) {
+			ghUser = await fetchGhUser(runner, ghHostEnv, configWarn);
+		}
 
 		const provider = options.provider ?? profile.provider;
 		const model = options.model ?? profile.model;
 		const interval = options.interval ?? profile.interval ?? DEFAULT_INTERVAL_SECONDS;
-		const allowedUser = options.allowedUser ?? profile.user ?? ghUser;
 		const debug = options.debug ?? profile.debug ?? false;
 		const prompt = options.prompt ?? profile.prompt;
 		let allowFix = options.allowFix ?? profile.fix ?? false;
@@ -797,6 +805,23 @@ const runScope = async (
 			logger = createLogger({ toStderr });
 		}
 		const warn = makeWarn(toStderr, logger);
+
+		const allowedUser = unsafeNoUser ? undefined : (options.allowedUser ?? profile.user ?? ghUser);
+		if (!unsafeNoUser && allowedUser === undefined) {
+			throw new TypeError(
+				"Could not determine a GitHub user to filter for. Set --user, add a user to your config, or pass --unsafe-no-user to allow any user.",
+			);
+		}
+		if (ghUser !== undefined && allowedUser !== undefined && allowedUser !== ghUser) {
+			await warn(
+				`filtering for user ${allowedUser} who is not the authenticated gh user ${ghUser}`,
+				{
+					allowedUser,
+					ghUser,
+					reason: "user-filter-override",
+				},
+			);
+		}
 
 		if (scope.kind !== "pr" && allowFix) {
 			await warn("fix is not supported for repo/org scope targets; disabling", {
@@ -876,6 +901,7 @@ const watch = async (
 		runner?: Runner;
 		iterations?: number;
 		toStderr?: boolean;
+		unsafeNoUser?: boolean;
 	} = {},
 ): Promise<void> => {
 	await runScope(target, options, {
@@ -920,6 +946,7 @@ const stream = async (
 		logger?: Logger;
 		runner?: Runner;
 		toStderr?: boolean;
+		unsafeNoUser?: boolean;
 	} = {},
 ): Promise<void> => {
 	await runScope(
@@ -1049,6 +1076,7 @@ const runWatch = async (
 	const debug = booleans.has("--debug") ? true : undefined;
 	const dryRun = booleans.has("--dry-run") ? true : undefined;
 	const toStderr = booleans.has("--log") ? true : undefined;
+	const unsafeNoUser = booleans.has("--unsafe-no-user") ? true : undefined;
 	const allowedUser = values.get("--user");
 	const prompt = values.get("--prompt");
 	const model = values.get("--model");
@@ -1067,6 +1095,7 @@ const runWatch = async (
 		provider,
 		runner: options.runner,
 		toStderr,
+		unsafeNoUser,
 	});
 };
 
@@ -1089,6 +1118,7 @@ const runStream = async (
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
 	const debug = booleans.has("--debug") ? true : undefined;
 	const toStderr = booleans.has("--log") ? true : undefined;
+	const unsafeNoUser = booleans.has("--unsafe-no-user") ? true : undefined;
 	const allowedUser = values.get("--user");
 
 	const logger = options.logger ?? createLogger({ toStderr: toStderr ?? false });
@@ -1109,6 +1139,7 @@ const runStream = async (
 		logger: options.logger,
 		runner: options.runner,
 		toStderr,
+		unsafeNoUser,
 	});
 };
 
