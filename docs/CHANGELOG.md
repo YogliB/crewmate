@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Add support for GitHub issues alongside PRs. `watch` and `stream` now accept single-issue targets, and repo and org discovery polls open issues in addition to open PRs. Issue bodies are a new `issue` mention kind; issue comments reuse the `conversation` kind. `#fix` remains disabled for issue and conversation comments.
-- Add `--unsafe-no-user` CLI flag and `unsafeNoUser` config key to disable the default user filter. When user filtering is on, `watch` and `stream` require a user (explicit, configured, or authenticated) and will exit with an actionable error if none can be determined.
+- Add GitHub issue support with `issue` and `conversation` mention kinds.
+- Add `--unsafe-no-user` / `unsafeNoUser` to skip the user filter.
 
 ## 0.2.0
 
