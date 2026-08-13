@@ -68,6 +68,10 @@ const PR_SHORTHAND = new RegExp(
 	`^(?!\\.\\.?(?:\\/|$))(${NAME})\\/(?!\\.\\.?(?:\\/|$))(${NAME})\\/pull\\/(\\d+)\\/?$`,
 );
 
+const ISSUE_SHORTHAND = new RegExp(
+	`^(?!\\.\\.?(?:\\/|$))(${NAME})\\/(?!\\.\\.?(?:\\/|$))(${NAME})\\/issues\\/(\\d+)\\/?$`,
+);
+
 const parsePrUrl = (
 	prUrl: string,
 ): { host: string; owner: string; port?: string; repo: string; number: string } => {
@@ -102,8 +106,8 @@ const parsePrUrl = (
 const toMention = (raw: Record<string, unknown>, kind: Mention["kind"]): Mention | undefined => {
 	if (typeof raw.id !== "number" || typeof raw.body !== "string") return undefined;
 	const inReplyToId = typeof raw.in_reply_to_id === "number" ? raw.in_reply_to_id : undefined;
-	if (kind === "conversation") {
-		return { id: raw.id, body: raw.body, user: raw.user, kind: "conversation", inReplyToId };
+	if (kind === "conversation" || kind === "issue") {
+		return { id: raw.id, body: raw.body, user: raw.user, kind, inReplyToId };
 	}
 	if (typeof raw.path !== "string" || typeof raw.line !== "number") return undefined;
 	return {
@@ -138,9 +142,35 @@ const fetchKind = async (
 		.filter((m): m is Mention => m !== undefined);
 };
 
-const fetchMentions = async (prUrl: string, runner: Runner = exec): Promise<Mention[]> => {
-	const { host, owner, port, repo, number } = parsePrUrl(prUrl);
+const fetchIssueBody = async (
+	owner: string,
+	repo: string,
+	number: string,
+	hostWithPort: string,
+	runner: Runner,
+): Promise<Mention | undefined> => {
+	const output = await runner("gh", ["api", `repos/${owner}/${repo}/issues/${number}`], {
+		env: { GH_HOST: hostWithPort },
+	});
+	const issue = JSON.parse(output) as Record<string, unknown>;
+	if (typeof issue.number !== "number" || typeof issue.body !== "string") return undefined;
+	return toMention({ ...issue, id: issue.number }, "issue");
+};
+
+const fetchMentions = async (itemUrl: string, runner: Runner = exec): Promise<Mention[]> => {
+	const parsed = parseTarget(itemUrl);
+	if (parsed.kind !== "pr" && parsed.kind !== "issue") {
+		throw new TypeError(`Invalid item reference: ${itemUrl}`);
+	}
+	const { host, owner, port, repo, number } = parsed;
 	const ghHost = hostWithPort(host, port);
+	if (parsed.kind === "issue") {
+		const [body, conversation] = await Promise.all([
+			fetchIssueBody(owner, repo, number, ghHost, runner),
+			fetchKind(owner, repo, number, "conversation", ghHost, runner),
+		]);
+		return body ? [body, ...conversation] : conversation;
+	}
 	const [review, conversation] = await Promise.all([
 		fetchKind(owner, repo, number, "review", ghHost, runner),
 		fetchKind(owner, repo, number, "conversation", ghHost, runner),
@@ -236,7 +266,11 @@ const respondToMention = async (
 	},
 ): Promise<void> => {
 	const { runner } = options;
-	const { host, owner, port, repo, number } = parsePrUrl(prUrl);
+	const parsed = parseTarget(prUrl);
+	if (parsed.kind !== "pr" && parsed.kind !== "issue") {
+		throw new TypeError(`Invalid item reference: ${prUrl}`);
+	}
+	const { host, owner, port, repo, number } = parsed;
 	const commentId = mention.id;
 	const ctx = {
 		checkedOut: options.checkedOut,
@@ -368,30 +402,33 @@ type PollScope = (
 ) => Promise<void>;
 
 const pollScope: PollScope = async (scope, options, onPr, runner, warn) => {
-	let warnedNoOpenPrs = false;
+	let warnedNoOpenItems = false;
 	for (let index = 0; index < options.iterations; index += 1) {
-		const prUrls = scope.kind === "pr" ? [toPrUrl(scope)] : await fetchOpenPrs(scope, runner, warn);
-		if (prUrls.length === 0) {
-			if (!warnedNoOpenPrs) {
-				warnedNoOpenPrs = true;
-				await warn("No open PRs found for the target", {
-					reason: "no-open-prs",
+		const itemUrls =
+			scope.kind === "pr" || scope.kind === "issue"
+				? [toItemUrl(scope)]
+				: await fetchOpenItems(scope, runner, warn);
+		if (itemUrls.length === 0) {
+			if (!warnedNoOpenItems) {
+				warnedNoOpenItems = true;
+				await warn("No open items found for the target", {
+					reason: "no-open-items",
 					target: options.target,
 				});
 			}
 		} else {
-			warnedNoOpenPrs = false;
-			for (const prUrl of prUrls) {
+			warnedNoOpenItems = false;
+			for (const itemUrl of itemUrls) {
 				try {
-					await onPr(prUrl, scope);
+					await onPr(itemUrl, scope);
 				} catch (error) {
 					const message = errorMessage(error);
-					await warn(`poll failed for ${prUrl}`, {
+					await warn(`poll failed for ${itemUrl}`, {
 						error: message,
-						prUrl,
-						reason: "pr-poll-failed",
+						itemUrl,
+						reason: "poll-failed",
 					});
-					if (scope.kind === "pr") {
+					if (scope.kind === "pr" || scope.kind === "issue") {
 						throw error;
 					}
 				}
@@ -495,13 +532,26 @@ const toPrUrl = ({
 	number: string;
 }): string => `https://${hostWithPort(host, port)}/${owner}/${repo}/pull/${number}`;
 
-const toScopePrUrl = (scope: { host: string; port?: string }, url: string): string => {
-	const parsed = parsePrUrl(url);
-	return toPrUrl({ ...parsed, host: scope.host, port: scope.port });
-};
+const toIssueUrl = ({
+	host,
+	owner,
+	port,
+	repo,
+	number,
+}: {
+	host: string;
+	owner: string;
+	port?: string;
+	repo: string;
+	number: string;
+}): string => `https://${hostWithPort(host, port)}/${owner}/${repo}/issues/${number}`;
+
+const toItemUrl = (scope: Extract<Scope, { kind: "pr" | "issue" }>): string =>
+	scope.kind === "pr" ? toPrUrl(scope) : toIssueUrl(scope);
 
 export type Scope =
 	| { kind: "pr"; host: string; owner: string; port?: string; repo: string; number: string }
+	| { kind: "issue"; host: string; owner: string; port?: string; repo: string; number: string }
 	| { kind: "repo"; host: string; owner: string; port?: string; repo: string }
 	| { kind: "org"; host: string; org: string; port?: string };
 
@@ -565,6 +615,26 @@ const parseTarget = (target: string): Scope => {
 		}
 
 		if (
+			parts.length === 4 &&
+			third === "issues" &&
+			typeof first === "string" &&
+			typeof second === "string" &&
+			typeof fourth === "string" &&
+			isValidName(first) &&
+			isValidName(second) &&
+			/^\d+$/.test(fourth)
+		) {
+			return {
+				kind: "issue",
+				host: url.hostname,
+				owner: first,
+				repo: second,
+				number: fourth,
+				...(url.port ? { port: url.port } : {}),
+			};
+		}
+
+		if (
 			parts.length === 2 &&
 			typeof first === "string" &&
 			typeof second === "string" &&
@@ -589,6 +659,12 @@ const parseTarget = (target: string): Scope => {
 		return { kind: "pr", host: "github.com", owner, repo, number };
 	}
 
+	const issueShorthand = ISSUE_SHORTHAND.exec(target);
+	if (issueShorthand) {
+		const [, owner, repo, number] = issueShorthand;
+		return { kind: "issue", host: "github.com", owner, repo, number };
+	}
+
 	const repoShorthand = REPO_SHORTHAND.exec(target);
 	if (repoShorthand) {
 		const [, owner, repo] = repoShorthand;
@@ -598,7 +674,15 @@ const parseTarget = (target: string): Scope => {
 	throw new TypeError(`Invalid target: ${target}`);
 };
 
-const fetchOpenPrsRepoFallback = async (
+const toScopeItemUrl = (scope: { host: string; port?: string }, url: string): string => {
+	const parsed = parseTarget(url);
+	if (parsed.kind !== "pr" && parsed.kind !== "issue") {
+		throw new TypeError(`Invalid item URL: ${url}`);
+	}
+	return toItemUrl({ ...parsed, host: scope.host, port: scope.port });
+};
+
+const fetchOpenItemsRepoFallback = async (
 	scope: RepoScope,
 	runner: Runner,
 	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
@@ -606,24 +690,24 @@ const fetchOpenPrsRepoFallback = async (
 	try {
 		const output = await runner(
 			"gh",
-			["api", "--paginate", "--slurp", `repos/${scope.owner}/${scope.repo}/pulls?state=open`],
+			["api", "--paginate", "--slurp", `repos/${scope.owner}/${scope.repo}/issues?state=open`],
 			{ env: { GH_HOST: hostWithPort(scope.host, scope.port) } },
 		);
 		const pages = JSON.parse(output) as { html_url?: unknown }[][];
-		const prUrls: string[] = [];
-		for (const pr of pages.flat()) {
-			const url = pr.html_url;
+		const itemUrls: string[] = [];
+		for (const item of pages.flat()) {
+			const url = item.html_url;
 			if (typeof url !== "string") continue;
 			try {
-				prUrls.push(toScopePrUrl(scope, url));
+				itemUrls.push(toScopeItemUrl(scope, url));
 			} catch {
-				await warn(`invalid PR URL from repo fallback: ${url}`, {
+				await warn(`invalid item URL from repo fallback: ${url}`, {
 					reason: "fallback-invalid-url",
 					url,
 				});
 			}
 		}
-		return prUrls;
+		return itemUrls;
 	} catch (error) {
 		const message = errorMessage(error);
 		await warn(`repo fallback failed: ${message}`, {
@@ -635,69 +719,120 @@ const fetchOpenPrsRepoFallback = async (
 	}
 };
 
-const fetchOpenPrs = async (
+const searchItemsByQuery = async (
+	scope: Extract<Scope, { kind: "repo" | "org" }>,
+	runner: Runner,
+	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
+	query: string,
+): Promise<string[]> => {
+	const encoded = encodeURIComponent(query);
+	const output = await runner(
+		"gh",
+		["api", "--paginate", "--slurp", `search/issues?q=${encoded}`],
+		{ env: { GH_HOST: hostWithPort(scope.host, scope.port) } },
+	);
+	const pages = JSON.parse(output) as { items?: { html_url?: unknown }[] }[];
+	const urls: string[] = [];
+	for (const page of pages) {
+		for (const item of page.items ?? []) {
+			const url = item.html_url;
+			if (typeof url === "string") urls.push(url);
+		}
+	}
+	return urls;
+};
+
+const isNotFound = (error: unknown): boolean => {
+	const message = errorMessage(error);
+	const match = message.match(/HTTP (\d{3})/);
+	return match?.[1] === "404";
+};
+
+const warnSearchFailure = async (
+	scope: Extract<Scope, { kind: "repo" | "org" }>,
+	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
+	query: string,
+	error: unknown,
+): Promise<void> => {
+	const message = errorMessage(error);
+	const match = message.match(/HTTP (\d{3})/);
+	const status = match ? Number(match[1]) : 0;
+	if (status === 403 || status === 422) {
+		await warn("Search failed; verify the token can read private repos on this host", {
+			reason: "search-token-scope",
+			host: scope.host,
+			query,
+		});
+	} else {
+		await warn(`search failed: ${message}`, {
+			reason: "search-failed",
+			error: message,
+			host: scope.host,
+			query,
+		});
+	}
+};
+
+const fetchOpenItems = async (
 	scope: Scope,
 	runner: Runner,
 	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
 ): Promise<string[]> => {
-	if (scope.kind === "pr") {
-		throw new Error("fetchOpenPrs should not be called for a single PR");
+	if (scope.kind === "pr" || scope.kind === "issue") {
+		throw new Error("fetchOpenItems should not be called for a single item");
 	}
 
-	let query: string;
-	if (scope.kind === "repo") {
-		query = `repo:${scope.owner}/${scope.repo} is:pr is:open`;
-	} else {
-		query = `org:${scope.org} is:pr is:open`;
+	const prQuery =
+		scope.kind === "repo"
+			? `repo:${scope.owner}/${scope.repo} is:pr is:open`
+			: `org:${scope.org} is:pr is:open`;
+	const issueQuery =
+		scope.kind === "repo"
+			? `repo:${scope.owner}/${scope.repo} is:issue is:open`
+			: `org:${scope.org} is:issue is:open`;
+
+	const [prResult, issueResult] = await Promise.allSettled([
+		searchItemsByQuery(scope, runner, warn, prQuery),
+		searchItemsByQuery(scope, runner, warn, issueQuery),
+	]);
+
+	const allUrls: string[] = [];
+	if (prResult.status === "fulfilled") allUrls.push(...prResult.value);
+	if (issueResult.status === "fulfilled") allUrls.push(...issueResult.value);
+
+	const failures: { query: string; reason: PromiseRejectedResult }[] = [];
+	if (prResult.status === "rejected") failures.push({ query: prQuery, reason: prResult });
+	if (issueResult.status === "rejected") failures.push({ query: issueQuery, reason: issueResult });
+
+	for (const { query, reason } of failures) {
+		if (isNotFound(reason.reason)) continue;
+		await warnSearchFailure(scope, warn, query, reason.reason);
 	}
-	const encoded = encodeURIComponent(query);
-	try {
-		const output = await runner(
-			"gh",
-			["api", "--paginate", "--slurp", `search/issues?q=${encoded}`],
-			{ env: { GH_HOST: hostWithPort(scope.host, scope.port) } },
-		);
-		const pages = JSON.parse(output) as { items?: { html_url?: unknown }[] }[];
-		const prUrls: string[] = [];
-		for (const page of pages) {
-			for (const item of page.items ?? []) {
-				const url = item.html_url;
-				if (typeof url !== "string") continue;
-				try {
-					prUrls.push(toScopePrUrl(scope, url));
-				} catch {
-					await warn(`invalid PR URL from search: ${url}`, { reason: "search-invalid-url", url });
-				}
+
+	if (allUrls.length > 0) {
+		const deduped = [...new Set(allUrls)];
+		const itemUrls: string[] = [];
+		for (const url of deduped) {
+			try {
+				itemUrls.push(toScopeItemUrl(scope, url));
+			} catch {
+				await warn(`invalid item URL from search: ${url}`, { reason: "search-invalid-url", url });
 			}
 		}
-		return prUrls;
-	} catch (error) {
-		const message = errorMessage(error);
-		const statusMatch = message.match(/HTTP (\d{3})/);
-		const status = statusMatch ? Number(statusMatch[1]) : 0;
-		if (status === 404) {
-			if (scope.kind === "repo") {
-				return fetchOpenPrsRepoFallback(scope, runner, warn);
-			}
-			throw new Error("org scope requires GHES 3.x+ search/issues", { cause: error });
-		}
-		if (status === 403 || status === 422) {
-			await warn("Search failed; verify the token can read private repos on this host", {
-				reason: "search-token-scope",
-				host: scope.host,
-				query,
-			});
-		} else {
-			await warn(`search failed: ${message}`, {
-				reason: "search-failed",
-				error: message,
-				host: scope.host,
-				query,
-			});
-		}
-		return [];
+		return itemUrls;
 	}
+
+	if (failures.length > 0 && failures.every(({ reason }) => isNotFound(reason.reason))) {
+		if (scope.kind === "repo") {
+			return fetchOpenItemsRepoFallback(scope, runner, warn);
+		}
+		throw new Error("org scope requires GHES 3.x+ search/issues");
+	}
+
+	return [];
 };
+
+const fetchOpenPrs = fetchOpenItems;
 
 const makeWarn =
 	(loggerMirrorsToStderr: boolean, log: Logger) =>
@@ -754,18 +889,20 @@ const runScope = async (
 	let toStderr = options.toStderr ?? false;
 	let logger = options.logger ?? createLogger({ toStderr });
 	const configWarn = makeWarn(toStderr, logger);
-	let normalizedPrUrl = target;
+	let normalizedItemUrl = target;
 	try {
 		const scope = parseTarget(target);
-		normalizedPrUrl = scope.kind === "pr" ? toPrUrl(scope) : target;
+		normalizedItemUrl =
+			scope.kind === "pr" ? toPrUrl(scope) : scope.kind === "issue" ? toIssueUrl(scope) : target;
 
 		let repoRoot: string | undefined;
 		let profile: Partial<Profile>;
 		const ghHost = hostWithPort(scope.host, scope.port);
 		const ghHostEnv = { env: { GH_HOST: ghHost } };
+		await runner("gh", ["--version"], ghHostEnv);
+		await authenticateHost(runner, ghHost, ghHostEnv);
+
 		if (scope.kind === "pr") {
-			await runner("gh", ["--version"], ghHostEnv);
-			await authenticateHost(runner, ghHost, ghHostEnv);
 			try {
 				repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim() || undefined;
 			} catch {
@@ -776,9 +913,10 @@ const runScope = async (
 
 			profile =
 				options.config ?? (await resolveProfile(scope.owner, scope.repo, repoRoot, configWarn));
+		} else if (scope.kind === "issue") {
+			profile =
+				options.config ?? (await resolveProfile(scope.owner, scope.repo, undefined, configWarn));
 		} else {
-			await runner("gh", ["--version"], ghHostEnv);
-			await authenticateHost(runner, ghHost, ghHostEnv);
 			const owner = scope.kind === "org" ? scope.org : scope.owner;
 			const repo = scope.kind === "org" ? undefined : scope.repo;
 			profile = options.config ?? (await resolveProfile(owner, repo, undefined, configWarn));
@@ -824,7 +962,7 @@ const runScope = async (
 		}
 
 		if (scope.kind !== "pr" && allowFix) {
-			await warn("fix is not supported for repo/org scope targets; disabling", {
+			await warn("fix is not supported for repo, org, or issue scope targets; disabling", {
 				reason: "scope-fix-disabled",
 				target,
 			});
@@ -879,7 +1017,7 @@ const runScope = async (
 			errorType: error instanceof Error ? error.name : "unknown",
 			message: error instanceof Error ? error.message : String(error),
 			stack: error instanceof Error ? error.stack : undefined,
-			url: normalizedPrUrl,
+			url: normalizedItemUrl,
 		}).catch(() => {});
 		throw error;
 	}
@@ -954,7 +1092,7 @@ const stream = async (
 		{ ...options, allowFix: false, dryRun: false },
 		{
 			onPr: async (ctx, prUrl) => {
-				const parsed = parsePrUrl(prUrl);
+				const parsed = parseTarget(prUrl) as Extract<Scope, { kind: "pr" | "issue" }>;
 				await pollMentions(prUrl, {
 					allowFix: false,
 					allowedUser: ctx.allowedUser,
@@ -968,7 +1106,7 @@ const stream = async (
 							owner: parsed.owner,
 							repo: parsed.repo,
 							number: Number(parsed.number),
-							commentId: mention.id,
+							commentId: mention.kind === "issue" ? Number(parsed.number) : mention.id,
 							kind: mention.kind,
 							user: getLogin(mention.user),
 							body: mention.body,
@@ -1186,6 +1324,8 @@ const run = Object.assign(
 	},
 	{
 		exec,
+		fetchMentions,
+		fetchOpenItems,
 		fetchOpenPrs,
 		findFlag,
 		findNewMention,
@@ -1196,6 +1336,7 @@ const run = Object.assign(
 		parseInterval,
 		parsePrUrl,
 		parseTarget,
+		respondToMention,
 		saveState,
 		statePath,
 		stream,

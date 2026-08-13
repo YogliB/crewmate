@@ -1,6 +1,6 @@
 # crewmate
 
-A CLI that watches GitHub PR comments (review and conversation) for `@crewmate` mentions and replies with explanations or generated fixes.
+A CLI that watches GitHub PR comments (review and conversation) and issues for `@crewmate` mentions and replies with explanations or generated fixes.
 
 ## Commands
 
@@ -9,6 +9,7 @@ A CLI that watches GitHub PR comments (review and conversation) for `@crewmate` 
 `<target>` is optional when run inside a git repository whose `origin` remote points to GitHub; it defaults to that repository. When provided, it can be:
 
 - A single PR: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`.
+- A single issue: `https://github.com/owner/repo/issues/4` or `owner/repo/issues/4`.
 - A repository: `https://github.com/owner/repo` or `owner/repo`.
 - An organization: `https://github.com/orgs/myorg` or `org:myorg`.
 - For GHES, use a full URL for the host (`https://ghe.example.com/owner/repo`).
@@ -26,13 +27,13 @@ A CLI that watches GitHub PR comments (review and conversation) for `@crewmate` 
 - `--unsafe-no-user` Respond to comments from any GitHub user. Disables the default filter that is set to the active `gh` user.
 - `--debug` Emit extra poll pipeline detail (fetched comments, mention-filter results, new mentions) to the log.
 
-`--fix` is only supported for single-PR targets. It is disabled for repo or org scope.
+`--fix` is only supported for single-PR targets. It is disabled for repo, org, or issue scope.
 
 ### `crewmate stream [<target>] [options]`
 
 Emit new `@crewmate` mentions as NDJSON to stdout without invoking the provider or posting replies. Use this to feed an agent or another pipeline.
 
-`<target>` is optional when run inside a git repository whose `origin` remote points to GitHub; it defaults to that repository. When provided, it can be a single PR, a repo, an org, or a GHES full URL, the same as for `watch`.
+`<target>` is optional when run inside a git repository whose `origin` remote points to GitHub; it defaults to that repository. When provided, it can be a single PR, a single issue, a repo, an org, or a GHES full URL, the same as for `watch`.
 
 #### Options
 
@@ -66,13 +67,13 @@ Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, `info`
 ## Caveats
 
 - The default LLM provider is `claude`. Set a different one with `--provider <command>` or in your config; it must be a `claude`-shaped CLI (`--version`, `--model`, `-p`).
-- `--fix` only works for single-PR review comments and the comment body must contain the tag `#fix`.
-- Repo and org scope discover open PRs with the GitHub search API; large scopes may hit rate limits. Use a longer `--interval` for big organizations.
-- `--fix` is disabled for repo and org scope; only single-PR mode can generate and push fixes.
+- `--fix` only works for single-PR review comments and the comment body must contain the tag `#fix`. It is disabled for repo, org, or issue scope, and conversation comments and issue bodies/comments cannot request fixes.
+- Repo and org scope discover open PRs and open issues with the GitHub search API; large scopes may hit rate limits. Use a longer `--interval` for big organizations.
+- `--fix` is disabled for repo, org, or issue scope; only single-PR mode can generate and push fixes.
 - Scope mode fetches file content from the GitHub API, so it does not need a local clone.
 - Each poll processes every new unseen `@crewmate` mention; additional polls handle comments added after the current poll.
 - For single-PR targets, run from a clean repository; `gh pr checkout` will fail if the working tree has uncommitted changes.
 - For single-PR targets, `--dry-run` still runs `gh pr checkout`; it only skips posting replies and reactions and committing/pushing fixes.
 - If `git push` fails after a fix is committed, the commit remains local and must be pushed manually.
 - `--provider` expects a CLI with the same flags as `claude` (`--version`, `--model`, `-p`).
-- General PR conversation comments are handled too. Conversation replies are not threaded, do not support `#fix`, and cannot be matched to their original mention on a fresh install, so they may be reprocessed if state is lost.
+- General PR conversation comments and issue bodies/comments are handled too. Replies are not threaded, do not support `#fix`, and cannot be matched to their original mention on a fresh install, so they may be reprocessed if state is lost.
