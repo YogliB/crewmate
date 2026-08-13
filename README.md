@@ -38,12 +38,12 @@ If you are building from source, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md
 ## Usage
 
 ```bash
-crewmate watch <target> [options]
-crewmate stream <target> [options]
+crewmate watch [<target>] [options]
+crewmate stream [<target>] [options]
 crewmate init
 ```
 
-`<target>` can be:
+`<target>` is optional when `crewmate watch` or `crewmate stream` is run inside a git repository whose `origin` remote points to GitHub; it defaults to that repository. When provided, it can be:
 
 - A single PR: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`.
 - A repository: `https://github.com/owner/repo` or `owner/repo`.
@@ -152,7 +152,6 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 - **Init-time model selection**: when running `crewmate init`, query the configured provider for its available models and let the user select one.
 - **Connected user by default**: agents run connected to the user by default; to run in a looser mode, an explicit `unsafe` override flag is required.
 - **Sandboxed agents by default**: agents run in a sandbox by default.
-- **Default to the current GitHub repo from a git working tree**: when `crewmate watch` or `crewmate stream` is run from inside a git repository, default the target to the current repository if its remote points to GitHub.
 
 ## More docs
 

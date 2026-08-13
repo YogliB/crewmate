@@ -1,0 +1,14 @@
+feat: default watch and stream target to current git repository
+
+- Resolve omitted or empty <target> for `watch` and `stream` from the
+  current Git repository's `origin` remote.
+- Support HTTPS, SCP-style SSH, and `ssh://` remotes.
+- Preserve HTTPS non-default ports for GHES, but do not carry SSH ports
+  into the generated HTTPS target.
+- Preserve the underlying `git remote get-url origin` error message.
+- Remove `resolveDefaultTarget` from the public API.
+- Update README, help text, and CHANGELOG.
+
+Generated with [Devin](https://devin.ai)
+
+Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>
