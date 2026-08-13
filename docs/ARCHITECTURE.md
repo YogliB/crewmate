@@ -1,6 +1,6 @@
 # Architecture Overview
 
-`crewmate` is a small TypeScript CLI that polls a GitHub PR for review comments mentioning `@crewmate`, then replies with an explanation or a generated fix.
+`crewmate` is a small TypeScript CLI that polls a GitHub PR or issue for review comments, issue bodies, or issue comments mentioning `@crewmate`, then replies with an explanation or a generated fix.
 
 ## Project Structure
 
@@ -27,13 +27,13 @@
 ## Data Flow
 
 ```text
-[review comment on GitHub] --gh api--> [src/index.ts] --claude--> [reply or fix] --gh api--> [posted reply]
+[review comment, issue body, or issue comment on GitHub] --gh api--> [src/index.ts] --claude--> [reply or fix] --gh api--> [posted reply]
                                                                                   |
                                                                                   v
                                                                            [src/log.ts] --> $XDG_CONFIG_HOME/crewmate/crewmate.log
 ```
 
-`src/index.ts` fetches comments with `gh api`. For a repo or org scope it first discovers open PRs via the `search/issues` endpoint (with a fallback to `repos/<owner>/<repo>/pulls` on older GHES), then for each PR it finds the newest unseen `@crewmate` mention and either:
+`src/index.ts` fetches comments with `gh api`. For a repo or org scope it first discovers open PRs and open issues via the `search/issues` endpoint (with a fallback to `repos/<owner>/<repo>/issues` on older GHES), then for each item it finds the newest unseen `@crewmate` mention and either:
 
 - calls `src/fix.ts` to explain the line, or
 - calls `src/fix.ts` to generate and apply a fix when the comment contains `#fix` and `--fix` is enabled.
@@ -44,7 +44,7 @@ With `--dry-run`, the generated reply or fix is written to stdout as a human-rea
 
 ## State
 
-Seen comment IDs are stored in `$XDG_CONFIG_HOME/crewmate/state.json` as a JSON map of PR URLs to arrays of comment IDs. The file is read at the start of each poll and written before any reply is posted, so an error does not reprocess the same comment. In `--dry-run` mode, state is not written.
+Seen comment IDs are stored in `$XDG_CONFIG_HOME/crewmate/state.json` as a JSON map of item URLs to arrays of comment IDs. Issue bodies use the state key `issue:<number>` because an issue body has no separate comment id. The file is read at the start of each poll and written before any reply is posted, so an error does not reprocess the same comment. In `--dry-run` mode, state is not written.
 
 ## External Dependencies
 

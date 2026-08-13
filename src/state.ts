@@ -48,7 +48,7 @@ const loadStateEntries = (state: Map<string, string[]>, raw: string): boolean =>
 			.map((item) => (typeof item === "number" ? `review:${item}` : item))
 			.filter(
 				(item): item is string =>
-					typeof item === "string" && /^(review|conversation):\d+$/.test(item),
+					typeof item === "string" && /^(review|conversation|issue):\d+$/.test(item),
 			);
 		if (keys.length) {
 			state.set(key, keys);

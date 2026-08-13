@@ -2,7 +2,7 @@
 
 <img src="assets/logo.webp" alt="crewmate mascot" width="120" />
 
-Watch GitHub PR comments (review and conversation) for `@crewmate` mentions and reply with an explanation or a generated fix.
+Watch GitHub PR comments (review and conversation) and issues for `@crewmate` mentions and reply with an explanation or a generated fix.
 
 ## Before you start
 
@@ -15,10 +15,10 @@ You need:
 ## Caveats
 
 - **Provider default is `claude`**. If you don't have `claude` installed, set a different provider in `crewmate init`, in your config, or with `--provider <command>`.
-- **`--fix` only works for single-PR review comments** that contain the tag `#fix`. It is disabled for repo or org scope, and conversation comments cannot request fixes.
+- **`--fix` only works for single-PR review comments** that contain the tag `#fix`. It is disabled for repo or org scope, and conversation comments and issue bodies/comments cannot request fixes.
 - **Crewmate adds an `eyes` reaction to each new `@crewmate` mention** and swaps it for a thumbs-up, thumbs-down, or rocket before posting the reply.
 - **`--dry-run` still runs `gh pr checkout`** for single-PR targets. It skips posting replies and reactions and committing/pushing, but it may still touch your working tree.
-- **Conversation comments may be reprocessed** if the state file is lost, because GitHub does not expose a parent id for top-level conversation replies.
+- **Conversation comments and issue bodies/comments may be reprocessed** if the state file is lost, because GitHub does not expose a parent id for top-level conversation replies or issue body edits.
 - **Repo and org scope use the GitHub search API**. Large scopes may hit rate limits; use a longer `--interval` for big organizations.
 
 ## Install
@@ -46,6 +46,7 @@ crewmate init
 `<target>` is optional when `crewmate watch` or `crewmate stream` is run inside a git repository whose `origin` remote points to GitHub; it defaults to that repository. When provided, it can be:
 
 - A single PR: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`.
+- A single issue: `https://github.com/owner/repo/issues/4` or `owner/repo/issues/4`.
 - A repository: `https://github.com/owner/repo` or `owner/repo`.
 - An organization: `https://github.com/orgs/myorg` or `org:myorg`.
 - For GHES, use a full URL (`https://ghe.example.com/owner/repo`).
@@ -65,7 +66,7 @@ crewmate init
 - `--unsafe-no-user` — reply to comments from any GitHub user. Disables the default filter that falls back to the active `gh` user. This flag wins over `--user`.
 - `--debug` — emit extra poll pipeline detail (`fetched-comments`, `mention-filter`, `new-mentions`) to the log.
 
-`--fix` only works for single-PR targets. It is disabled for repo or org scope.
+`--fix` only works for single-PR review comments. It is disabled for repo, org, or issue scope, and conversation comments and issue bodies/comments cannot request fixes.
 
 ### `crewmate stream`
 
@@ -149,7 +150,6 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 ## TBD
 
 - **Degit integration**: keep a fast, minimal copy of the target repo in the CLI config folder so agents have code context without a full clone.
-- **Listen to issues alongside PR mentions**: respond to `@crewmate` mentions in issue bodies and comments, not just pull request review threads.
 - **Allow `#fix` from general PR conversation comments**: support generating and applying fixes from top-level PR comments, not only from diff-level review comments.
 - **Init-time model selection**: when running `crewmate init`, query the configured provider for its available models and let the user select one.
 - **Sandboxed agents by default**: agents run in a sandbox by default.

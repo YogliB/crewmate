@@ -18,6 +18,7 @@ const startsWithRepos = (value: string | undefined): boolean =>
 	typeof value === "string" && value.startsWith("repos/");
 
 const PR_URL = "https://github.com/owner/repo/pull/123";
+const ISSUE_URL = "https://github.com/owner/repo/issues/4";
 const FIRST_INDEX = 0;
 const SECOND_INDEX = 1;
 const FIRST_ID = 1;
@@ -87,15 +88,24 @@ const getPrompt = (runner: Runner, provider = "claude"): string | undefined => {
 const findEndpoint = (args: string[]): string | undefined =>
 	args.find((arg) => typeof arg === "string" && startsWithRepos(arg));
 
+const endpointPath = (endpoint: string): string => endpoint.split("?")[0] ?? endpoint;
+
+const PULLS_COMMENTS_PATTERN = /^repos\/[^/]+\/[^/]+\/pulls\/\d+\/comments$/;
+const ISSUE_BODY_PATTERN = /^repos\/[^/]+\/[^/]+\/issues\/(\d+)$/;
+const ISSUE_COMMENTS_PATTERN = /^repos\/[^/]+\/[^/]+\/issues\/\d+\/comments$/;
+const REACTION_PATTERN =
+	/^repos\/[^/]+\/[^/]+\/(?:issues|pulls)\/comments\/\d+\/reactions(?:\/\d+)?$|^repos\/[^/]+\/[^/]+\/issues\/\d+\/reactions(?:\/\d+)?$/;
+
 const resolveReaction = (args: string[]): string | undefined => {
 	const endpoint = findEndpoint(args);
-	if (endpoint?.includes("/reactions")) {
-		if (args.includes("POST")) {
-			return JSON.stringify({ id: takeNextReactionId() });
-		}
-		if (args.includes("DELETE")) {
-			return "";
-		}
+	if (endpoint === undefined || !REACTION_PATTERN.test(endpointPath(endpoint))) {
+		return undefined;
+	}
+	if (args.includes("POST")) {
+		return JSON.stringify({ id: takeNextReactionId() });
+	}
+	if (args.includes("DELETE")) {
+		return "";
 	}
 	return undefined;
 };
@@ -105,9 +115,18 @@ const conversationComments = (body?: string, user = "alice"): string =>
 		? "[]"
 		: JSON.stringify([[{ body, id: THIRD_ID, user: { login: user } }]]);
 
+const issueBodyResponse = (body: string, number: number, user = "alice"): string =>
+	JSON.stringify({ number, body, user: { login: user } });
+
 const resolveGhExplain = (
 	args: string[],
-	request: { body?: string; conversationBody?: string; path?: string; user?: string } = {},
+	request: {
+		body?: string;
+		conversationBody?: string;
+		issueBody?: string;
+		path?: string;
+		user?: string;
+	} = {},
 ): Promise<string> => {
 	const [command] = args;
 	if (command === "api" && args.includes("user")) {
@@ -117,10 +136,12 @@ const resolveGhExplain = (
 		const reaction = resolveReaction(args);
 		if (reaction !== undefined) return Promise.resolve(reaction);
 		const endpoint = findEndpoint(args);
+		if (endpoint === undefined) return Promise.resolve("");
 		if (args.includes("POST") || args.includes("DELETE")) {
 			return Promise.resolve("");
 		}
-		if (endpoint?.includes("/pulls/")) {
+		const endpointPathValue = endpointPath(endpoint);
+		if (PULLS_COMMENTS_PATTERN.test(endpointPathValue)) {
 			return Promise.resolve(
 				JSON.stringify([
 					[
@@ -136,7 +157,18 @@ const resolveGhExplain = (
 				]),
 			);
 		}
-		if (endpoint?.includes("/issues/")) {
+		const issueMatch = ISSUE_BODY_PATTERN.exec(endpointPathValue);
+		if (issueMatch) {
+			const number = Number(issueMatch[1]);
+			return Promise.resolve(
+				issueBodyResponse(
+					request.issueBody ?? request.conversationBody ?? "@crewmate hello",
+					number,
+					request.user,
+				),
+			);
+		}
+		if (ISSUE_COMMENTS_PATTERN.test(endpointPathValue)) {
 			return Promise.resolve(conversationComments(request.conversationBody, request.user));
 		}
 	}
@@ -159,15 +191,21 @@ const resolveGit = (args: string[]): Promise<string> => {
 
 const makeScopeRunner = ({
 	prUrl = PR_URL,
+	issueUrl,
 	rawContent = "example",
 	body = "@crewmate hello",
 	filePath = "src/index.ts",
+	conversationBody,
+	issueBody = "",
 	user = "alice",
 }: {
 	prUrl?: string;
+	issueUrl?: string;
 	rawContent?: string;
 	body?: string;
 	filePath?: string;
+	conversationBody?: string;
+	issueBody?: string;
 	user?: string;
 } = {}): Runner =>
 	vi.fn((file: string, args: string[]) => {
@@ -180,8 +218,15 @@ const makeScopeRunner = ({
 			}
 			const reaction = resolveReaction(args);
 			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (args.some((arg) => arg.startsWith("search/issues?q="))) {
-				return Promise.resolve(JSON.stringify([{ items: [{ html_url: prUrl }] }]));
+			const searchArg = args.find((arg) => arg.startsWith("search/issues?q="));
+			if (searchArg !== undefined) {
+				if (searchArg.includes("is%3Apr")) {
+					return JSON.stringify([{ items: [{ html_url: prUrl }] }]);
+				}
+				if (searchArg.includes("is%3Aissue") && issueUrl) {
+					return JSON.stringify([{ items: [{ html_url: issueUrl }] }]);
+				}
+				return JSON.stringify([{ items: [] }]);
 			}
 			if (args.includes("Accept: application/vnd.github.raw")) {
 				return Promise.resolve(rawContent);
@@ -189,8 +234,10 @@ const makeScopeRunner = ({
 			if (args.includes("POST")) {
 				return Promise.resolve("");
 			}
-			const endpoint = args.find((arg) => arg.startsWith("repos/"));
-			if (endpoint?.includes("/pulls/")) {
+			const endpoint = findEndpoint(args);
+			if (endpoint === undefined) return Promise.resolve("");
+			const endpointPathValue = endpointPath(endpoint);
+			if (PULLS_COMMENTS_PATTERN.test(endpointPathValue)) {
 				return Promise.resolve(
 					JSON.stringify([
 						[
@@ -206,8 +253,13 @@ const makeScopeRunner = ({
 					]),
 				);
 			}
-			if (endpoint?.includes("/issues/")) {
-				return Promise.resolve("[]");
+			const issueMatch = ISSUE_BODY_PATTERN.exec(endpointPathValue);
+			if (issueMatch) {
+				const number = Number(issueMatch[1]);
+				return Promise.resolve(issueBodyResponse(issueBody, number, user));
+			}
+			if (ISSUE_COMMENTS_PATTERN.test(endpointPathValue)) {
+				return Promise.resolve(conversationComments(conversationBody, user));
 			}
 		}
 		if (file === "claude") {
@@ -226,6 +278,7 @@ const resolveExplain = (
 		answer?: string;
 		body?: string;
 		conversationBody?: string;
+		issueBody?: string;
 		path?: string;
 		provider?: string;
 		user?: string;
@@ -248,6 +301,7 @@ const makeExplainRunner = (
 		answer?: string;
 		body?: string;
 		conversationBody?: string;
+		issueBody?: string;
 		path?: string;
 		provider?: string;
 		user?: string;
@@ -256,7 +310,13 @@ const makeExplainRunner = (
 	vi.fn((file: string, args: string[]) => resolveExplain(file, args, request)) as unknown as Runner;
 
 const makeMultiMentionRunner = (
-	options: { conversationBody?: string; failOn?: string; provider?: string; user?: string } = {},
+	options: {
+		conversationBody?: string;
+		failOn?: string;
+		issueBody?: string;
+		provider?: string;
+		user?: string;
+	} = {},
 ): Runner =>
 	vi.fn((file: string, args: string[]) => {
 		if (options.failOn && willFail(file, args, options.failOn)) {
@@ -283,10 +343,12 @@ const makeMultiMentionRunner = (
 				const reaction = resolveReaction(args);
 				if (reaction !== undefined) return Promise.resolve(reaction);
 				const endpoint = findEndpoint(args);
+				if (endpoint === undefined) return Promise.resolve("");
 				if (args.includes("POST") || args.includes("DELETE")) {
 					return Promise.resolve("");
 				}
-				if (endpoint?.includes("/pulls/")) {
+				const endpointPathValue = endpointPath(endpoint);
+				if (PULLS_COMMENTS_PATTERN.test(endpointPathValue)) {
 					return Promise.resolve(
 						JSON.stringify([
 							[
@@ -310,7 +372,12 @@ const makeMultiMentionRunner = (
 						]),
 					);
 				}
-				if (endpoint?.includes("/issues/")) {
+				const issueMatch = ISSUE_BODY_PATTERN.exec(endpointPathValue);
+				if (issueMatch) {
+					const number = Number(issueMatch[1]);
+					return Promise.resolve(issueBodyResponse(options.issueBody ?? "", number, options.user));
+				}
+				if (ISSUE_COMMENTS_PATTERN.test(endpointPathValue)) {
 					return Promise.resolve(conversationComments(options.conversationBody, options.user));
 				}
 			}
@@ -320,7 +387,13 @@ const makeMultiMentionRunner = (
 
 const resolveGhFix = (
 	args: string[],
-	request: { body?: string; conversationBody?: string; targetPath: string; user?: string } = {
+	request: {
+		body?: string;
+		conversationBody?: string;
+		issueBody?: string;
+		targetPath: string;
+		user?: string;
+	} = {
 		targetPath: "",
 	},
 ): Promise<string> => {
@@ -332,10 +405,12 @@ const resolveGhFix = (
 		const reaction = resolveReaction(args);
 		if (reaction !== undefined) return Promise.resolve(reaction);
 		const endpoint = findEndpoint(args);
+		if (endpoint === undefined) return Promise.resolve("");
 		if (args.includes("POST") || args.includes("DELETE")) {
 			return Promise.resolve("");
 		}
-		if (endpoint?.includes("/pulls/")) {
+		const endpointPathValue = endpointPath(endpoint);
+		if (PULLS_COMMENTS_PATTERN.test(endpointPathValue)) {
 			return Promise.resolve(
 				JSON.stringify([
 					[
@@ -351,7 +426,18 @@ const resolveGhFix = (
 				]),
 			);
 		}
-		if (endpoint?.includes("/issues/")) {
+		const issueMatch = ISSUE_BODY_PATTERN.exec(endpointPathValue);
+		if (issueMatch) {
+			const number = Number(issueMatch[1]);
+			return Promise.resolve(
+				issueBodyResponse(
+					request.issueBody ?? request.body ?? request.conversationBody ?? "@crewmate #fix",
+					number,
+					request.user,
+				),
+			);
+		}
+		if (ISSUE_COMMENTS_PATTERN.test(endpointPathValue)) {
 			return Promise.resolve(conversationComments(request.conversationBody, request.user));
 		}
 	}
@@ -377,6 +463,7 @@ const resolveFix = (
 		conversationBody?: string;
 		failOn?: string;
 		fixed?: string;
+		issueBody?: string;
 		targetPath: string;
 		provider?: string;
 		user?: string;
@@ -404,6 +491,7 @@ const makeFixRunner = (
 		conversationBody?: string;
 		failOn?: string;
 		fixed?: string;
+		issueBody?: string;
 		provider?: string;
 		user?: string;
 	} = {},
@@ -1011,6 +1099,27 @@ describe("run stream flags", () => {
 		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toEqual(["review:1"]);
+	});
+
+	it("emits an issue mention with kind issue and commentId equal to the issue number", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ issueBody: "@crewmate hello" });
+		await run(["stream", ISSUE_URL], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		const events = calls
+			.filter((line) => line.includes('"event":"mention"'))
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			commentId: 4,
+			kind: "issue",
+			number: 4,
+			owner: "owner",
+			repo: "repo",
+		});
+		const state = await run.loadState(run.statePath());
+		expect(state.get(ISSUE_URL)).toEqual(["issue:4"]);
+		write.mockRestore();
 	});
 
 	it("saves state for every new mention in a multi-mention poll", async () => {
@@ -3149,6 +3258,52 @@ describe("watch dry-run", () => {
 		expect(output).toContain("[dry-run] would reply to comment 1:");
 		write.mockRestore();
 	});
+
+	it("conversation dry-run produces human-readable preview", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
+		const runner = makeExplainRunner({
+			answer: "It does something.",
+			conversationBody: "@crewmate hello",
+		});
+		await run.watch(PR_URL, {
+			dryRun: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+
+		const output = write.mock.calls.map(([line]) => line as string).join("");
+		expect(output).toContain("[dry-run] would change reaction on comment 3 from :none: to :eyes:");
+		expect(output).toContain("[dry-run] would change reaction on comment 3 from :eyes: to :+1:");
+		expect(output).toContain("would post a comment on pull request 123:");
+		write.mockRestore();
+
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toBeUndefined();
+	});
+
+	it("issue dry-run produces human-readable preview", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
+		const runner = makeExplainRunner({
+			answer: "It does something.",
+			issueBody: "@crewmate hello",
+		});
+		await run.watch(ISSUE_URL, {
+			dryRun: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+
+		const output = write.mock.calls.map(([line]) => line as string).join("");
+		expect(output).toContain("[dry-run] would change reaction on issue 4 from :none: to :eyes:");
+		expect(output).toContain("[dry-run] would change reaction on issue 4 from :eyes: to :+1:");
+		expect(output).toContain("would post a comment on issue 4:");
+		write.mockRestore();
+
+		const state = await run.loadState(run.statePath());
+		expect(state.get(ISSUE_URL)).toBeUndefined();
+	});
 });
 
 describe("watch fix missing", () => {
@@ -3371,6 +3526,65 @@ describe("watch fix errors", () => {
 	});
 });
 
+describe("watch issue", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
+	});
+
+	it("replies to the issue body and a conversation comment", async () => {
+		const runner = makeExplainRunner({
+			answer: "It does something.",
+			conversationBody: "@crewmate hi",
+			issueBody: "@crewmate hello",
+		});
+		await run.watch(ISSUE_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
+
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
+		const state = await run.loadState(run.statePath());
+		expect(state.get(ISSUE_URL)).toEqual(["issue:4", "conversation:3"]);
+	});
+
+	it("disables #fix on the issue body", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeFixRunner("src/index.ts", {
+			issueBody: "@crewmate #fix",
+			fixed: "No problem.",
+		});
+		await run.watch(ISSUE_URL, {
+			allowFix: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+			toStderr: true,
+		});
+
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
+		expect(
+			countCalls(
+				runner,
+				"gh",
+				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
+			),
+		).toBe(NO_CALLS);
+		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "scope-fix-disabled" }),
+		);
+	});
+});
+
 describe("conversation comments", () => {
 	let tempDir = "";
 
@@ -3384,7 +3598,7 @@ describe("conversation comments", () => {
 		vi.unstubAllEnvs();
 	});
 
-	it("replies to a conversation mention through the issues endpoint", async () => {
+	it("replies to a PR conversation comment through the issues endpoint", async () => {
 		const runner = makeExplainRunner({
 			answer: "It does something.",
 			body: "hello",
@@ -3419,7 +3633,7 @@ describe("conversation comments", () => {
 	});
 
 	it("warns and skips git commands for a conversation #fix with --fix", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const runner = makeFixRunner("src/index.ts", {
 			body: "hello",
 			conversationBody: "@crewmate #fix",
@@ -3429,7 +3643,9 @@ describe("conversation comments", () => {
 			allowFix: true,
 			interval: NO_INTERVAL,
 			iterations: FIRST_ITERATION,
+			logger,
 			runner,
+			toStderr: true,
 		});
 
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
@@ -3444,8 +3660,11 @@ describe("conversation comments", () => {
 		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "commit")).toBe(NO_CALLS);
 		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "push")).toBe(NO_CALLS);
 		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-		expect(warn).toHaveBeenCalledWith(
-			expect.stringContaining("fix requested on conversation comment"),
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({
+				message: expect.stringContaining("fix requested on conversation or issue comment"),
+			}),
 		);
 
 		const reactionPosts = (
@@ -3457,12 +3676,10 @@ describe("conversation comments", () => {
 		).toBe(true);
 		expect(getReactionEmoji(reactionPosts[0][1])).toBe("eyes");
 		expect(getReactionEmoji(reactionPosts[1][1])).toBe("-1");
-
-		warn.mockRestore();
 	});
 
 	it("does not treat #fixme as a fix request in conversation comments", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const runner = makeFixRunner("src/index.ts", {
 			body: "hello",
 			conversationBody: "@crewmate #fixme",
@@ -3472,13 +3689,14 @@ describe("conversation comments", () => {
 			allowFix: true,
 			interval: NO_INTERVAL,
 			iterations: FIRST_ITERATION,
+			logger,
 			runner,
+			toStderr: true,
 		});
 
 		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
-		expect(warn).not.toHaveBeenCalled();
+		expect(logger).not.toHaveBeenCalledWith("warning", expect.anything());
 		expect(getPrompt(runner)).toMatch(/#fixme/);
-		warn.mockRestore();
 	});
 
 	it("keeps #fix in conversation comments when --fix is not set", async () => {
@@ -4194,6 +4412,7 @@ describe("scope targets", () => {
 	const ORG_TARGET = "org:myorg";
 	const GHES_REPO_URL = "https://ghe.example.com/owner/repo";
 	const SCOPE_PR_URL = "https://github.com/owner/repo/pull/1";
+	const SCOPE_ISSUE_URL = "https://github.com/owner/repo/issues/2";
 
 	it("parses a full GHES repo URL", () => {
 		expect(run.parseTarget(GHES_REPO_URL)).toEqual({
@@ -4267,6 +4486,102 @@ describe("scope targets", () => {
 			repo: "repo",
 			number: "1",
 		});
+	});
+
+	it("parses an issue shorthand", () => {
+		expect(run.parseTarget("owner/repo/issues/4")).toEqual({
+			kind: "issue",
+			host: "github.com",
+			owner: "owner",
+			repo: "repo",
+			number: "4",
+		});
+	});
+
+	it("parses a full GitHub issue URL", () => {
+		expect(run.parseTarget("https://github.com/owner/repo/issues/4")).toEqual({
+			kind: "issue",
+			host: "github.com",
+			owner: "owner",
+			repo: "repo",
+			number: "4",
+		});
+	});
+
+	it("preserves a non-default port in a GHES issue URL", () => {
+		expect(run.parseTarget("https://ghe.example.com:8443/owner/repo/issues/1")).toEqual({
+			kind: "issue",
+			host: "ghe.example.com",
+			owner: "owner",
+			port: "8443",
+			repo: "repo",
+			number: "1",
+		});
+	});
+
+	it("fetchMentions returns an issue mention plus conversation comments", async () => {
+		const runner = makeExplainRunner({
+			issueBody: "@crewmate hello",
+			conversationBody: "@crewmate hi",
+		});
+		const mentions = await run.fetchMentions("https://github.com/owner/repo/issues/4", runner);
+		expect(mentions).toHaveLength(2);
+		expect(
+			mentions.some(
+				(mention) =>
+					mention.kind === "issue" && mention.id === 4 && mention.body === "@crewmate hello",
+			),
+		).toBe(true);
+		expect(
+			mentions.some(
+				(mention) =>
+					mention.kind === "conversation" &&
+					mention.id === THIRD_ID &&
+					mention.body === "@crewmate hi",
+			),
+		).toBe(true);
+	});
+
+	it("fetchMentions throws for a non-item URL", async () => {
+		const runner = makeExplainRunner();
+		await expect(run.fetchMentions("https://github.com/owner/repo", runner)).rejects.toThrow(
+			"Invalid item reference: https://github.com/owner/repo",
+		);
+	});
+
+	it("respondToMention throws for a non-item URL", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeExplainRunner();
+		const warn = warnFn(logger);
+		await expect(
+			run.respondToMention(
+				{ body: "@crewmate hello", id: FIRST_ID, kind: "review" } as Mention,
+				"https://github.com/owner/repo",
+				{ allowFix: false, checkedOut: new Set(), dryRun: false, logger, runner, warn },
+			),
+		).rejects.toThrow("Invalid item reference: https://github.com/owner/repo");
+	});
+
+	it("fetchMentions falls back to conversation comments when the issue body is malformed", async () => {
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (
+				file === "gh" &&
+				args.at(FIRST_INDEX) === "api" &&
+				args.some((arg) => startsWithRepos(arg))
+			) {
+				const endpoint = findEndpoint(args);
+				if (endpoint === undefined) return Promise.resolve("");
+				const endpointPathValue = endpointPath(endpoint);
+				if (ISSUE_BODY_PATTERN.test(endpointPathValue)) return Promise.resolve("{}");
+				if (ISSUE_COMMENTS_PATTERN.test(endpointPathValue)) {
+					return Promise.resolve(conversationComments("@crewmate hi"));
+				}
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const mentions = await run.fetchMentions("https://github.com/owner/repo/issues/4", runner);
+		expect(mentions).toHaveLength(1);
+		expect(mentions[0]).toMatchObject({ kind: "conversation", body: "@crewmate hi", id: THIRD_ID });
 	});
 
 	it("throws for an invalid bare word", () => {
@@ -4399,30 +4714,27 @@ describe("scope targets", () => {
 		);
 	});
 
-	it("fetchOpenPrs falls back to pulls endpoint on 404 for repo scope", async () => {
+	it("fetchOpenPrs falls back to issues endpoint on 404 and returns both PR and issue URLs", async () => {
 		let callCount = 0;
 		const runner = vi.fn((file: string, args: string[]) => {
 			if (file !== "gh" || args[0] !== "api") return Promise.resolve("");
 			callCount += 1;
-			if (callCount === 1) {
+			if (args.some((arg) => arg.startsWith("search/issues?q="))) {
 				return Promise.reject(new Error("HTTP 404: Not Found"));
 			}
-			return Promise.resolve(
-				JSON.stringify([
-					[
-						{
-							html_url: SCOPE_PR_URL,
-						},
-					],
-				]),
-			);
+			if (args.some((arg) => arg.startsWith("repos/owner/repo/issues?state=open"))) {
+				return Promise.resolve(
+					JSON.stringify([[{ html_url: SCOPE_PR_URL }, { html_url: SCOPE_ISSUE_URL }]]),
+				);
+			}
+			return Promise.resolve("");
 		}) as unknown as Runner;
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const warn = warnFn(logger);
 		const scope = run.parseTarget(REPO_TARGET);
-		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(prUrls).toEqual([SCOPE_PR_URL]);
-		expect(callCount).toBe(TWO_CALLS);
+		const itemUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(itemUrls).toEqual([SCOPE_PR_URL, SCOPE_ISSUE_URL]);
+		expect(callCount).toBe(THREE_CALLS);
 	});
 
 	it("fetchOpenPrs throws on 404 for org scope", async () => {
@@ -4443,42 +4755,47 @@ describe("scope targets", () => {
 		const warn = warnFn(logger);
 		const scope = run.parseTarget("owner/repo/pull/1");
 		await expect(run.fetchOpenPrs(scope, runner, warn)).rejects.toThrow(
-			"fetchOpenPrs should not be called for a single PR",
+			"fetchOpenItems should not be called for a single item",
 		);
 	});
 
-	it("fetchOpenPrs warns on a generic search failure", async () => {
+	it("fetchOpenItems returns empty when both search queries fail", async () => {
 		const runner = vi.fn(() => Promise.reject(new Error("Boom"))) as unknown as Runner;
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const warn = warnFn(logger);
 		const scope = run.parseTarget(REPO_TARGET);
-		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(prUrls).toEqual([]);
+		const itemUrls = await run.fetchOpenItems(scope, runner, warn);
+		expect(itemUrls).toEqual([]);
 		expect(logger).toHaveBeenCalledWith(
 			"warning",
 			expect.objectContaining({ reason: "search-failed" }),
 		);
 	});
 
-	it("fetchOpenPrs repo fallback warns on invalid PR URLs", async () => {
-		let callCount = 0;
+	it("fetchOpenPrs repo fallback warns on invalid item URLs", async () => {
 		const runner = vi.fn((file: string, args: string[]) => {
 			if (file !== "gh" || args[0] !== "api") return Promise.resolve("");
-			callCount += 1;
-			if (callCount === 1) {
+			if (args.some((arg) => arg.startsWith("search/issues?q="))) {
 				return Promise.reject(new Error("HTTP 404: Not Found"));
 			}
-			return Promise.resolve(
-				JSON.stringify([
-					[{ html_url: undefined }, { html_url: "not-a-pr-url" }, { html_url: SCOPE_PR_URL }],
-				]),
-			);
+			if (args.some((arg) => arg.startsWith("repos/owner/repo/issues?state=open"))) {
+				return Promise.resolve(
+					JSON.stringify([
+						[
+							{ html_url: undefined },
+							{ html_url: "https://github.com/owner/repo" },
+							{ html_url: SCOPE_PR_URL },
+						],
+					]),
+				);
+			}
+			return Promise.resolve("");
 		}) as unknown as Runner;
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const warn = warnFn(logger);
 		const scope = run.parseTarget(REPO_TARGET);
-		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(prUrls).toEqual([SCOPE_PR_URL]);
+		const itemUrls = await run.fetchOpenPrs(scope, runner, warn);
+		expect(itemUrls).toEqual([SCOPE_PR_URL]);
 		expect(logger).toHaveBeenCalledWith(
 			"warning",
 			expect.objectContaining({ reason: "fallback-invalid-url" }),
@@ -4529,6 +4846,75 @@ describe("scope targets", () => {
 		const scope = run.parseTarget(REPO_TARGET);
 		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
 		expect(prUrls).toEqual([]);
+	});
+
+	it("fetchOpenItems returns both PR and issue URLs from search and deduplicates", async () => {
+		const prQuery = `search/issues?q=${encodeURIComponent("repo:owner/repo is:pr is:open")}`;
+		const issueQuery = `search/issues?q=${encodeURIComponent("repo:owner/repo is:issue is:open")}`;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file !== "gh" || args[0] !== "api") return Promise.resolve("");
+			if (args.some((arg) => arg === prQuery)) {
+				return Promise.resolve(
+					JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }, { html_url: SCOPE_ISSUE_URL }] }]),
+				);
+			}
+			if (args.some((arg) => arg === issueQuery)) {
+				return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_ISSUE_URL }] }]));
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget(REPO_TARGET);
+		const itemUrls = await run.fetchOpenItems(scope, runner, warn);
+		expect(itemUrls).toEqual([SCOPE_PR_URL, SCOPE_ISSUE_URL]);
+	});
+
+	it("fetchOpenItems warns and continues when one search query fails but the other succeeds", async () => {
+		const prQuery = `search/issues?q=${encodeURIComponent("repo:owner/repo is:pr is:open")}`;
+		const issueQuery = `search/issues?q=${encodeURIComponent("repo:owner/repo is:issue is:open")}`;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file !== "gh" || args[0] !== "api") return Promise.resolve("");
+			if (args.some((arg) => arg === prQuery)) {
+				return Promise.reject(new Error("Boom"));
+			}
+			if (args.some((arg) => arg === issueQuery)) {
+				return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_ISSUE_URL }] }]));
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = warnFn(logger);
+		const scope = run.parseTarget(REPO_TARGET);
+		const itemUrls = await run.fetchOpenItems(scope, runner, warn);
+		expect(itemUrls).toEqual([SCOPE_ISSUE_URL]);
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ reason: "search-failed" }),
+		);
+	});
+
+	it("watches a repo scope and processes a mixed PR and issue discovery", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeScopeRunner({
+			issueUrl: SCOPE_ISSUE_URL,
+			issueBody: "@crewmate hello",
+		});
+		await run.watch(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
+		expect(
+			countCalls(
+				runner,
+				"gh",
+				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
+			),
+		).toBe(NO_CALLS);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
 	});
 
 	it("watches a repo scope and replies to mentions", async () => {
@@ -4595,6 +4981,29 @@ describe("scope targets", () => {
 		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
 	});
 
+	it("watches an org scope with both PRs and issues", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeScopeRunner({
+			issueUrl: SCOPE_ISSUE_URL,
+			issueBody: "@crewmate hello",
+		});
+		await run.watch(ORG_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
+		expect(
+			countCalls(
+				runner,
+				"gh",
+				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
+			),
+		).toBe(NO_CALLS);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
+	});
+
 	it("watches a repo scope with multiple open PRs", async () => {
 		const SCOPE_PR_URL_2 = "https://github.com/owner/repo/pull/2";
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
@@ -4650,6 +5059,84 @@ describe("scope targets", () => {
 			unsafeNoUser: true,
 		});
 		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
+	});
+
+	it("watches a repo scope with both PRs and issues", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+				return Promise.resolve("");
+			}
+			if (file === "gh" && args[0] === "api") {
+				const reaction = resolveReaction(args);
+				if (reaction !== undefined) return Promise.resolve(reaction);
+				const searchArg = args.find((arg) => arg.startsWith("search/issues?q="));
+				if (searchArg !== undefined) {
+					if (searchArg.includes("is%3Apr")) {
+						return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
+					}
+					if (searchArg.includes("is%3Aissue")) {
+						return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_ISSUE_URL }] }]));
+					}
+					return Promise.resolve(JSON.stringify([{ items: [] }]));
+				}
+				if (args.includes("Accept: application/vnd.github.raw")) {
+					return Promise.resolve("example");
+				}
+				if (args.includes("POST")) {
+					return Promise.resolve("");
+				}
+				const endpoint = findEndpoint(args);
+				if (endpoint === undefined) return Promise.resolve("");
+				const endpointPathValue = endpointPath(endpoint);
+				if (PULLS_COMMENTS_PATTERN.test(endpointPathValue)) {
+					return Promise.resolve(
+						JSON.stringify([
+							[
+								{
+									body: "@crewmate hello",
+									id: FIRST_ID,
+									in_reply_to_id: null,
+									line: FIRST_LINE,
+									path: "src/index.ts",
+									user: { login: "alice" },
+								},
+							],
+						]),
+					);
+				}
+				const issueMatch = ISSUE_BODY_PATTERN.exec(endpointPathValue);
+				if (issueMatch) {
+					return Promise.resolve(
+						issueBodyResponse("@crewmate hello", Number(issueMatch[1]), "alice"),
+					);
+				}
+				if (ISSUE_COMMENTS_PATTERN.test(endpointPathValue)) {
+					return Promise.resolve("[]");
+				}
+			}
+			if (file === "claude") {
+				return Promise.resolve("It does something.");
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run.watch(REPO_TARGET, {
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+			unsafeNoUser: true,
+		});
+		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
+		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
+		expect(
+			countCalls(
+				runner,
+				"gh",
+				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
+			),
+		).toBe(NO_CALLS);
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
 	});
 
 	it("continues polling when one repo scope PR fails", async () => {
@@ -4712,7 +5199,7 @@ describe("scope targets", () => {
 		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 		expect(logger).toHaveBeenCalledWith(
 			"warning",
-			expect.objectContaining({ reason: "pr-poll-failed" }),
+			expect.objectContaining({ reason: "poll-failed" }),
 		);
 	});
 
@@ -4740,7 +5227,7 @@ describe("scope targets", () => {
 		});
 		expect(logger).toHaveBeenCalledWith(
 			"warning",
-			expect.objectContaining({ reason: "no-open-prs" }),
+			expect.objectContaining({ reason: "no-open-items" }),
 		);
 	});
 
@@ -4859,7 +5346,7 @@ describe("scope targets", () => {
 		});
 		expect(logger).toHaveBeenCalledWith(
 			"warning",
-			expect.objectContaining({ reason: "no-open-prs" }),
+			expect.objectContaining({ reason: "no-open-items" }),
 		);
 	});
 
@@ -4924,7 +5411,7 @@ describe("scope targets", () => {
 		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
 	});
 
-	it("re-throws non-404 raw content API failures", async () => {
+	it("warns and continues on non-404 raw content API failures", async () => {
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const runner = vi.fn((file: string, args: string[]) => {
 			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
@@ -4985,7 +5472,7 @@ describe("scope targets", () => {
 		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(0);
 		expect(logger).toHaveBeenCalledWith(
 			"warning",
-			expect.objectContaining({ reason: "pr-poll-failed" }),
+			expect.objectContaining({ reason: "poll-failed" }),
 		);
 	});
 });
