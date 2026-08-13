@@ -153,6 +153,12 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 - **Allow `#fix` from general PR conversation comments**: support generating and applying fixes from top-level PR comments, not only from diff-level review comments.
 - **Init-time model selection**: when running `crewmate init`, query the configured provider for its available models and let the user select one.
 - **Sandboxed agents by default**: agents run in a sandbox by default.
+- **Add `--once` / `--iterations` flag for `watch` and `stream`**: so the CLI can stop after a single poll (or N polls) instead of running forever. Useful for CI and manual testing.
+- **Document the `--dry-run` state caveat** (docs-only change, not a code change): clarify in the README/help that `--dry-run` does not persist state and therefore reprocesses all existing `@crewmate` mentions on every poll.
+- **Move `stream` warnings to stderr**: keep stdout strictly NDJSON so downstream pipelines do not break on `Warning: Search failed...` lines.
+- **Fix `stream` unsupported-flag warning ordering**: warn about unsupported flags like `--fix` / `--dry-run` / `--provider` before trying to resolve the default target, so the warning is visible even when run outside a git repo without an explicit target.
+- **Extend `crewmateReplied` deduplication to conversation and issue comments**: today only review-comment replies suppress the original mention; top-level conversation/issue replies can be reprocessed if the state file is lost.
+- **Improve single-PR `watch` not-found messaging**: a non-existent PR currently surfaces as a raw `gh api` 404 inside a `poll failed` warning; a cleaner "PR not found" message would help.
 
 ## More docs
 
