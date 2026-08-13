@@ -1,6 +1,6 @@
 # crewmate changelog
 
-## Unreleased
+## 0.2.0
 
 - `crewmate watch` and `crewmate stream` now default to the current GitHub repository when run inside a git working tree with a GitHub `origin` remote.
 

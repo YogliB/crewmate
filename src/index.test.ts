@@ -396,14 +396,14 @@ describe("run dispatch", () => {
 	it("prints the version for --version", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		await run(["--version"]);
-		expect(write).toHaveBeenCalledWith("crewmate/0.1.0\n");
+		expect(write).toHaveBeenCalledWith("crewmate/0.2.0\n");
 		write.mockRestore();
 	});
 
 	it("prints the version for -v", async () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		await run(["-v"]);
-		expect(write).toHaveBeenCalledWith("crewmate/0.1.0\n");
+		expect(write).toHaveBeenCalledWith("crewmate/0.2.0\n");
 		write.mockRestore();
 	});
 
@@ -442,7 +442,7 @@ describe("run dispatch", () => {
 		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 		vi.resetModules();
 		await import("./bin.js");
-		expect(write).toHaveBeenCalledWith("crewmate/0.1.0\n");
+		expect(write).toHaveBeenCalledWith("crewmate/0.2.0\n");
 		process.argv = previousArgv;
 		process.exitCode = previousExitCode;
 		write.mockRestore();
