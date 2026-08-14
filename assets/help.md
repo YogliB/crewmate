@@ -67,7 +67,7 @@ Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, `info`
 ## Caveats
 
 - The default LLM provider is `claude`. Set a different one with `--provider <command>` or in your config; it must be a `claude`-shaped CLI (`--version`, `--model`, `-p`).
-- `--fix` works for single-PR review and conversation comments, and the comment body must contain the tag `#fix`. It is disabled for repo, org, or issue scope, and issue bodies/comments cannot request fixes.
+- `--fix` works for single-PR review and conversation comments, and the comment body must contain the tag `#fix`. It is disabled for repo, org, or issue scope, and issue bodies/comments cannot request fixes. Conversation fixes consider at most 50 changed files and skip binary or very large files (larger than 100 KB).
 - Repo and org scope discover open PRs and open issues with the GitHub search API; large scopes may hit rate limits. Use a longer `--interval` for big organizations.
 - Scope mode fetches file content from the GitHub API, so it does not need a local clone.
 - Each poll processes every new unseen `@crewmate` mention; additional polls handle comments added after the current poll.

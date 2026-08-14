@@ -6074,6 +6074,50 @@ describe("dispatchMention conversation fix", () => {
 		);
 	});
 
+	it("previews a conversation #fix in dry-run mode", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
+		const runner = makeConversationFixRunner({
+			fixed: "```src/index.ts\nnew\n```",
+		});
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const ctx = makeConversationFixCtx(runner, warn, logger, { dryRun: true });
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+
+		const output = write.mock.calls.map(([line]) => line as string).join("");
+		expect(output).toContain("would write fix to");
+		expect(output).toContain("new");
+		write.mockRestore();
+	});
+
+	it("rejects a conversation fix for an invalid PR URL", async () => {
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeConversationFixRunner({});
+		const ctx = makeConversationFixCtx(runner, warn, logger, {
+			prUrl: "not-a-url",
+			repoRoot: undefined,
+		});
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("I can't apply fixes");
+	});
+
 	it("rejects a fix requested on an issue body", async () => {
 		const warn = vi.fn() as unknown as (
 			message: string,
@@ -6103,6 +6147,43 @@ describe("dispatchMention conversation fix", () => {
 		});
 		expect(warn).toHaveBeenCalledWith(
 			"fix requested on issue body or comment; only PR review and conversation comments support #fix",
+			expect.any(Object),
+		);
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("I can't apply fixes");
+	});
+
+	it("rejects a fix requested on an issue comment", async () => {
+		const warn = vi.fn() as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
+			if (file === "gh" && args.includes("/reactions"))
+				return Promise.resolve(JSON.stringify({ id: 1 }));
+			if (file === "gh" && args.includes("/issues/4/comments")) return Promise.resolve("[]");
+			if (file === "gh" && args.includes("/issues/"))
+				return Promise.resolve(issueBodyResponse("@crewmate #fix", 4));
+			if (file === "claude") return Promise.resolve("No problem.");
+			if (file === "git") return resolveGit(args);
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const ctx = makeConversationFixCtx(runner, warn, logger, {
+			kind: "conversation" as const,
+			number: "4",
+			prUrl: ISSUE_URL,
+			repoRoot: undefined,
+		});
+		await dispatchMention({ id: 4, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+		expect(warn).toHaveBeenCalledWith(
+			"fix requested on a conversation comment that does not belong to a PR; only PR conversation comments support #fix",
 			expect.any(Object),
 		);
 		const replyPost = (

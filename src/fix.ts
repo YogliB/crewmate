@@ -540,10 +540,26 @@ const normalizeConversationFixes = (
 	return fixes;
 };
 
+const isPrUrl = (url: string): boolean => {
+	try {
+		return new URL(url).pathname.includes("/pull/");
+	} catch {
+		return false;
+	}
+};
+
 const handleConversationFix = async (
 	mention: Extract<Mention, { kind: "conversation" }>,
 	ctx: ReplyContext,
 ): Promise<void> => {
+	if (!isPrUrl(ctx.prUrl)) {
+		await ctx.warn(
+			"fix requested on a conversation comment that does not belong to a PR; only PR conversation comments support #fix",
+			logContext(ctx),
+		);
+		await postReply(ctx, NO_FIX_IN_ISSUE, "error");
+		return;
+	}
 	const { files, allPaths } = await readPrFiles(ctx);
 	if (files.length === 0) {
 		await postReply(

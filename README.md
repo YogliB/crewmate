@@ -15,7 +15,7 @@ You need:
 ## Caveats
 
 - **Provider default is `claude`**. If you don't have `claude` installed, set a different provider in `crewmate init`, in your config, or with `--provider <command>`.
-- **`--fix` works for single-PR review and conversation comments** that contain the tag `#fix`. It is disabled for repo or org scope, and issue bodies/comments cannot request fixes.
+- **`--fix` works for single-PR review and conversation comments** that contain the tag `#fix`. It is disabled for repo or org scope, and issue bodies/comments cannot request fixes. Conversation fixes consider at most 50 changed files and skip binary or very large files (larger than 100 KB).
 - **Crewmate adds an `eyes` reaction to each new `@crewmate` mention** and swaps it for a thumbs-up, thumbs-down, or rocket before posting the reply.
 - **`--dry-run` still runs `gh pr checkout`** for single-PR targets. It skips posting replies and reactions and committing/pushing, but it may still touch your working tree.
 - **Conversation comments and issue bodies/comments may be reprocessed** if the state file is lost, because GitHub does not expose a parent id for top-level conversation replies or issue body edits.
