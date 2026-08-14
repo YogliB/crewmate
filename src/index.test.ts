@@ -5689,6 +5689,15 @@ describe("dispatchMention conversation fix", () => {
 		expect(content).toBe("new\n");
 	});
 
+	it("allows the provider to return an empty file", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old\n");
+		await dispatchConversationFix({ fixed: "```src/index.ts\n\n```" });
+
+		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
+		expect(content).toBe("");
+	});
+
 	it("includes unreadable changed files in the conversation prompt", async () => {
 		await mkdir(path.resolve("src"), { recursive: true });
 		await writeFile(path.resolve("src", "index.ts"), "old");
@@ -5782,6 +5791,12 @@ describe("dispatchMention conversation fix", () => {
 			runner as unknown as { mock: { calls: [string, string[]][] } }
 		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
 		expect(JSON.stringify(replyPost?.[1])).toContain("No changes needed.");
+		const reactionCalls = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.filter(
+			([f, a]) => f === "gh" && REACTION_PATTERN.test(endpointPath(findEndpoint(a) ?? "")),
+		);
+		expect(reactionCalls.at(-1)?.[1].join(" ")).toContain("content=+1");
 	});
 
 	it("reports no changes needed when the provider returns the same plain content", async () => {
@@ -5793,6 +5808,12 @@ describe("dispatchMention conversation fix", () => {
 			runner as unknown as { mock: { calls: [string, string[]][] } }
 		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
 		expect(JSON.stringify(replyPost?.[1])).toContain("No changes needed.");
+		const reactionCalls = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.filter(
+			([f, a]) => f === "gh" && REACTION_PATTERN.test(endpointPath(findEndpoint(a) ?? "")),
+		);
+		expect(reactionCalls.at(-1)?.[1].join(" ")).toContain("content=+1");
 	});
 
 	it("reports and throws when applyFix receives a path outside the repo", async () => {
@@ -5911,6 +5932,123 @@ describe("dispatchMention conversation fix", () => {
 			allowFix: true,
 		});
 
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain(
+			"Could not read any changed files in this PR.",
+		);
+	});
+
+	it("caps the number of changed files considered for a conversation fix", async () => {
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const files = Array.from({ length: 51 }, (_, i) => `f${i}.ts`);
+		const runner = makeConversationFixRunner({ files, fixed: "" });
+		const ctx = {
+			checkedOut: new Set<string>(),
+			commentId: FIRST_ID,
+			dryRun: false,
+			ghHost: "github.com",
+			kind: "conversation" as const,
+			logger,
+			number: "123",
+			owner: "owner",
+			prUrl: PR_URL,
+			repo: "repo",
+			repoRoot: tempDir,
+			runner,
+			warn,
+		};
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+
+		expect(warn).toHaveBeenCalledWith(
+			"truncating changed file list for conversation prompt",
+			expect.any(Object),
+		);
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain(
+			"Could not read any changed files in this PR.",
+		);
+	});
+
+	it("skips files that are too large for the conversation prompt", async () => {
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		await writeFile(path.resolve("large.ts"), Buffer.alloc(1_000_000, "a"));
+		const runner = makeConversationFixRunner({ files: ["large.ts"], fixed: "" });
+		const ctx = {
+			checkedOut: new Set<string>(),
+			commentId: FIRST_ID,
+			dryRun: false,
+			ghHost: "github.com",
+			kind: "conversation" as const,
+			logger,
+			number: "123",
+			owner: "owner",
+			prUrl: PR_URL,
+			repo: "repo",
+			repoRoot: tempDir,
+			runner,
+			warn,
+		};
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+
+		expect(warn).toHaveBeenCalledWith(
+			"skipping file for conversation prompt",
+			expect.objectContaining({ reason: "too-large" }),
+		);
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain(
+			"Could not read any changed files in this PR.",
+		);
+	});
+
+	it("skips binary files when reading changed files", async () => {
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		await writeFile(path.resolve("binary.ts"), Buffer.from([0, 1, 2]));
+		const runner = makeConversationFixRunner({ files: ["binary.ts"], fixed: "" });
+		const ctx = {
+			checkedOut: new Set<string>(),
+			commentId: FIRST_ID,
+			dryRun: false,
+			ghHost: "github.com",
+			kind: "conversation" as const,
+			logger,
+			number: "123",
+			owner: "owner",
+			prUrl: PR_URL,
+			repo: "repo",
+			repoRoot: tempDir,
+			runner,
+			warn,
+		};
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+
+		expect(warn).toHaveBeenCalledWith(
+			"skipping file for conversation prompt",
+			expect.objectContaining({ reason: "binary" }),
+		);
 		const replyPost = (
 			runner as unknown as { mock: { calls: [string, string[]][] } }
 		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));

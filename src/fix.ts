@@ -12,6 +12,9 @@ const NO_FIX_REPLY = "Could not generate a fix.";
 const NO_FILES_CHANGED_REPLY = "No files changed in this PR.";
 const NO_FILES_READABLE_REPLY = "Could not read any changed files in this PR.";
 
+const MAX_CONVERSATION_FILES = 50;
+const MAX_CONVERSATION_FILE_SIZE = 100_000;
+
 const NO_FIX_IN_ISSUE =
 	"I can't apply fixes to issue comments; only PR review and conversation comments support #fix.";
 
@@ -440,18 +443,37 @@ const fetchPrFiles = async (ctx: ReplyContext): Promise<PrFile[]> => {
 		);
 };
 
+const isBinaryContent = (content: string): boolean => content.includes("\0");
+
 const readPrFiles = async (
 	ctx: ReplyContext,
 ): Promise<{ files: { filePath: string; content: string }[]; allPaths: string[] }> => {
-	const allFiles = await fetchPrFiles(ctx);
+	let allFiles = await fetchPrFiles(ctx);
+	if (allFiles.length > MAX_CONVERSATION_FILES) {
+		await ctx.warn("truncating changed file list for conversation prompt", {
+			count: allFiles.length,
+			max: MAX_CONVERSATION_FILES,
+			reason: "too-many-files",
+		});
+		allFiles = allFiles.slice(0, MAX_CONVERSATION_FILES);
+	}
+	const allPaths = allFiles.map(({ filename }) => filename);
 	const result: { filePath: string; content: string }[] = [];
 	for (const { filename } of allFiles) {
 		const { content, found } = await readPrFile(ctx, filename, { silent: true });
-		if (found) {
-			result.push({ filePath: filename, content });
+		if (!found) {
+			continue;
 		}
+		if (isBinaryContent(content) || Buffer.byteLength(content) > MAX_CONVERSATION_FILE_SIZE) {
+			await ctx.warn("skipping file for conversation prompt", {
+				path: filename,
+				reason: isBinaryContent(content) ? "binary" : "too-large",
+			});
+			continue;
+		}
+		result.push({ filePath: filename, content });
 	}
-	return { files: result, allPaths: allFiles.map(({ filename }) => filename) };
+	return { files: result, allPaths };
 };
 
 const generateConversationFix = async (
@@ -493,7 +515,9 @@ const normalizeConversationFixes = (
 		}
 		const original = originals.get(filePath);
 		const normalizedContent =
-			original?.endsWith("\n") && !content.endsWith("\n") ? `${content}\n` : content;
+			content !== "" && original?.endsWith("\n") && !content.endsWith("\n")
+				? `${content}\n`
+				: content;
 		if (normalizedContent === original) {
 			continue;
 		}
@@ -524,7 +548,7 @@ const handleConversationFix = async (
 			return;
 		}
 		if (fixes.length === 0) {
-			await postReply(ctx, NO_CHANGE_REPLY, "fix");
+			await postReply(ctx, NO_CHANGE_REPLY, "nochange");
 			return;
 		}
 		await applyFixes(ctx, new Map(fixes.map(({ filePath, content }) => [filePath, content])));
@@ -540,7 +564,7 @@ const handleConversationFix = async (
 		await postReply(
 			ctx,
 			fixes === undefined ? NO_FIX_REPLY : NO_CHANGE_REPLY,
-			fixes === undefined ? "error" : "fix",
+			fixes === undefined ? "error" : "nochange",
 		);
 		return;
 	}
