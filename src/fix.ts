@@ -328,7 +328,7 @@ const readPrFile = async (
 					reason: "file-content-api-failed",
 				});
 			}
-			if (!message.includes("404") && !message.includes("Not Found")) {
+			if (!silent && !message.includes("404") && !message.includes("Not Found")) {
 				throw error;
 			}
 			if (!silent) {
@@ -392,7 +392,7 @@ const generateFix = async (
 	return stripped;
 };
 
-const FENCE = /^(`{3,})(.*)$/;
+const FENCE = /^(\s*)(`{3,})(.*)$/;
 
 const stripFileFixes = (content: string): Map<string, string> => {
 	const fixes = new Map<string, string>();
@@ -404,8 +404,8 @@ const stripFileFixes = (content: string): Map<string, string> => {
 		if (!match) {
 			continue;
 		}
-		const ticks = match[1].length;
-		const info = match[2].trim();
+		const ticks = match[2].length;
+		const info = match[3].trim();
 		if (stack.length === 0) {
 			stack.push({ ticks, info, start: i + 1 });
 			continue;
@@ -553,7 +553,7 @@ const handleConversationFix = async (
 		return;
 	}
 	const stripped = stripFences(fixed);
-	if (!stripped) {
+	if (!stripped || stripped.startsWith(FENCE_MARKER) || stripped.endsWith(FENCE_MARKER)) {
 		await postReply(ctx, NO_FIX_REPLY, "error");
 		return;
 	}

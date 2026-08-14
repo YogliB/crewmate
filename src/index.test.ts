@@ -5983,6 +5983,69 @@ describe("dispatchMention conversation fix", () => {
 		);
 	});
 
+	it("rejects an unclosed fenced response for a conversation fix", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		const runner = await dispatchConversationFix({ fixed: "```\nnew" });
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("Could not generate a fix.");
+	});
+
+	it("applies a fenced response with leading spaces on the fence lines", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		await dispatchConversationFix({ fixed: "  ```src/index.ts\nnew\n  ```" });
+
+		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
+		expect(content).toBe("new");
+	});
+
+	it("continues when a raw content API call fails for a changed file without a checkout", async () => {
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
+			if (file === "gh" && PULLS_FILES_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))) {
+				return Promise.resolve(
+					JSON.stringify([
+						[
+							{ filename: "src/index.ts", status: "modified" },
+							{ filename: "src/missing.ts", status: "modified" },
+						],
+					]),
+				);
+			}
+			if (file === "gh" && args.includes("Accept: application/vnd.github.raw")) {
+				const endpoint = findEndpoint(args) ?? "";
+				if (endpoint.includes("src/index.ts")) return Promise.resolve("old");
+				return Promise.reject(new Error("rate limit"));
+			}
+			if (file === "claude") return Promise.resolve("");
+			if (file === "git") return resolveGit(args);
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const ctx = makeConversationFixCtx(runner, warn, logger, { repoRoot: undefined });
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+
+		const claudeCall = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "claude" && a[0] === "-p");
+		expect(claudeCall).toBeDefined();
+		expect(JSON.stringify(claudeCall?.[1])).toContain("--- src/index.ts ---\\nold");
+		expect(JSON.stringify(claudeCall?.[1])).toContain(
+			"--- src/missing.ts ---\\n<could not read file content>",
+		);
+	});
+
 	it("rejects a fix requested on an issue body", async () => {
 		const warn = vi.fn() as unknown as (
 			message: string,
