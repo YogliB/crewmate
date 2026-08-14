@@ -429,7 +429,7 @@ const resolveGhFix = (
 		}
 		if (PULLS_FILES_PATTERN.test(endpointPathValue)) {
 			return Promise.resolve(
-				JSON.stringify([[{ filename: request.targetPath, status: "modified" }]]),
+				JSON.stringify([{ filename: request.targetPath, status: "modified" }]),
 			);
 		}
 		const issueMatch = ISSUE_BODY_PATTERN.exec(endpointPathValue);
@@ -5568,7 +5568,7 @@ describe("dispatchMention conversation fix", () => {
 				if (endpoint?.includes("/reactions")) return Promise.resolve(JSON.stringify({ id: 1 }));
 				if (PULLS_FILES_PATTERN.test(endpointPath(endpoint))) {
 					return Promise.resolve(
-						JSON.stringify([files.map((filename) => ({ filename, status: "modified" }))]),
+						JSON.stringify(files.map((filename) => ({ filename, status: "modified" }))),
 					);
 				}
 			}
@@ -5908,9 +5908,7 @@ describe("dispatchMention conversation fix", () => {
 			const reaction = resolveReaction(args);
 			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (file === "gh" && PULLS_FILES_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))) {
-				return Promise.resolve(
-					JSON.stringify([[{ filename: "src/index.ts", status: "modified" }]]),
-				);
+				return Promise.resolve(JSON.stringify([{ filename: "src/index.ts", status: "modified" }]));
 			}
 			if (file === "gh" && args.includes("Accept: application/vnd.github.raw")) {
 				return Promise.reject(new Error("Not Found"));
@@ -6039,7 +6037,7 @@ describe("dispatchMention conversation fix", () => {
 			const reaction = resolveReaction(args);
 			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (file === "gh" && PULLS_FILES_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))) {
-				return Promise.resolve(JSON.stringify([[{ filename: "large.ts", status: "modified" }]]));
+				return Promise.resolve(JSON.stringify([{ filename: "large.ts", status: "modified" }]));
 			}
 			if (file === "gh" && args.includes("Accept: application/vnd.github.raw")) {
 				return Promise.resolve("a".repeat(200_000));
@@ -6091,10 +6089,8 @@ describe("dispatchMention conversation fix", () => {
 			if (file === "gh" && PULLS_FILES_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))) {
 				return Promise.resolve(
 					JSON.stringify([
-						[
-							{ filename: "src/index.ts", status: "modified" },
-							{ filename: "src/missing.ts", status: "modified" },
-						],
+						{ filename: "src/index.ts", status: "modified" },
+						{ filename: "src/missing.ts", status: "modified" },
 					]),
 				);
 			}
@@ -6242,5 +6238,77 @@ describe("dispatchMention conversation fix", () => {
 			runner as unknown as { mock: { calls: [string, string[]][] } }
 		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
 		expect(JSON.stringify(replyPost?.[1])).toContain("I can't apply fixes");
+	});
+
+	it("rejects a plain conversation fix without a local checkout", async () => {
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
+			if (file === "gh" && PULLS_FILES_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))) {
+				return Promise.resolve(JSON.stringify([{ filename: "src/index.ts", status: "modified" }]));
+			}
+			if (file === "gh" && args.includes("Accept: application/vnd.github.raw")) {
+				return Promise.resolve("old");
+			}
+			if (file === "claude") return Promise.resolve("new");
+			if (file === "git") return resolveGit(args);
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const ctx = makeConversationFixCtx(runner, warn, logger, { repoRoot: undefined });
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+
+		expect(warn).toHaveBeenCalledWith(
+			"conversation fix requested without a local checkout",
+			expect.any(Object),
+		);
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain(
+			"A local PR checkout is required to apply conversation fixes.",
+		);
+	});
+
+	it("rejects a conversation fix without a local checkout", async () => {
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
+			if (file === "gh" && PULLS_FILES_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))) {
+				return Promise.resolve(JSON.stringify([{ filename: "src/index.ts", status: "modified" }]));
+			}
+			if (file === "gh" && args.includes("Accept: application/vnd.github.raw")) {
+				return Promise.resolve("old");
+			}
+			if (file === "claude") return Promise.resolve("```src/index.ts\nnew\n```");
+			if (file === "git") return resolveGit(args);
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const ctx = makeConversationFixCtx(runner, warn, logger, { repoRoot: undefined });
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+
+		expect(warn).toHaveBeenCalledWith(
+			"conversation fix requested without a local checkout",
+			expect.any(Object),
+		);
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain(
+			"A local PR checkout is required to apply conversation fixes.",
+		);
 	});
 });

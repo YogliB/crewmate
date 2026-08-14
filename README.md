@@ -56,7 +56,7 @@ crewmate init
 ### `crewmate watch`
 
 - `--interval <seconds>` — seconds between polls. Default is `60`.
-- `--fix` — try to generate, commit, and push a fix. The comment must also contain the tag `#fix`.
+- `--fix` — try to generate, commit, and push a fix for a single-PR review or conversation comment. The comment body must also contain the tag `#fix`.
 - `--model <model>` — use a specific model for explanations and fixes.
 - `--provider <command>` — use a specific provider CLI instead of `claude`.
 - `--prompt <text>` — prepend custom instructions to the LLM prompt.

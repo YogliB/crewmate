@@ -17,6 +17,8 @@ const MAX_CONVERSATION_FILE_SIZE = 100_000;
 
 const NO_FIX_IN_ISSUE =
 	"I can't apply fixes to issue bodies or comments; only PR review and conversation comments support #fix.";
+const NO_CHECKOUT_REPLY =
+	"A local PR checkout is required to apply conversation fixes. Please run this command from the repository root.";
 
 type MentionBase = {
 	id: number;
@@ -197,16 +199,15 @@ const removeReaction = async (ctx: ReplyContext): Promise<void> => {
 };
 
 const stripFences = (content: string): string => {
-	const trimmed = content.trim();
-	if (!trimmed.startsWith(FENCE_MARKER) || !trimmed.endsWith(FENCE_MARKER)) {
-		return trimmed;
+	if (!content.startsWith(FENCE_MARKER) || !content.endsWith(FENCE_MARKER)) {
+		return content;
 	}
-	const firstNewline = trimmed.indexOf("\n");
-	const lastNewline = trimmed.lastIndexOf("\n");
+	const firstNewline = content.indexOf("\n");
+	const lastNewline = content.lastIndexOf("\n");
 	if (firstNewline === -1 || lastNewline === -1 || firstNewline >= lastNewline) {
-		return trimmed;
+		return content;
 	}
-	return trimmed.slice(firstNewline + 1, lastNewline).trim();
+	return content.slice(firstNewline + 1, lastNewline);
 };
 
 const replyTarget = (ctx: ReplyContext): string => {
@@ -458,18 +459,16 @@ type PrFile = { filename: string; status: string };
 const fetchPrFiles = async (ctx: ReplyContext): Promise<PrFile[]> => {
 	const output = await ctx.runner(
 		"gh",
-		["api", "--paginate", "--slurp", `repos/${ctx.owner}/${ctx.repo}/pulls/${ctx.number}/files`],
+		["api", `repos/${ctx.owner}/${ctx.repo}/pulls/${ctx.number}/files?per_page=100`],
 		{ env: { GH_HOST: ctx.ghHost } },
 	);
-	const pages = JSON.parse(output) as Record<string, unknown>[][];
-	return pages
-		.flat()
-		.filter(
-			(file): file is PrFile =>
-				typeof file.filename === "string" &&
-				typeof file.status === "string" &&
-				file.status !== "removed",
-		);
+	const files = JSON.parse(output) as Record<string, unknown>[];
+	return files.filter(
+		(file): file is PrFile =>
+			typeof file.filename === "string" &&
+			typeof file.status === "string" &&
+			file.status !== "removed",
+	);
 };
 
 const isBinaryContent = (content: string): boolean => content.includes("\0");
@@ -542,9 +541,14 @@ const normalizeConversationFixes = (
 	const fixes: { filePath: string; content: string }[] = [];
 	for (const [targetPath, content] of fencedFixes) {
 		let filePath = targetPath;
-		if (filePath === "" && files.length === 1) {
+		if (filePath === "" && files.length === 1 && allPaths.length === 1) {
 			filePath = files[0].filePath;
-		} else if (files.length === 1 && !changedPaths.has(filePath) && !looksLikePath(filePath)) {
+		} else if (
+			files.length === 1 &&
+			allPaths.length === 1 &&
+			!changedPaths.has(filePath) &&
+			!looksLikePath(filePath)
+		) {
 			filePath = files[0].filePath;
 		}
 		if (filePath === "" || !changedPaths.has(filePath)) {
@@ -568,7 +572,7 @@ const normalizeConversationFixes = (
 
 const isPrUrl = (url: string): boolean => {
 	try {
-		return new URL(url).pathname.includes("/pull/");
+		return /^\/[^/]+\/[^/]+\/pull\/\d+\/?$/.test(new URL(url).pathname);
 	} catch {
 		return false;
 	}
@@ -607,6 +611,9 @@ const handleConversationFix = async (
 			await postReply(ctx, NO_CHANGE_REPLY, "nochange");
 			return;
 		}
+		if (!(await requireRepoRoot(ctx))) {
+			return;
+		}
 		await applyFixes(ctx, new Map(fixes.map(({ filePath, content }) => [filePath, content])));
 		return;
 	}
@@ -624,7 +631,19 @@ const handleConversationFix = async (
 		);
 		return;
 	}
+	if (!(await requireRepoRoot(ctx))) {
+		return;
+	}
 	await applyFixes(ctx, new Map(fixes.map(({ filePath, content }) => [filePath, content])));
+};
+
+const requireRepoRoot = async (ctx: ReplyContext): Promise<boolean> => {
+	if (ctx.repoRoot !== undefined) {
+		return true;
+	}
+	await ctx.warn("conversation fix requested without a local checkout", logContext(ctx));
+	await postReply(ctx, NO_CHECKOUT_REPLY, "error");
+	return false;
 };
 
 const applyFixes = async (ctx: ReplyContext, fixes: Map<string, string>): Promise<void> => {
