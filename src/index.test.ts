@@ -6007,6 +6007,58 @@ describe("dispatchMention conversation fix", () => {
 		);
 	});
 
+	it("silently skips directories when reading changed files from a checkout", async () => {
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		await mkdir(path.resolve("src"), { recursive: true });
+		await mkdir(path.resolve("src", "dir"));
+		const runner = makeConversationFixRunner({ files: ["src/dir"], fixed: "" });
+		const ctx = makeConversationFixCtx(runner, warn, logger);
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain(
+			"Could not read any changed files in this PR.",
+		);
+	});
+
+	it("skips files that are too large from the GitHub API", async () => {
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			const reaction = resolveReaction(args);
+			if (reaction !== undefined) return Promise.resolve(reaction);
+			if (file === "gh" && PULLS_FILES_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))) {
+				return Promise.resolve(JSON.stringify([[{ filename: "large.ts", status: "modified" }]]));
+			}
+			if (file === "gh" && args.includes("Accept: application/vnd.github.raw")) {
+				return Promise.resolve("a".repeat(200_000));
+			}
+			if (file === "claude") return Promise.resolve("");
+			if (file === "git") return resolveGit(args);
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		const ctx = makeConversationFixCtx(runner, warn, logger, { repoRoot: undefined });
+		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
+			allowFix: true,
+		});
+
+		expect(warn).toHaveBeenCalledWith(
+			"skipping file for conversation prompt",
+			expect.objectContaining({ path: "large.ts", reason: "too-large" }),
+		);
+	});
+
 	it("rejects an unclosed fenced response for a conversation fix", async () => {
 		await mkdir(path.resolve("src"), { recursive: true });
 		await writeFile(path.resolve("src", "index.ts"), "old");
