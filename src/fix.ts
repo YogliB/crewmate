@@ -344,11 +344,12 @@ const readPrFile = async (
 	try {
 		safePath = await toSafePath(targetPath, ctx.repoRoot);
 	} catch (error) {
+		if (silent) {
+			return { content: "", found: false };
+		}
 		const { code } = error as NodeJS.ErrnoException;
 		if (code === "ENOENT") {
-			if (!silent) {
-				await postReply(ctx, MISSING_FILE_REPLY, "error");
-			}
+			await postReply(ctx, MISSING_FILE_REPLY, "error");
 			return { content: "", found: false };
 		}
 		throw error;
@@ -358,11 +359,12 @@ const readPrFile = async (
 		const content = await readFile(safePath, "utf8");
 		return { content, found: true };
 	} catch (error) {
+		if (silent) {
+			return { content: "", found: false };
+		}
 		const { code } = error as NodeJS.ErrnoException;
 		if (code === "ENOENT") {
-			if (!silent) {
-				await postReply(ctx, MISSING_FILE_REPLY, "error");
-			}
+			await postReply(ctx, MISSING_FILE_REPLY, "error");
 			return { content: "", found: false };
 		}
 		throw error;
@@ -456,13 +458,19 @@ const generateConversationFix = async (
 	ctx: ReplyContext,
 	mention: Extract<Mention, { kind: "conversation" }>,
 	files: { filePath: string; content: string }[],
+	allPaths: string[],
 ): Promise<string> => {
 	const body = mention.body;
-	const fileList = files.map((file) => `- ${file.filePath}`).join("\n");
-	const fileContents = files
-		.map((file) => `--- ${file.filePath} ---\n${file.content}`)
+	const fileList = allPaths.map((filePath) => `- ${filePath}`).join("\n");
+	const fileContents = allPaths
+		.map((filePath) => {
+			const file = files.find((f) => f.filePath === filePath);
+			return file
+				? `--- ${filePath} ---\n${file.content}`
+				: `--- ${filePath} ---\n<could not read file content>`;
+		})
 		.join("\n\n");
-	const prompt = `Fix the issue described in this PR conversation comment.\nConversation comment: ${JSON.stringify(body)}\nPull request: ${ctx.owner}/${ctx.repo}#${ctx.number}\n\nChanged files:\n${fileList}\n\n${fileContents}\n\nReturn each corrected file as a markdown code block with the file path as the language tag (for example, \`\`\`src/index.ts). Only include files that need to change. If a file contains triple backticks, use more backticks for the outer fence.`;
+	const prompt = `Fix the issue described in this PR conversation comment.\nConversation comment: ${JSON.stringify(body)}\nPull request: ${ctx.owner}/${ctx.repo}#${ctx.number}\n\nChanged files:\n${fileList}\n\n${fileContents}\n\nReturn each corrected file as a markdown code block with the file path as the language tag (for example, \`\`\`src/index.ts). Only include files that need to change. If a corrected file should end with a newline, add a blank line before the closing fence. If a file contains triple backticks, use more backticks for the outer fence.`;
 	const finalPrompt = [ctx.prompt, prompt].filter(Boolean).join("\n\n");
 	return callProvider(ctx, finalPrompt);
 };
@@ -484,10 +492,12 @@ const normalizeConversationFixes = (
 			return undefined;
 		}
 		const original = originals.get(filePath);
-		if (content === original) {
+		const normalizedContent =
+			original?.endsWith("\n") && !content.endsWith("\n") ? `${content}\n` : content;
+		if (normalizedContent === original) {
 			continue;
 		}
-		fixes.push({ filePath, content });
+		fixes.push({ filePath, content: normalizedContent });
 	}
 	return fixes;
 };
@@ -505,7 +515,7 @@ const handleConversationFix = async (
 		);
 		return;
 	}
-	const fixed = await generateConversationFix(ctx, mention, files);
+	const fixed = await generateConversationFix(ctx, mention, files, allPaths);
 	const fencedFixes = stripFileFixes(fixed);
 	if (fencedFixes.size > 0) {
 		const fixes = normalizeConversationFixes(fencedFixes, files, allPaths);

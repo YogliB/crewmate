@@ -5680,6 +5680,27 @@ describe("dispatchMention conversation fix", () => {
 		expect(content).toBe("new");
 	});
 
+	it("preserves the original file's trailing newline when the provider omits it", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old\n");
+		await dispatchConversationFix({ fixed: "new" });
+
+		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
+		expect(content).toBe("new\n");
+	});
+
+	it("includes unreadable changed files in the conversation prompt", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		await dispatchConversationFix({
+			files: ["src/index.ts", "src/missing.ts"],
+			fixed: "```src/index.ts\nnew\n```",
+		});
+
+		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
+		expect(content).toBe("new");
+	});
+
 	it("applies multiple fenced fixes returned by the provider", async () => {
 		await mkdir(path.resolve("src"), { recursive: true });
 		await writeFile(path.resolve("src", "index.ts"), "old");
