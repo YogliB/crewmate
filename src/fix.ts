@@ -321,17 +321,21 @@ const readPrFile = async (
 			return { content, found: true };
 		} catch (error) {
 			const message = errorMessage(error);
-			if (!silent) {
+			if (!message.includes("404") && !message.includes("Not Found")) {
 				await ctx.warn("file content API failed", {
 					error: message,
 					path: targetPath,
 					reason: "file-content-api-failed",
 				});
-			}
-			if (!silent && !message.includes("404") && !message.includes("Not Found")) {
-				throw error;
-			}
-			if (!silent) {
+				if (!silent) {
+					throw error;
+				}
+			} else if (!silent) {
+				await ctx.warn("file content API failed", {
+					error: message,
+					path: targetPath,
+					reason: "file-content-api-failed",
+				});
 				await postReply(ctx, MISSING_FILE_REPLY, "error");
 			}
 			return { content: "", found: false };

@@ -6036,6 +6036,10 @@ describe("dispatchMention conversation fix", () => {
 			allowFix: true,
 		});
 
+		expect(warn).toHaveBeenCalledWith(
+			"file content API failed",
+			expect.objectContaining({ path: "src/missing.ts", reason: "file-content-api-failed" }),
+		);
 		const claudeCall = (
 			runner as unknown as { mock: { calls: [string, string[]][] } }
 		).mock.calls.find(([f, a]) => f === "claude" && a[0] === "-p");
