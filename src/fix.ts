@@ -10,8 +10,9 @@ const NO_CHANGE_REPLY = "No changes needed.";
 const NO_FIX_REPLY = "Could not generate a fix.";
 
 const NO_FILES_CHANGED_REPLY = "No files changed in this PR.";
+const NO_FILES_READABLE_REPLY = "Could not read any changed files in this PR.";
 
-const NO_FIX_IN_CONVERSATION =
+const NO_FIX_IN_ISSUE =
 	"I can't apply fixes to issue comments; only PR review and conversation comments support #fix.";
 
 type MentionBase = {
@@ -389,31 +390,31 @@ const FENCE = /^(`{3,})(.*)$/;
 const stripFileFixes = (content: string): Map<string, string> => {
 	const fixes = new Map<string, string>();
 	const lines = content.split("\n");
-	let i = 0;
-	while (i < lines.length) {
+	const stack: { ticks: number; info: string; start: number }[] = [];
+	for (let i = 0; i < lines.length; i += 1) {
 		// oxlint-disable-next-line security/detect-object-injection -- i is bounded by lines.length
-		const openMatch = FENCE.exec(lines[i]);
-		if (openMatch) {
-			const openTicks = openMatch[1].length;
-			const info = openMatch[2].trim();
-			const start = i + 1;
-			let end = -1;
-			for (let j = start; j < lines.length; j += 1) {
-				// oxlint-disable-next-line security/detect-object-injection -- j is bounded by lines.length
-				const closeMatch = FENCE.exec(lines[j]);
-				if (closeMatch && closeMatch[1].length >= openTicks && closeMatch[2].trim() === "") {
-					end = j;
-					break;
-				}
-			}
-			if (end !== -1) {
-				const blockContent = lines.slice(start, end).join("\n");
-				fixes.set(info, blockContent);
-				i = end + 1;
-				continue;
-			}
+		const match = FENCE.exec(lines[i]);
+		if (!match) {
+			continue;
 		}
-		i += 1;
+		const ticks = match[1].length;
+		const info = match[2].trim();
+		if (stack.length === 0) {
+			stack.push({ ticks, info, start: i + 1 });
+			continue;
+		}
+		const top = stack[stack.length - 1];
+		if (info === "" && ticks >= top.ticks) {
+			const opened = stack.pop();
+			if (opened !== undefined && stack.length === 0) {
+				const blockContent = lines.slice(opened.start, i).join("\n");
+				fixes.set(opened.info, blockContent);
+			}
+			continue;
+		}
+		if (ticks > top.ticks) {
+			stack.push({ ticks, info, start: i + 1 });
+		}
 	}
 	return fixes;
 };
@@ -434,55 +435,89 @@ const fetchPrFiles = async (ctx: ReplyContext): Promise<PrFile[]> => {
 				typeof file.filename === "string" &&
 				typeof file.status === "string" &&
 				file.status !== "removed",
-		)
-		.map(({ filename, status }) => ({ filename, status }));
+		);
 };
 
-const readPrFiles = async (ctx: ReplyContext): Promise<{ path: string; content: string }[]> => {
-	const files = await fetchPrFiles(ctx);
-	const result: { path: string; content: string }[] = [];
-	for (const { filename } of files) {
+const readPrFiles = async (
+	ctx: ReplyContext,
+): Promise<{ files: { filePath: string; content: string }[]; allPaths: string[] }> => {
+	const allFiles = await fetchPrFiles(ctx);
+	const result: { filePath: string; content: string }[] = [];
+	for (const { filename } of allFiles) {
 		const { content, found } = await readPrFile(ctx, filename, { silent: true });
 		if (found) {
-			result.push({ path: filename, content });
+			result.push({ filePath: filename, content });
 		}
 	}
-	return result;
+	return { files: result, allPaths: allFiles.map(({ filename }) => filename) };
 };
 
 const generateConversationFix = async (
 	ctx: ReplyContext,
 	mention: Extract<Mention, { kind: "conversation" }>,
-	files: { path: string; content: string }[],
+	files: { filePath: string; content: string }[],
 ): Promise<string> => {
 	const body = mention.body;
-	const fileList = files.map((file) => `- ${file.path}`).join("\n");
-	const fileContents = files.map((file) => `--- ${file.path} ---\n${file.content}`).join("\n\n");
+	const fileList = files.map((file) => `- ${file.filePath}`).join("\n");
+	const fileContents = files
+		.map((file) => `--- ${file.filePath} ---\n${file.content}`)
+		.join("\n\n");
 	const prompt = `Fix the issue described in this PR conversation comment.\nConversation comment: ${JSON.stringify(body)}\nPull request: ${ctx.owner}/${ctx.repo}#${ctx.number}\n\nChanged files:\n${fileList}\n\n${fileContents}\n\nReturn each corrected file as a markdown code block with the file path as the language tag (for example, \`\`\`src/index.ts). Only include files that need to change. If a file contains triple backticks, use more backticks for the outer fence.`;
 	const finalPrompt = [ctx.prompt, prompt].filter(Boolean).join("\n\n");
 	return callProvider(ctx, finalPrompt);
+};
+
+const normalizeConversationFixes = (
+	fencedFixes: Map<string, string>,
+	files: { filePath: string; content: string }[],
+	allPaths: string[],
+): { filePath: string; content: string }[] | undefined => {
+	const changedPaths = new Set(allPaths);
+	const originals = new Map(files.map(({ filePath, content }) => [filePath, content]));
+	const fixes: { filePath: string; content: string }[] = [];
+	for (const [targetPath, content] of fencedFixes) {
+		const filePath = targetPath === "" && files.length === 1 ? files[0].filePath : targetPath;
+		if (filePath === "") {
+			return undefined;
+		}
+		if (!changedPaths.has(filePath)) {
+			return undefined;
+		}
+		const original = originals.get(filePath);
+		if (content === original) {
+			continue;
+		}
+		fixes.push({ filePath, content });
+	}
+	return fixes;
 };
 
 const handleConversationFix = async (
 	mention: Extract<Mention, { kind: "conversation" }>,
 	ctx: ReplyContext,
 ): Promise<void> => {
-	const files = await readPrFiles(ctx);
+	const { files, allPaths } = await readPrFiles(ctx);
 	if (files.length === 0) {
-		await postReply(ctx, NO_FILES_CHANGED_REPLY, "error");
+		await postReply(
+			ctx,
+			allPaths.length === 0 ? NO_FILES_CHANGED_REPLY : NO_FILES_READABLE_REPLY,
+			"error",
+		);
 		return;
 	}
 	const fixed = await generateConversationFix(ctx, mention, files);
 	const fencedFixes = stripFileFixes(fixed);
-	if (fencedFixes.size === 1) {
-		const [targetPath, content] = fencedFixes.entries().next().value as [string, string];
-		if (targetPath === "" && files.length === 1) {
-			await applyFixes(ctx, new Map([[files[0].path, content]]));
+	if (fencedFixes.size > 0) {
+		const fixes = normalizeConversationFixes(fencedFixes, files, allPaths);
+		if (fixes === undefined) {
+			await postReply(ctx, NO_FIX_REPLY, "error");
 			return;
 		}
-	}
-	if (fencedFixes.size > 0) {
-		await applyFixes(ctx, fencedFixes);
+		if (fixes.length === 0) {
+			await postReply(ctx, NO_CHANGE_REPLY, "fix");
+			return;
+		}
+		await applyFixes(ctx, new Map(fixes.map(({ filePath, content }) => [filePath, content])));
 		return;
 	}
 	const stripped = stripFences(fixed);
@@ -490,11 +525,16 @@ const handleConversationFix = async (
 		await postReply(ctx, NO_FIX_REPLY, "error");
 		return;
 	}
-	if (files.length === 1) {
-		await applyFixes(ctx, new Map([[files[0].path, stripped]]));
+	const fixes = normalizeConversationFixes(new Map([["", stripped]]), files, allPaths);
+	if (fixes === undefined || fixes.length === 0) {
+		await postReply(
+			ctx,
+			fixes === undefined ? NO_FIX_REPLY : NO_CHANGE_REPLY,
+			fixes === undefined ? "error" : "fix",
+		);
 		return;
 	}
-	await postReply(ctx, NO_FIX_REPLY, "error");
+	await applyFixes(ctx, new Map(fixes.map(({ filePath, content }) => [filePath, content])));
 };
 
 const applyFixes = async (ctx: ReplyContext, fixes: Map<string, string>): Promise<void> => {
@@ -616,10 +656,10 @@ const dispatchMention = async (
 		if (mention.kind === "issue") {
 			if (wantsFix) {
 				await ctx.warn(
-					"fix requested on issue body or comment; only PR comments support #fix",
+					"fix requested on issue body or comment; only PR review and conversation comments support #fix",
 					logContext(ctx),
 				);
-				await postReply(ctx, NO_FIX_IN_CONVERSATION, "error");
+				await postReply(ctx, NO_FIX_IN_ISSUE, "error");
 				return;
 			}
 			await handleConversation(mention, ctx);

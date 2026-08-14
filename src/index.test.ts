@@ -5640,7 +5640,26 @@ describe("dispatchMention conversation fix", () => {
 	it("rejects an unsafe path returned for a conversation #fix", async () => {
 		await mkdir(path.resolve("src"), { recursive: true });
 		await writeFile(path.resolve("src", "index.ts"), "old");
-		await expect(dispatchConversationFix({ fixed: "```../outside\nnew\n```" })).rejects.toThrow();
+		const runner = await dispatchConversationFix({ fixed: "```../outside\nnew\n```" });
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("Could not generate a fix.");
+	});
+
+	it("rejects a path that is not a changed file in this PR", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		const runner = await dispatchConversationFix({
+			files: ["src/index.ts"],
+			fixed: "```src/not-changed.ts\nnew\n```",
+		});
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("Could not generate a fix.");
 	});
 
 	it("applies a plain provider response to the only changed file", async () => {
@@ -5687,6 +5706,17 @@ describe("dispatchMention conversation fix", () => {
 		const replyPost = (
 			runner as unknown as { mock: { calls: [string, string[]][] } }
 		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain(
+			"Could not read any changed files in this PR.",
+		);
+	});
+
+	it("reports when there are no changed files in this PR", async () => {
+		const runner = await dispatchConversationFix({ files: [], fixed: "```\nnew\n```" });
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
 		expect(JSON.stringify(replyPost?.[1])).toContain("No files changed in this PR.");
 	});
 
@@ -5702,6 +5732,78 @@ describe("dispatchMention conversation fix", () => {
 		expect(content).toBe(`${inner}\nnew`);
 	});
 
+	it("preserves empty-info inner fences that are shorter than the outer fence", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		const fixed = "````\n```\ninner\n```\nnew\n````";
+		await dispatchConversationFix({ fixed });
+
+		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
+		expect(content).toBe("```\ninner\n```\nnew");
+	});
+
+	it("preserves nested code blocks that use more backticks", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		const fixed = "```src/index.ts\nouter\n````inner\ninner\n````\nnew\n```";
+		await dispatchConversationFix({ fixed });
+
+		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
+		expect(content).toBe("outer\n````inner\ninner\n````\nnew");
+	});
+
+	it("reports no changes needed when the provider returns the same fenced content", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		const runner = await dispatchConversationFix({ fixed: "```\nold\n```" });
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("No changes needed.");
+	});
+
+	it("reports no changes needed when the provider returns the same plain content", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		const runner = await dispatchConversationFix({ fixed: "old" });
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("No changes needed.");
+	});
+
+	it("reports and throws when applyFix receives a path outside the repo", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const warn = vi.fn(() => Promise.resolve()) as unknown as (
+			message: string,
+			fields?: Record<string, unknown>,
+		) => Promise<void>;
+		const runner = makeConversationFixRunner({});
+		const ctx = {
+			checkedOut: new Set<string>(),
+			commentId: FIRST_ID,
+			dryRun: false,
+			ghHost: "github.com",
+			kind: "conversation" as const,
+			logger,
+			number: "123",
+			owner: "owner",
+			prUrl: PR_URL,
+			repo: "repo",
+			repoRoot: tempDir,
+			runner,
+			warn,
+		};
+		await expect(applyFix(ctx, "../outside", "new")).rejects.toThrow("Invalid target path");
+		expect(logger).toHaveBeenCalledWith(
+			"fix",
+			expect.objectContaining({ error: "Invalid target path" }),
+		);
+	});
+
 	it("reports when the changed files cannot be read in a missing directory", async () => {
 		const runner = await dispatchConversationFix({
 			files: ["missing/missing.ts"],
@@ -5711,7 +5813,9 @@ describe("dispatchMention conversation fix", () => {
 		const replyPost = (
 			runner as unknown as { mock: { calls: [string, string[]][] } }
 		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("No files changed in this PR.");
+		expect(JSON.stringify(replyPost?.[1])).toContain(
+			"Could not read any changed files in this PR.",
+		);
 	});
 
 	it("silently skips unsafe files when reading changed files without a checkout", async () => {
@@ -5742,7 +5846,9 @@ describe("dispatchMention conversation fix", () => {
 		const replyPost = (
 			runner as unknown as { mock: { calls: [string, string[]][] } }
 		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("No files changed in this PR.");
+		expect(JSON.stringify(replyPost?.[1])).toContain(
+			"Could not read any changed files in this PR.",
+		);
 	});
 
 	it("silently skips missing files when reading changed files without a checkout", async () => {
@@ -5787,7 +5893,9 @@ describe("dispatchMention conversation fix", () => {
 		const replyPost = (
 			runner as unknown as { mock: { calls: [string, string[]][] } }
 		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("No files changed in this PR.");
+		expect(JSON.stringify(replyPost?.[1])).toContain(
+			"Could not read any changed files in this PR.",
+		);
 	});
 
 	it("rejects a fix requested on an issue body", async () => {
@@ -5826,7 +5934,7 @@ describe("dispatchMention conversation fix", () => {
 			allowFix: true,
 		});
 		expect(warn).toHaveBeenCalledWith(
-			"fix requested on issue body or comment; only PR comments support #fix",
+			"fix requested on issue body or comment; only PR review and conversation comments support #fix",
 			expect.any(Object),
 		);
 		const replyPost = (
