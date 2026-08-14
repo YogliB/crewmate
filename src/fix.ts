@@ -1,4 +1,4 @@
-import { readFile, realpath, writeFile } from "node:fs/promises";
+import { readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { type Logger } from "./log.js";
 
@@ -9,8 +9,16 @@ const CREWMATE_PREFIX = "⚓ crewmate:";
 const NO_CHANGE_REPLY = "No changes needed.";
 const NO_FIX_REPLY = "Could not generate a fix.";
 
-const NO_FIX_IN_CONVERSATION =
-	"I can't apply fixes to conversation or issue comments; only review comments on diff lines support #fix.";
+const NO_FILES_CHANGED_REPLY = "No files changed in this PR.";
+const NO_FILES_READABLE_REPLY = "Could not read any changed files in this PR.";
+
+const MAX_CONVERSATION_FILES = 50;
+const MAX_CONVERSATION_FILE_SIZE = 100_000;
+
+const NO_FIX_IN_ISSUE =
+	"I can't apply fixes to issue bodies or comments; only PR review and conversation comments support #fix.";
+const NO_CHECKOUT_REPLY =
+	"A local PR checkout is required to apply conversation fixes. Please run this command from the repository root.";
 
 type MentionBase = {
 	id: number;
@@ -191,16 +199,15 @@ const removeReaction = async (ctx: ReplyContext): Promise<void> => {
 };
 
 const stripFences = (content: string): string => {
-	const trimmed = content.trim();
-	if (!trimmed.startsWith(FENCE_MARKER) || !trimmed.endsWith(FENCE_MARKER)) {
-		return trimmed;
+	if (!content.startsWith(FENCE_MARKER) || !content.endsWith(FENCE_MARKER)) {
+		return content;
 	}
-	const firstNewline = trimmed.indexOf("\n");
-	const lastNewline = trimmed.lastIndexOf("\n");
+	const firstNewline = content.indexOf("\n");
+	const lastNewline = content.lastIndexOf("\n");
 	if (firstNewline === -1 || lastNewline === -1 || firstNewline >= lastNewline) {
-		return trimmed;
+		return content;
 	}
-	return trimmed.slice(firstNewline + 1, lastNewline).trim();
+	return content.slice(firstNewline + 1, lastNewline);
 };
 
 const replyTarget = (ctx: ReplyContext): string => {
@@ -287,14 +294,17 @@ const encodeContentPath = (targetPath: string): string =>
 const readPrFile = async (
 	ctx: ReplyContext,
 	targetPath: string,
+	{ capSize = false, silent = false }: { capSize?: boolean; silent?: boolean } = {},
 ): Promise<{ content: string; found: boolean }> => {
 	if (ctx.repoRoot === undefined) {
 		if (isUnsafeContentPath(targetPath)) {
-			await ctx.warn("invalid target path", {
-				path: targetPath,
-				reason: "invalid-file-path",
-			});
-			await postReply(ctx, MISSING_FILE_REPLY, "error");
+			if (!silent) {
+				await ctx.warn("invalid target path", {
+					path: targetPath,
+					reason: "invalid-file-path",
+				});
+				await postReply(ctx, MISSING_FILE_REPLY, "error");
+			}
 			return { content: "", found: false };
 		}
 		const encodedPath = encodeContentPath(targetPath);
@@ -309,18 +319,33 @@ const readPrFile = async (
 				],
 				{ env: { GH_HOST: ctx.ghHost } },
 			);
+			if (capSize && Buffer.byteLength(content) > MAX_CONVERSATION_FILE_SIZE) {
+				await ctx.warn("skipping file for conversation prompt", {
+					path: targetPath,
+					reason: "too-large",
+				});
+				return { content: "", found: false };
+			}
 			return { content, found: true };
 		} catch (error) {
 			const message = errorMessage(error);
-			await ctx.warn("file content API failed", {
-				error: message,
-				path: targetPath,
-				reason: "file-content-api-failed",
-			});
 			if (!message.includes("404") && !message.includes("Not Found")) {
-				throw error;
+				await ctx.warn("file content API failed", {
+					error: message,
+					path: targetPath,
+					reason: "file-content-api-failed",
+				});
+				if (!silent) {
+					throw error;
+				}
+			} else if (!silent) {
+				await ctx.warn("file content API failed", {
+					error: message,
+					path: targetPath,
+					reason: "file-content-api-failed",
+				});
+				await postReply(ctx, MISSING_FILE_REPLY, "error");
 			}
-			await postReply(ctx, MISSING_FILE_REPLY, "error");
 			return { content: "", found: false };
 		}
 	}
@@ -336,6 +361,9 @@ const readPrFile = async (
 	try {
 		safePath = await toSafePath(targetPath, ctx.repoRoot);
 	} catch (error) {
+		if (silent) {
+			return { content: "", found: false };
+		}
 		const { code } = error as NodeJS.ErrnoException;
 		if (code === "ENOENT") {
 			await postReply(ctx, MISSING_FILE_REPLY, "error");
@@ -343,17 +371,36 @@ const readPrFile = async (
 		}
 		throw error;
 	}
+	if (capSize) {
+		let stats: Awaited<ReturnType<typeof stat>>;
+		try {
+			// oxlint-disable-next-line security/detect-non-literal-fs-filename -- safePath is validated against the repository root by toSafePath
+			stats = await stat(safePath);
+		} catch {
+			return { content: "", found: false };
+		}
+		if (stats.size > MAX_CONVERSATION_FILE_SIZE) {
+			await ctx.warn("skipping file for conversation prompt", {
+				path: targetPath,
+				reason: "too-large",
+			});
+			return { content: "", found: false };
+		}
+	}
 	try {
 		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- path validated against the repository root
 		const content = await readFile(safePath, "utf8");
 		return { content, found: true };
 	} catch (error) {
+		if (silent) {
+			return { content: "", found: false };
+		}
 		const { code } = error as NodeJS.ErrnoException;
 		if (code === "ENOENT") {
 			await postReply(ctx, MISSING_FILE_REPLY, "error");
 			return { content: "", found: false };
 		}
-		throw error;
+		throw new Error(`Could not read file: ${targetPath}`, { cause: error });
 	}
 };
 
@@ -373,31 +420,271 @@ const generateFix = async (
 	return stripped;
 };
 
-export const applyFix = async (
+const FENCE = /^(\s*)(`{3,})(.*)$/;
+
+const stripFileFixes = (content: string): Map<string, string> => {
+	const fixes = new Map<string, string>();
+	const lines = content.split("\n");
+	const stack: { ticks: number; info: string; start: number }[] = [];
+	for (let i = 0; i < lines.length; i += 1) {
+		// oxlint-disable-next-line security/detect-object-injection -- i is bounded by lines.length
+		const match = FENCE.exec(lines[i]);
+		if (!match) {
+			continue;
+		}
+		const ticks = match[2].length;
+		const info = match[3].trim();
+		if (stack.length === 0) {
+			stack.push({ ticks, info, start: i + 1 });
+			continue;
+		}
+		const top = stack[stack.length - 1];
+		if (info === "" && ticks >= top.ticks) {
+			const opened = stack.pop();
+			if (opened !== undefined && stack.length === 0) {
+				const blockContent = lines.slice(opened.start, i).join("\n");
+				fixes.set(opened.info, blockContent);
+			}
+			continue;
+		}
+		if (ticks > top.ticks) {
+			stack.push({ ticks, info, start: i + 1 });
+		}
+	}
+	return fixes;
+};
+
+type PrFile = { filename: string; status: string };
+
+const fetchPrFiles = async (ctx: ReplyContext): Promise<PrFile[]> => {
+	const output = await ctx.runner(
+		"gh",
+		["api", `repos/${ctx.owner}/${ctx.repo}/pulls/${ctx.number}/files?per_page=100`],
+		{ env: { GH_HOST: ctx.ghHost } },
+	);
+	const files = JSON.parse(output) as Record<string, unknown>[];
+	return files.filter(
+		(file): file is PrFile =>
+			typeof file.filename === "string" &&
+			typeof file.status === "string" &&
+			file.status !== "removed",
+	);
+};
+
+const isBinaryContent = (content: string): boolean => content.includes("\0");
+
+const readPrFiles = async (
 	ctx: ReplyContext,
-	targetPath: string,
-	stripped: string,
+): Promise<{ files: { filePath: string; content: string }[]; allPaths: string[] }> => {
+	let allFiles = await fetchPrFiles(ctx);
+	if (allFiles.length > MAX_CONVERSATION_FILES) {
+		await ctx.warn("truncating changed file list for conversation prompt", {
+			count: allFiles.length,
+			max: MAX_CONVERSATION_FILES,
+			reason: "too-many-files",
+		});
+		allFiles = allFiles.slice(0, MAX_CONVERSATION_FILES);
+	}
+	const allPaths = allFiles.map(({ filename }) => filename);
+	const result: { filePath: string; content: string }[] = [];
+	for (const { filename } of allFiles) {
+		const { content, found } = await readPrFile(ctx, filename, {
+			capSize: true,
+			silent: true,
+		});
+		if (!found) {
+			continue;
+		}
+		if (isBinaryContent(content)) {
+			await ctx.warn("skipping file for conversation prompt", {
+				path: filename,
+				reason: "binary",
+			});
+			continue;
+		}
+		result.push({ filePath: filename, content });
+	}
+	return { files: result, allPaths };
+};
+
+const generateConversationFix = async (
+	ctx: ReplyContext,
+	mention: Extract<Mention, { kind: "conversation" }>,
+	files: { filePath: string; content: string }[],
+	allPaths: string[],
+): Promise<string> => {
+	const body = mention.body;
+	const fileList = allPaths.map((filePath) => `- ${filePath}`).join("\n");
+	const fileContents = allPaths
+		.map((filePath) => {
+			const file = files.find((f) => f.filePath === filePath);
+			return file
+				? `--- ${filePath} ---\n${file.content}`
+				: `--- ${filePath} ---\n<could not read file content>`;
+		})
+		.join("\n\n");
+	const prompt = `Fix the issue described in this PR conversation comment.\nConversation comment: ${JSON.stringify(body)}\nPull request: ${ctx.owner}/${ctx.repo}#${ctx.number}\n\nChanged files:\n${fileList}\n\n${fileContents}\n\nReturn each corrected file as a markdown code block with the file path as the language tag (for example, \`\`\`src/index.ts). Only include files that need to change. If a corrected file should end with a newline, add a blank line before the closing fence. If a file contains triple backticks, use more backticks for the outer fence.`;
+	const finalPrompt = [ctx.prompt, prompt].filter(Boolean).join("\n\n");
+	return callProvider(ctx, finalPrompt);
+};
+
+const looksLikePath = (value: string): boolean =>
+	value.includes("/") || value.includes("\\") || value.startsWith("..") || value === "..";
+
+const normalizeConversationFixes = (
+	fencedFixes: Map<string, string>,
+	files: { filePath: string; content: string }[],
+	allPaths: string[],
+): { filePath: string; content: string }[] | undefined => {
+	const changedPaths = new Set(allPaths);
+	const originals = new Map(files.map(({ filePath, content }) => [filePath, content]));
+	const fixes: { filePath: string; content: string }[] = [];
+	for (const [targetPath, content] of fencedFixes) {
+		let filePath = targetPath;
+		if (filePath === "" && files.length === 1 && allPaths.length === 1) {
+			filePath = files[0].filePath;
+		} else if (
+			files.length === 1 &&
+			allPaths.length === 1 &&
+			!changedPaths.has(filePath) &&
+			!looksLikePath(filePath)
+		) {
+			filePath = files[0].filePath;
+		}
+		if (filePath === "" || !changedPaths.has(filePath)) {
+			return undefined;
+		}
+		const original = originals.get(filePath);
+		if (original === undefined) {
+			return undefined;
+		}
+		const normalizedContent =
+			content !== "" && original.endsWith("\n") && !content.endsWith("\n")
+				? `${content}\n`
+				: content;
+		if (normalizedContent === original) {
+			continue;
+		}
+		fixes.push({ filePath, content: normalizedContent });
+	}
+	return fixes;
+};
+
+const isPrUrl = (url: string): boolean => {
+	try {
+		return /^\/[^/]+\/[^/]+\/pull\/\d+\/?$/.test(new URL(url).pathname);
+	} catch {
+		return false;
+	}
+};
+
+const handleConversationFix = async (
+	mention: Extract<Mention, { kind: "conversation" }>,
+	ctx: ReplyContext,
 ): Promise<void> => {
+	if (!isPrUrl(ctx.prUrl)) {
+		await ctx.warn(
+			"fix requested on a conversation comment that does not belong to a PR; only PR conversation comments support #fix",
+			logContext(ctx),
+		);
+		await postReply(ctx, NO_FIX_IN_ISSUE, "error");
+		return;
+	}
+	const { files, allPaths } = await readPrFiles(ctx);
+	if (files.length === 0) {
+		await postReply(
+			ctx,
+			allPaths.length === 0 ? NO_FILES_CHANGED_REPLY : NO_FILES_READABLE_REPLY,
+			"error",
+		);
+		return;
+	}
+	const fixed = await generateConversationFix(ctx, mention, files, allPaths);
+	const fencedFixes = stripFileFixes(fixed);
+	if (fencedFixes.size > 0) {
+		const fixes = normalizeConversationFixes(fencedFixes, files, allPaths);
+		if (fixes === undefined) {
+			await postReply(ctx, NO_FIX_REPLY, "error");
+			return;
+		}
+		if (fixes.length === 0) {
+			await postReply(ctx, NO_CHANGE_REPLY, "nochange");
+			return;
+		}
+		if (!(await requireRepoRoot(ctx))) {
+			return;
+		}
+		await applyFixes(ctx, new Map(fixes.map(({ filePath, content }) => [filePath, content])));
+		return;
+	}
+	const stripped = stripFences(fixed);
+	if (!stripped || stripped.startsWith(FENCE_MARKER) || stripped.endsWith(FENCE_MARKER)) {
+		await postReply(ctx, NO_FIX_REPLY, "error");
+		return;
+	}
+	const fixes = normalizeConversationFixes(new Map([["", stripped]]), files, allPaths);
+	if (fixes === undefined || fixes.length === 0) {
+		await postReply(
+			ctx,
+			fixes === undefined ? NO_FIX_REPLY : NO_CHANGE_REPLY,
+			fixes === undefined ? "error" : "nochange",
+		);
+		return;
+	}
+	if (!(await requireRepoRoot(ctx))) {
+		return;
+	}
+	await applyFixes(ctx, new Map(fixes.map(({ filePath, content }) => [filePath, content])));
+};
+
+const requireRepoRoot = async (ctx: ReplyContext): Promise<boolean> => {
+	if (ctx.repoRoot !== undefined) {
+		return true;
+	}
+	await ctx.warn("conversation fix requested without a local checkout", logContext(ctx));
+	await postReply(ctx, NO_CHECKOUT_REPLY, "error");
+	return false;
+};
+
+const applyFixes = async (ctx: ReplyContext, fixes: Map<string, string>): Promise<void> => {
 	if (ctx.repoRoot === undefined) {
 		throw new Error("repoRoot is required to apply fixes");
 	}
-	const safePath = await toSafePath(targetPath, ctx.repoRoot);
-	const relativePath = path.relative(ctx.repoRoot, safePath);
-	const base = logContext(ctx, { path: relativePath });
+	const entries: { safePath: string; relativePath: string; content: string }[] = [];
+	const base = logContext(ctx);
+	try {
+		for (const [targetPath, content] of fixes) {
+			const safePath = await toSafePath(targetPath, ctx.repoRoot);
+			const relativePath = path.relative(ctx.repoRoot, safePath);
+			entries.push({ safePath, relativePath, content });
+		}
+	} catch (error) {
+		const message = errorMessage(error);
+		await ctx.logger("fix", { ...base, sha: null, error: message });
+		await postReply(ctx, `Fix failed: ${message}`, "error");
+		throw error;
+	}
+	const paths = entries.map((entry) => entry.relativePath);
+	const logPaths = paths.length === 1 ? paths[0] : paths;
+	const logBase = logContext(ctx, { path: logPaths });
 	if (ctx.dryRun) {
-		process.stdout.write(`[dry-run] would write fix to ${safePath}:\n${stripped}\n`);
-		await ctx.logger("fix", { ...base, sha: null });
+		for (const { safePath, content } of entries) {
+			process.stdout.write(`[dry-run] would write fix to ${safePath}:\n${content}\n`);
+		}
+		await ctx.logger("fix", { ...logBase, sha: null });
 		await postReply(ctx, "Fixed.", "fix");
 		return;
 	}
 	try {
-		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- path validated against the repository root
-		await writeFile(safePath, stripped);
-		await ctx.runner("git", ["add", safePath]);
+		for (const { safePath, content } of entries) {
+			// oxlint-disable-next-line security/detect-non-literal-fs-filename -- path validated against the repository root
+			await writeFile(safePath, content);
+			await ctx.runner("git", ["add", safePath]);
+		}
 		await ctx.runner("git", ["commit", "-m", FIX_MESSAGE]);
 	} catch (error) {
 		const message = errorMessage(error);
-		await ctx.logger("fix", { ...base, sha: null, error: message });
+		await ctx.logger("fix", { ...logBase, sha: null, error: message });
 		await postReply(ctx, `Fix failed: ${message}`, "error");
 		throw error;
 	}
@@ -411,12 +698,20 @@ export const applyFix = async (
 		await ctx.runner("git", ["push"]);
 	} catch (error) {
 		const message = errorMessage(error);
-		await ctx.logger("fix", { ...base, sha: shortHash || null, error: message });
+		await ctx.logger("fix", { ...logBase, sha: shortHash || null, error: message });
 		await postReply(ctx, `Fix failed: ${message}`, "error");
 		return;
 	}
-	await ctx.logger("fix", { ...base, sha: shortHash || null });
+	await ctx.logger("fix", { ...logBase, sha: shortHash || null });
 	await postReply(ctx, shortHash ? `Fixed in ${shortHash}.` : "Fixed.", "fix");
+};
+
+export const applyFix = async (
+	ctx: ReplyContext,
+	targetPath: string,
+	stripped: string,
+): Promise<void> => {
+	await applyFixes(ctx, new Map([[targetPath, stripped]]));
 };
 
 const handleFix = async (mention: ReviewMention, ctx: ReplyContext): Promise<void> => {
@@ -467,13 +762,21 @@ const dispatchMention = async (
 	try {
 		await setReaction(ctx, "eyes");
 		const wantsFix = allowFix && /#fix\b/i.test(mention.body);
-		if (mention.kind === "conversation" || mention.kind === "issue") {
+		if (mention.kind === "issue") {
 			if (wantsFix) {
 				await ctx.warn(
-					"fix requested on conversation or issue comment; only review comments can be fixed",
+					"fix requested on issue body or comment; only PR review and conversation comments support #fix",
 					logContext(ctx),
 				);
-				await postReply(ctx, NO_FIX_IN_CONVERSATION, "error");
+				await postReply(ctx, NO_FIX_IN_ISSUE, "error");
+				return;
+			}
+			await handleConversation(mention, ctx);
+			return;
+		}
+		if (mention.kind === "conversation") {
+			if (wantsFix) {
+				await handleConversationFix(mention, ctx);
 				return;
 			}
 			await handleConversation(mention, ctx);

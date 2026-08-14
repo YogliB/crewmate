@@ -35,8 +35,8 @@
 
 `src/index.ts` fetches comments with `gh api`. For a repo or org scope it first discovers open PRs and open issues via the `search/issues` endpoint (with a fallback to `repos/<owner>/<repo>/issues` on older GHES), then for each item it finds the newest unseen `@crewmate` mention and either:
 
-- calls `src/fix.ts` to explain the line, or
-- calls `src/fix.ts` to generate and apply a fix when the comment contains `#fix` and `--fix` is enabled.
+- calls `src/fix.ts` to explain the line or respond to a conversation/issue comment, or
+- calls `src/fix.ts` to generate and apply a fix when the comment contains `#fix` and `--fix` is enabled. For review comments `src/fix.ts` uses the comment's `path` and `line`; for PR conversation comments it fetches the PR's changed files from the GitHub API and asks the provider to return the corrected file content.
 
 With `--dry-run`, the generated reply or fix is written to stdout as a human-readable preview instead of posting to GitHub or committing/pushing.
 
