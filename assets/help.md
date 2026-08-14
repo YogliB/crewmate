@@ -22,7 +22,7 @@ A CLI that watches GitHub PR comments (review and conversation) and issues for `
 - `--provider <command>` Use a specific provider CLI instead of the default `claude`.
 - `--prompt <text>` Prepend custom instructions to the LLM prompt.
 - `--log` Also mirror structured log lines to stderr.
-- `--dry-run` Preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Polls continuously like regular watch mode.
+- `--dry-run` Preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Polls continuously like regular watch mode, but does not persist state.
 - `--user <login>` Only respond to comments from this GitHub login (defaults to the active `gh` user when omitted and not set in config)
 - `--unsafe-no-user` Respond to comments from any GitHub user. Disables the default filter that is set to the active `gh` user.
 - `--debug` Emit extra poll pipeline detail (fetched comments, mention-filter results, new mentions) to the log.
@@ -73,6 +73,7 @@ Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, `info`
 - Each poll processes every new unseen `@crewmate` mention; additional polls handle comments added after the current poll.
 - For single-PR targets, run from a clean repository; `gh pr checkout` will fail if the working tree has uncommitted changes.
 - For single-PR targets, `--dry-run` still runs `gh pr checkout`; it only skips posting replies and reactions and committing/pushing fixes.
+- `--dry-run` does not persist state. Any `@crewmate` mention it discovers will be reprocessed on the next poll. State already saved by a previous non-dry-run run is still honored.
 - If `git push` fails after a fix is committed, the commit remains local and must be pushed manually.
 - `--provider` expects a CLI with the same flags as `claude` (`--version`, `--model`, `-p`).
 - General PR conversation comments and issue bodies/comments are handled too. Replies are not threaded and cannot be matched to their original mention on a fresh install, so they may be reprocessed if state is lost.
