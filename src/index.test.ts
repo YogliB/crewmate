@@ -1195,6 +1195,44 @@ describe("run stream flags", () => {
 		}
 	});
 
+	it("writes unsupported flag warnings to stderr and not stdout", async () => {
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(
+			[
+				"stream",
+				PR_URL,
+				"--fix",
+				"--model",
+				"best",
+				"--provider",
+				"my-llm",
+				"--prompt",
+				"custom",
+				"--dry-run",
+				"--json",
+			],
+			{
+				iterations: FIRST_ITERATION,
+				runner,
+			},
+		);
+		const flags = ["--fix", "--model", "--provider", "--prompt", "--dry-run", "--json"];
+		const stderrCalls = stderr.mock.calls.map(([line]) => line as string);
+		const warningCalls = stderrCalls.filter((line) => line.includes("Warning: unsupported flag"));
+		expect(warningCalls).toHaveLength(flags.length);
+		for (const index of flags.keys()) {
+			expect(warningCalls[index]).toContain("Warning: unsupported flag");
+		}
+		const stdoutCalls = stdout.mock.calls.map(([line]) => line as string);
+		expect(
+			stdoutCalls.some((line) => line.includes("Warning:") || line.includes("unsupported flag")),
+		).toBe(false);
+		stdout.mockRestore();
+		stderr.mockRestore();
+	});
+
 	it("warns on unsupported flags when passed as booleans", async () => {
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const runner = makeExplainRunner({ answer: "It does something." });
