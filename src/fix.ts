@@ -370,32 +370,36 @@ const readPrFile = async (
 		}
 		throw error;
 	}
-	let stats: Awaited<ReturnType<typeof stat>>;
-	try {
-		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- safePath is validated against the repository root by toSafePath
-		stats = await stat(safePath);
-	} catch {
-		if (!silent) {
-			await postReply(ctx, MISSING_FILE_REPLY, "error");
+	if (capSize) {
+		let stats: Awaited<ReturnType<typeof stat>>;
+		try {
+			// oxlint-disable-next-line security/detect-non-literal-fs-filename -- safePath is validated against the repository root by toSafePath
+			stats = await stat(safePath);
+		} catch {
+			return { content: "", found: false };
 		}
-		return { content: "", found: false };
-	}
-	if (capSize && stats.size > MAX_CONVERSATION_FILE_SIZE) {
-		await ctx.warn("skipping file for conversation prompt", {
-			path: targetPath,
-			reason: "too-large",
-		});
-		return { content: "", found: false };
+		if (stats.size > MAX_CONVERSATION_FILE_SIZE) {
+			await ctx.warn("skipping file for conversation prompt", {
+				path: targetPath,
+				reason: "too-large",
+			});
+			return { content: "", found: false };
+		}
 	}
 	try {
 		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- path validated against the repository root
 		const content = await readFile(safePath, "utf8");
 		return { content, found: true };
-	} catch {
+	} catch (error) {
 		if (silent) {
 			return { content: "", found: false };
 		}
-		throw new Error(`Could not read file: ${targetPath}`);
+		const { code } = error as NodeJS.ErrnoException;
+		if (code === "ENOENT") {
+			await postReply(ctx, MISSING_FILE_REPLY, "error");
+			return { content: "", found: false };
+		}
+		throw new Error(`Could not read file: ${targetPath}`, { cause: error });
 	}
 };
 
