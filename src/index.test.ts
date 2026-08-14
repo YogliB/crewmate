@@ -5577,6 +5577,28 @@ describe("dispatchMention conversation fix", () => {
 			return Promise.resolve("");
 		}) as unknown as Runner;
 
+	const makeConversationFixCtx = (
+		runner: Runner,
+		warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
+		logger: Logger,
+		overrides: Record<string, unknown> = {},
+	) => ({
+		checkedOut: new Set<string>(),
+		commentId: FIRST_ID,
+		dryRun: false,
+		ghHost: "github.com",
+		kind: "conversation" as const,
+		logger,
+		number: "123",
+		owner: "owner",
+		prUrl: PR_URL,
+		repo: "repo",
+		repoRoot: tempDir,
+		runner,
+		warn,
+		...overrides,
+	});
+
 	const dispatchConversationFix = async ({
 		fixed,
 		files,
@@ -5590,21 +5612,7 @@ describe("dispatchMention conversation fix", () => {
 			fields?: Record<string, unknown>,
 		) => Promise<void>;
 		const runner = makeConversationFixRunner({ files, fixed });
-		const ctx = {
-			checkedOut: new Set<string>(),
-			commentId: FIRST_ID,
-			dryRun: false,
-			ghHost: "github.com",
-			kind: "conversation" as const,
-			logger,
-			number: "123",
-			owner: "owner",
-			prUrl: PR_URL,
-			repo: "repo",
-			repoRoot: tempDir,
-			runner,
-			warn,
-		};
+		const ctx = makeConversationFixCtx(runner, warn, logger);
 		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
 			allowFix: true,
 		});
@@ -5824,21 +5832,7 @@ describe("dispatchMention conversation fix", () => {
 			fields?: Record<string, unknown>,
 		) => Promise<void>;
 		const runner = makeConversationFixRunner({});
-		const ctx = {
-			checkedOut: new Set<string>(),
-			commentId: FIRST_ID,
-			dryRun: false,
-			ghHost: "github.com",
-			kind: "conversation" as const,
-			logger,
-			number: "123",
-			owner: "owner",
-			prUrl: PR_URL,
-			repo: "repo",
-			repoRoot: tempDir,
-			runner,
-			warn,
-		};
+		const ctx = makeConversationFixCtx(runner, warn, logger);
 		await expect(applyFix(ctx, "../outside", "new")).rejects.toThrow("Invalid target path");
 		expect(logger).toHaveBeenCalledWith(
 			"fix",
@@ -5867,20 +5861,7 @@ describe("dispatchMention conversation fix", () => {
 			fields?: Record<string, unknown>,
 		) => Promise<void>;
 		const runner = makeConversationFixRunner({ files: ["../etc/passwd"] });
-		const ctx = {
-			checkedOut: new Set<string>(),
-			commentId: FIRST_ID,
-			dryRun: false,
-			ghHost: "github.com",
-			kind: "conversation" as const,
-			logger,
-			number: "123",
-			owner: "owner",
-			prUrl: PR_URL,
-			repo: "repo",
-			runner,
-			warn,
-		};
+		const ctx = makeConversationFixCtx(runner, warn, logger, { repoRoot: undefined });
 		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
 			allowFix: true,
 		});
@@ -5914,20 +5895,7 @@ describe("dispatchMention conversation fix", () => {
 			if (file === "git") return resolveGit(args);
 			return Promise.resolve("");
 		}) as unknown as Runner;
-		const ctx = {
-			checkedOut: new Set<string>(),
-			commentId: FIRST_ID,
-			dryRun: false,
-			ghHost: "github.com",
-			kind: "conversation" as const,
-			logger,
-			number: "123",
-			owner: "owner",
-			prUrl: PR_URL,
-			repo: "repo",
-			runner,
-			warn,
-		};
+		const ctx = makeConversationFixCtx(runner, warn, logger, { repoRoot: undefined });
 		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
 			allowFix: true,
 		});
@@ -5948,21 +5916,7 @@ describe("dispatchMention conversation fix", () => {
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const files = Array.from({ length: 51 }, (_, i) => `f${i}.ts`);
 		const runner = makeConversationFixRunner({ files, fixed: "" });
-		const ctx = {
-			checkedOut: new Set<string>(),
-			commentId: FIRST_ID,
-			dryRun: false,
-			ghHost: "github.com",
-			kind: "conversation" as const,
-			logger,
-			number: "123",
-			owner: "owner",
-			prUrl: PR_URL,
-			repo: "repo",
-			repoRoot: tempDir,
-			runner,
-			warn,
-		};
+		const ctx = makeConversationFixCtx(runner, warn, logger);
 		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
 			allowFix: true,
 		});
@@ -5987,21 +5941,7 @@ describe("dispatchMention conversation fix", () => {
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		await writeFile(path.resolve("large.ts"), Buffer.alloc(1_000_000, "a"));
 		const runner = makeConversationFixRunner({ files: ["large.ts"], fixed: "" });
-		const ctx = {
-			checkedOut: new Set<string>(),
-			commentId: FIRST_ID,
-			dryRun: false,
-			ghHost: "github.com",
-			kind: "conversation" as const,
-			logger,
-			number: "123",
-			owner: "owner",
-			prUrl: PR_URL,
-			repo: "repo",
-			repoRoot: tempDir,
-			runner,
-			warn,
-		};
+		const ctx = makeConversationFixCtx(runner, warn, logger);
 		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
 			allowFix: true,
 		});
@@ -6026,21 +5966,7 @@ describe("dispatchMention conversation fix", () => {
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		await writeFile(path.resolve("binary.ts"), Buffer.from([0, 1, 2]));
 		const runner = makeConversationFixRunner({ files: ["binary.ts"], fixed: "" });
-		const ctx = {
-			checkedOut: new Set<string>(),
-			commentId: FIRST_ID,
-			dryRun: false,
-			ghHost: "github.com",
-			kind: "conversation" as const,
-			logger,
-			number: "123",
-			owner: "owner",
-			prUrl: PR_URL,
-			repo: "repo",
-			repoRoot: tempDir,
-			runner,
-			warn,
-		};
+		const ctx = makeConversationFixCtx(runner, warn, logger);
 		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
 			allowFix: true,
 		});
@@ -6075,20 +6001,12 @@ describe("dispatchMention conversation fix", () => {
 			if (file === "git") return resolveGit(args);
 			return Promise.resolve("");
 		}) as unknown as Runner;
-		const ctx = {
-			checkedOut: new Set<string>(),
-			commentId: FIRST_ID,
-			dryRun: false,
-			ghHost: "github.com",
+		const ctx = makeConversationFixCtx(runner, warn, logger, {
 			kind: "issue" as const,
-			logger,
 			number: "4",
-			owner: "owner",
 			prUrl: ISSUE_URL,
-			repo: "repo",
-			runner,
-			warn,
-		};
+			repoRoot: undefined,
+		});
 		await dispatchMention({ id: 4, body: "@crewmate #fix", kind: "issue" }, ctx, {
 			allowFix: true,
 		});
