@@ -18,6 +18,7 @@ You need:
 - **`--fix` works for single-PR review and conversation comments** that contain the tag `#fix`. It is disabled for repo or org scope, and issue bodies/comments cannot request fixes. Conversation fixes consider at most 50 changed files and skip binary or very large files (larger than 100 KB).
 - **Crewmate adds an `eyes` reaction to each new `@crewmate` mention** and swaps it for a thumbs-up, thumbs-down, or rocket before posting the reply.
 - **`--dry-run` still runs `gh pr checkout`** for single-PR targets. It skips posting replies and reactions and committing/pushing, but it may still touch your working tree.
+- **`--dry-run` does not persist state.** Any `@crewmate` mention it discovers will be reprocessed on the next poll. State already saved by a previous non-dry-run run is still honored.
 - **Conversation comments and issue bodies/comments may be reprocessed** if the state file is lost, because GitHub does not expose a parent id for top-level conversation replies or issue body edits.
 - **Repo and org scope use the GitHub search API**. Large scopes may hit rate limits; use a longer `--interval` for big organizations.
 
@@ -61,7 +62,7 @@ crewmate init
 - `--provider <command>` — use a specific provider CLI instead of `claude`.
 - `--prompt <text>` — prepend custom instructions to the LLM prompt.
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
-- `--dry-run` — preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Polls continuously like regular watch mode.
+- `--dry-run` — preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Polls continuously like regular watch mode, but does not persist state.
 - `--user <login>` — only reply to comments from this GitHub user (defaults to the active `gh` user when omitted and not set in config). Always respected.
 - `--unsafe-no-user` — reply to comments from any GitHub user. Disables the default filter that falls back to the active `gh` user. This flag wins over `--user`.
 - `--debug` — emit extra poll pipeline detail (`fetched-comments`, `mention-filter`, `new-mentions`) to the log.
@@ -153,7 +154,6 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 - **Init-time model selection**: when running `crewmate init`, query the configured provider for its available models and let the user select one.
 - **Sandboxed agents by default**: agents run in a sandbox by default.
 - **Add `--once` / `--iterations` flag for `watch` and `stream`**: so the CLI can stop after a single poll (or N polls) instead of running forever. Useful for CI and manual testing.
-- **Document the `--dry-run` state caveat** (docs-only change, not a code change): clarify in the README/help that `--dry-run` does not persist state and therefore reprocesses all existing `@crewmate` mentions on every poll.
 - **Move `stream` warnings to stderr**: keep stdout strictly NDJSON so downstream pipelines do not break on `Warning: Search failed...` lines.
 - **Fix `stream` unsupported-flag warning ordering**: warn about unsupported flags like `--fix` / `--dry-run` / `--provider` before trying to resolve the default target, so the warning is visible even when run outside a git repo without an explicit target.
 - **Extend `crewmateReplied` deduplication to conversation and issue comments**: today only review-comment replies suppress the original mention; top-level conversation/issue replies can be reprocessed if the state file is lost.
