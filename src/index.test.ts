@@ -5688,6 +5688,30 @@ describe("dispatchMention conversation fix", () => {
 		expect(content).toBe("new");
 	});
 
+	it("applies a fenced provider response with a language tag when there is one changed file", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		await dispatchConversationFix({ fixed: "```typescript\nnew\n```" });
+
+		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
+		expect(content).toBe("new");
+	});
+
+	it("rejects a fix for an unreadable changed file", async () => {
+		await mkdir(path.resolve("src"), { recursive: true });
+		await writeFile(path.resolve("src", "index.ts"), "old");
+		await writeFile(path.resolve("binary.ts"), Buffer.from([0]));
+		const runner = await dispatchConversationFix({
+			files: ["src/index.ts", "binary.ts"],
+			fixed: "```binary.ts\nnew\n```",
+		});
+
+		const replyPost = (
+			runner as unknown as { mock: { calls: [string, string[]][] } }
+		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
+		expect(JSON.stringify(replyPost?.[1])).toContain("Could not generate a fix.");
+	});
+
 	it("preserves the original file's trailing newline when the provider omits it", async () => {
 		await mkdir(path.resolve("src"), { recursive: true });
 		await writeFile(path.resolve("src", "index.ts"), "old\n");

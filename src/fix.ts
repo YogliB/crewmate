@@ -503,19 +503,31 @@ const generateConversationFix = async (
 	return callProvider(ctx, finalPrompt);
 };
 
+const looksLikePath = (value: string): boolean =>
+	value.includes("/") || value.includes("\\") || value.startsWith("..") || value === "..";
+
 const normalizeConversationFixes = (
 	fencedFixes: Map<string, string>,
 	files: { filePath: string; content: string }[],
+	allPaths: string[],
 ): { filePath: string; content: string }[] | undefined => {
-	const changedPaths = new Set(files.map(({ filePath }) => filePath));
+	const changedPaths = new Set(allPaths);
 	const originals = new Map(files.map(({ filePath, content }) => [filePath, content]));
 	const fixes: { filePath: string; content: string }[] = [];
 	for (const [targetPath, content] of fencedFixes) {
-		const filePath = targetPath === "" && files.length === 1 ? files[0].filePath : targetPath;
+		let filePath = targetPath;
+		if (filePath === "" && files.length === 1) {
+			filePath = files[0].filePath;
+		} else if (files.length === 1 && !changedPaths.has(filePath) && !looksLikePath(filePath)) {
+			filePath = files[0].filePath;
+		}
 		if (filePath === "" || !changedPaths.has(filePath)) {
 			return undefined;
 		}
-		const original = originals.get(filePath)!;
+		const original = originals.get(filePath);
+		if (original === undefined) {
+			return undefined;
+		}
 		const normalizedContent =
 			content !== "" && original.endsWith("\n") && !content.endsWith("\n")
 				? `${content}\n`
@@ -544,7 +556,7 @@ const handleConversationFix = async (
 	const fixed = await generateConversationFix(ctx, mention, files, allPaths);
 	const fencedFixes = stripFileFixes(fixed);
 	if (fencedFixes.size > 0) {
-		const fixes = normalizeConversationFixes(fencedFixes, files);
+		const fixes = normalizeConversationFixes(fencedFixes, files, allPaths);
 		if (fixes === undefined) {
 			await postReply(ctx, NO_FIX_REPLY, "error");
 			return;
@@ -561,7 +573,7 @@ const handleConversationFix = async (
 		await postReply(ctx, NO_FIX_REPLY, "error");
 		return;
 	}
-	const fixes = normalizeConversationFixes(new Map([["", stripped]]), files);
+	const fixes = normalizeConversationFixes(new Map([["", stripped]]), files, allPaths);
 	if (fixes === undefined || fixes.length === 0) {
 		await postReply(
 			ctx,
