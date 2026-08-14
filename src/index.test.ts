@@ -5994,9 +5994,9 @@ describe("dispatchMention conversation fix", () => {
 			if (reaction !== undefined) return Promise.resolve(reaction);
 			if (file === "gh" && args.includes("/reactions"))
 				return Promise.resolve(JSON.stringify({ id: 1 }));
+			if (file === "gh" && args.includes("/issues/4/comments")) return Promise.resolve("[]");
 			if (file === "gh" && args.includes("/issues/"))
 				return Promise.resolve(issueBodyResponse("@crewmate #fix", 4));
-			if (file === "gh" && args.includes("/issues/4/comments")) return Promise.resolve("[]");
 			if (file === "claude") return Promise.resolve("No problem.");
 			if (file === "git") return resolveGit(args);
 			return Promise.resolve("");

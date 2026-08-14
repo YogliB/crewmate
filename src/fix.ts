@@ -16,7 +16,7 @@ const MAX_CONVERSATION_FILES = 50;
 const MAX_CONVERSATION_FILE_SIZE = 100_000;
 
 const NO_FIX_IN_ISSUE =
-	"I can't apply fixes to issue comments; only PR review and conversation comments support #fix.";
+	"I can't apply fixes to issue bodies or comments; only PR review and conversation comments support #fix.";
 
 type MentionBase = {
 	id: number;
@@ -321,11 +321,13 @@ const readPrFile = async (
 			return { content, found: true };
 		} catch (error) {
 			const message = errorMessage(error);
-			await ctx.warn("file content API failed", {
-				error: message,
-				path: targetPath,
-				reason: "file-content-api-failed",
-			});
+			if (!silent) {
+				await ctx.warn("file content API failed", {
+					error: message,
+					path: targetPath,
+					reason: "file-content-api-failed",
+				});
+			}
 			if (!message.includes("404") && !message.includes("Not Found")) {
 				throw error;
 			}
