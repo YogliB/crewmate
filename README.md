@@ -158,6 +158,7 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 - **Fix `stream` unsupported-flag warning ordering**: warn about unsupported flags like `--fix` / `--dry-run` / `--provider` before trying to resolve the default target, so the warning is visible even when run outside a git repo without an explicit target.
 - **Extend `crewmateReplied` deduplication to conversation and issue comments**: today only review-comment replies suppress the original mention; top-level conversation/issue replies can be reprocessed if the state file is lost.
 - **Improve single-PR `watch` not-found messaging**: a non-existent PR currently surfaces as a raw `gh api` 404 inside a `poll failed` warning; a cleaner "PR not found" message would help.
+- **Allow working on an unclean worktree/branch**
 
 ## More docs
 
