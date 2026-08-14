@@ -293,7 +293,7 @@ const encodeContentPath = (targetPath: string): string =>
 const readPrFile = async (
 	ctx: ReplyContext,
 	targetPath: string,
-	{ silent = false }: { silent?: boolean } = {},
+	{ capSize = false, silent = false }: { capSize?: boolean; silent?: boolean } = {},
 ): Promise<{ content: string; found: boolean }> => {
 	if (ctx.repoRoot === undefined) {
 		if (isUnsafeContentPath(targetPath)) {
@@ -318,7 +318,7 @@ const readPrFile = async (
 				],
 				{ env: { GH_HOST: ctx.ghHost } },
 			);
-			if (Buffer.byteLength(content) > MAX_CONVERSATION_FILE_SIZE) {
+			if (capSize && Buffer.byteLength(content) > MAX_CONVERSATION_FILE_SIZE) {
 				await ctx.warn("skipping file for conversation prompt", {
 					path: targetPath,
 					reason: "too-large",
@@ -380,7 +380,7 @@ const readPrFile = async (
 		}
 		return { content: "", found: false };
 	}
-	if (stats.size > MAX_CONVERSATION_FILE_SIZE) {
+	if (capSize && stats.size > MAX_CONVERSATION_FILE_SIZE) {
 		await ctx.warn("skipping file for conversation prompt", {
 			path: targetPath,
 			reason: "too-large",
@@ -485,7 +485,10 @@ const readPrFiles = async (
 	const allPaths = allFiles.map(({ filename }) => filename);
 	const result: { filePath: string; content: string }[] = [];
 	for (const { filename } of allFiles) {
-		const { content, found } = await readPrFile(ctx, filename, { silent: true });
+		const { content, found } = await readPrFile(ctx, filename, {
+			capSize: true,
+			silent: true,
+		});
 		if (!found) {
 			continue;
 		}
