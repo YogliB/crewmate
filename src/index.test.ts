@@ -1195,6 +1195,78 @@ describe("run stream flags", () => {
 		}
 	});
 
+	it("writes unsupported flag warnings to stderr and not stdout", async () => {
+		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(
+			[
+				"stream",
+				PR_URL,
+				"--fix",
+				"--model",
+				"best",
+				"--provider",
+				"my-llm",
+				"--prompt",
+				"custom",
+				"--dry-run",
+				"--json",
+			],
+			{
+				iterations: FIRST_ITERATION,
+				runner,
+			},
+		);
+		const flags = ["--fix", "--model", "--provider", "--prompt", "--dry-run", "--json"];
+		const stderrCalls = stderr.mock.calls.map(([line]) => line as string);
+		const warningCalls = stderrCalls.filter((line) => line.includes("Warning: unsupported flag"));
+		expect(warningCalls).toHaveLength(flags.length);
+		for (const index of flags.keys()) {
+			expect(warningCalls[index]).toContain("Warning: unsupported flag");
+		}
+		const stdoutCalls = stdout.mock.calls.map(([line]) => line as string);
+		expect(
+			stdoutCalls.some((line) => line.includes("Warning:") || line.includes("unsupported flag")),
+		).toBe(false);
+		stdout.mockRestore();
+		stderr.mockRestore();
+	});
+
+	it("warns on unsupported flags before failing to resolve the default target", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "git" && args[0] === "remote") {
+				return Promise.reject(new Error("No such remote 'origin'"));
+			}
+			return Promise.resolve("");
+		}) as unknown as Runner;
+		await run(
+			[
+				"stream",
+				"--fix",
+				"--model",
+				"best",
+				"--provider",
+				"my-llm",
+				"--prompt",
+				"custom",
+				"--dry-run",
+				"--json",
+			],
+			{ runner },
+		);
+		const calls = stderr.mock.calls.map(([line]) => line as string);
+		const warningCalls = calls.filter((line) => line.includes("Warning: unsupported flag"));
+		expect(warningCalls).toHaveLength(6);
+		expect(calls.at(-1)).toBe("Error: Target is required: No such remote 'origin'\n");
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		stderr.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+
 	it("warns on unsupported flags when passed as booleans", async () => {
 		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
 		const runner = makeExplainRunner({ answer: "It does something." });
