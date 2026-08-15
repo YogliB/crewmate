@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `crewmate stream` now warns about unsupported flags before attempting to resolve the default target, so the warning is visible even when run outside a git working tree without an explicit target.
+- `crewmate stream` warns about unsupported flags before resolving the default target.
 
 ## 0.3.0
 
