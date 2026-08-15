@@ -60,6 +60,10 @@ Husky's pre-push hook runs `nub run typecheck`, `nub run duplicates:ci`, and `nu
 
 Use [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): subject` in the imperative. Add a body when the motivation is not obvious.
 
+## Documentation style
+
+Keep docs short, clear, and concise. Avoid long explanations when a short sentence will do. Use active voice and focus on what the reader needs to do or know. This applies to README entries, changelog bullets, help text, and agent-facing docs.
+
 ## Security
 
 Do not open public issues for security problems. See [docs/SECURITY.md](SECURITY.md) for the reporting process.
