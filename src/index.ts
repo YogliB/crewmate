@@ -1251,14 +1251,7 @@ const runStream = async (
 		return;
 	}
 	const { booleans, values, target: rawTarget } = parsed;
-	const runner = options.runner ?? exec;
-	const target = rawTarget || (await resolveDefaultTarget(runner));
-	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
-	const debug = booleans.has("--debug") ? true : undefined;
 	const toStderr = booleans.has("--log") ? true : undefined;
-	const unsafeNoUser = booleans.has("--unsafe-no-user") ? true : undefined;
-	const allowedUser = values.get("--user");
-
 	const logger = options.logger ?? createLogger({ toStderr: toStderr ?? false });
 	const warn = makeWarn(toStderr ?? false, logger);
 
@@ -1267,6 +1260,13 @@ const runStream = async (
 			await warn("unsupported flag", { flag });
 		}
 	}
+
+	const runner = options.runner ?? exec;
+	const target = rawTarget || (await resolveDefaultTarget(runner));
+	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
+	const debug = booleans.has("--debug") ? true : undefined;
+	const unsafeNoUser = booleans.has("--unsafe-no-user") ? true : undefined;
+	const allowedUser = values.get("--user");
 
 	await stream(target, {
 		allowedUser,
