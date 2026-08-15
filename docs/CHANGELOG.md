@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `crewmate stream` warns about unsupported flags before resolving the default target.
+
 ## 0.3.0
 
 - Add GitHub issue support with `issue` and `conversation` mention kinds.
