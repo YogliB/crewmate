@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `crewmate stream` now warns about unsupported flags before attempting to resolve the default target, so the warning is visible even when run outside a git working tree without an explicit target.
+
 ## 0.3.0
 
 - Add GitHub issue support with `issue` and `conversation` mention kinds.
