@@ -20,7 +20,7 @@ A CLI that watches GitHub PR comments (review and conversation) and issues for `
 - `--fix` Attempt to apply a generated fix and push a commit. The PR comment body must also contain the tag `#fix` (case-insensitive).
 - `--model <model>` Use a specific model for explanations and fixes.
 - `--provider <command>` Use a specific provider CLI instead of the default `claude`.
-- `--prompt <text>` Prepend custom instructions to the LLM prompt.
+- `--prompt <text>` Prepend custom instructions to the LLM prompt. The default review prompt is in assets/SYSTEM_PROMPT.md.
 - `--log` Also mirror structured log lines to stderr.
 - `--dry-run` Preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Polls continuously like regular watch mode, but does not persist state.
 - `--user <login>` Only respond to comments from this GitHub login (defaults to the active `gh` user when omitted and not set in config)

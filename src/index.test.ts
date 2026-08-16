@@ -779,7 +779,7 @@ describe("run watch flags", () => {
 	it("uses the default prompt when --prompt is missing", async () => {
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["watch", PR_URL], { iterations: FIRST_ITERATION, runner });
-		expect(getPrompt(runner)?.startsWith("Review comment:")).toBe(true);
+		expect(getPrompt(runner)).toMatch(/Review comment:/);
 	});
 
 	it("ignores --prompt when the value is another flag", async () => {
@@ -789,8 +789,8 @@ describe("run watch flags", () => {
 			runner,
 		});
 		const prompt = getPrompt(runner);
-		expect(prompt?.startsWith("Review comment:")).toBe(true);
-		expect(prompt?.startsWith("BE_TERSE\n\n")).toBe(false);
+		expect(prompt).toMatch(/Review comment:/);
+		expect(prompt).not.toMatch(/^BE_TERSE\n\n/);
 	});
 
 	it("does not let an extra word after --dry-run disable dry-run", async () => {
