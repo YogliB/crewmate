@@ -1,6 +1,6 @@
 {
 	"name": "crewmate",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"description": "A CLI that watches GitHub PR comments for @crewmate mentions and replies with explanations or generated fixes.",
 	"keywords": [
 		"cli"
