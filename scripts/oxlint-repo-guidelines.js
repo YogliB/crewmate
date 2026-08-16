@@ -5,6 +5,7 @@ const ignoredDocDirs = new Set(["node_modules", ".git", "dist", "coverage", ".de
 const allowedDocs = new Set([
 	"AGENTS.md",
 	"assets/help.md",
+	"assets/SYSTEM_PROMPT.md",
 	"LICENSE.md",
 	"README.md",
 	"docs/ARCHITECTURE.md",

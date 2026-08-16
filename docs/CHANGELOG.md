@@ -3,6 +3,7 @@
 ## Unreleased
 
 - `crewmate stream` warns about unsupported flags before resolving the default target.
+- Review comment replies now use the prompt in `assets/SYSTEM_PROMPT.md`; the default content is `Follow the review.`
 
 ## 0.3.0
 

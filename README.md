@@ -60,7 +60,7 @@ crewmate init
 - `--fix` — try to generate, commit, and push a fix for a single-PR review or conversation comment. The comment body must also contain the tag `#fix`.
 - `--model <model>` — use a specific model for explanations and fixes.
 - `--provider <command>` — use a specific provider CLI instead of `claude`.
-- `--prompt <text>` — prepend custom instructions to the LLM prompt.
+- `--prompt <text>` — prepend custom instructions to the LLM prompt. The default review prompt is in [assets/SYSTEM_PROMPT.md](assets/SYSTEM_PROMPT.md).
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
 - `--dry-run` — preview the reply, fix, and emoji reaction changes on stdout without posting to GitHub or committing/pushing. Polls continuously like regular watch mode, but does not persist state.
 - `--user <login>` — only reply to comments from this GitHub user (defaults to the active `gh` user when omitted and not set in config). Always respected.

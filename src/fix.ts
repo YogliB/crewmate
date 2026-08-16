@@ -20,6 +20,8 @@ const NO_FIX_IN_ISSUE =
 const NO_CHECKOUT_REPLY =
 	"A local PR checkout is required to apply conversation fixes. Please run this command from the repository root.";
 
+const SYSTEM_PROMPT_PATH = new URL("../assets/SYSTEM_PROMPT.md", import.meta.url);
+
 type MentionBase = {
 	id: number;
 	body: string;
@@ -273,7 +275,9 @@ const handleExplain = async (mention: ReviewMention, ctx: ReplyContext): Promise
 		return;
 	}
 	const body = mention.body;
-	const prompt = `Review comment: ${JSON.stringify(body)}\nTarget file: ${JSON.stringify(mention.path)}\nLine: ${mention.line}\nFile content: ${JSON.stringify(content)}\n\nExplain what the line does in this PR. Return only the explanation.`;
+	// oxlint-disable-next-line security/detect-non-literal-fs-filename -- SYSTEM_PROMPT_PATH is a build-time constant
+	const systemPrompt = (await readFile(SYSTEM_PROMPT_PATH, "utf8")).trim();
+	const prompt = `${systemPrompt}\n\nReview comment: ${JSON.stringify(body)}\nTarget file: ${JSON.stringify(mention.path)}\nLine: ${mention.line}\nFile content: ${JSON.stringify(content)}`;
 	const finalPrompt = ctx.prompt ? `${ctx.prompt}\n\n${prompt}` : prompt;
 	const answer = await callProvider(ctx, finalPrompt);
 	if (!answer) {

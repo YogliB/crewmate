@@ -8,6 +8,7 @@ Agent-facing entry point for this repo. For the open format, see [agents.md](htt
 | -------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | Agent rules          | [@caveman.md](.agents/rules/caveman.md), [@ponytail.md](.agents/rules/ponytail.md), [@rtk.md](.agents/rules/rtk.md) |
 | Agent skills         | [@crewmate](.agents/skills/crewmate/SKILL.md)                                                                       |
+| System prompt        | [assets/SYSTEM_PROMPT.md](assets/SYSTEM_PROMPT.md)                                                                  |
 | User-facing CLI docs | [README.md](../README.md)                                                                                           |
 | How to contribute    | [docs/CONTRIBUTING.md](CONTRIBUTING.md)                                                                             |
 | Common CLI problems  | [docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md)                                                                       |
@@ -44,6 +45,7 @@ nub run build
 - `src/state.ts` — persisting seen comment IDs.
 - `dist/` — build output.
 - `assets/help.md` — help text shown by `--help`.
+- `assets/SYSTEM_PROMPT.md` — default system prompt for review comment replies.
 
 ## Lint and format
 
