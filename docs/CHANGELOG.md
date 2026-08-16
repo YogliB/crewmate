@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.1
+
 - `crewmate stream` warns about unsupported flags before resolving the default target.
 - Review comment replies now use the prompt in `assets/SYSTEM_PROMPT.md`; the default content is `Follow the review.`
 - Fix `toSafePath` to handle symlinked repository roots (e.g., macOS `/var/folders` → `/private/var/folders`).
