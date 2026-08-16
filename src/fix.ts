@@ -48,14 +48,16 @@ const isUnsafeContentPath = (targetPath: string): boolean =>
 	/(?:^|\/)\.\.?(?:\/|$)/.test(targetPath);
 
 const toSafePath = async (targetPath: string, repoRoot: string): Promise<string> => {
-	const resolved = path.resolve(repoRoot, targetPath);
-	if (isOutsideRepo(repoRoot, resolved)) {
+	// oxlint-disable-next-line security/detect-non-literal-fs-filename -- repoRoot is a known checkout directory
+	const realRoot = await realpath(repoRoot);
+	const resolved = path.resolve(realRoot, targetPath);
+	if (isOutsideRepo(realRoot, resolved)) {
 		throw new Error("Invalid target path");
 	}
 	try {
 		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- resolved is validated against the repository root before realpath
 		const realResolved = await realpath(resolved);
-		if (isOutsideRepo(repoRoot, realResolved)) {
+		if (isOutsideRepo(realRoot, realResolved)) {
 			throw new Error("Invalid target path");
 		}
 		return realResolved;
@@ -69,7 +71,7 @@ const toSafePath = async (targetPath: string, repoRoot: string): Promise<string>
 	// oxlint-disable-next-line security/detect-non-literal-fs-filename -- parent is derived from a path validated against the repository root
 	const realParent = await realpath(parent);
 	const realResolved = path.join(realParent, path.basename(resolved));
-	if (isOutsideRepo(repoRoot, realResolved)) {
+	if (isOutsideRepo(realRoot, realResolved)) {
 		throw new Error("Invalid target path");
 	}
 	return realResolved;
@@ -654,12 +656,14 @@ const applyFixes = async (ctx: ReplyContext, fixes: Map<string, string>): Promis
 	if (ctx.repoRoot === undefined) {
 		throw new Error("repoRoot is required to apply fixes");
 	}
+	// oxlint-disable-next-line security/detect-non-literal-fs-filename -- repoRoot is a known checkout directory
+	const repoRoot = await realpath(ctx.repoRoot);
 	const entries: { safePath: string; relativePath: string; content: string }[] = [];
 	const base = logContext(ctx);
 	try {
 		for (const [targetPath, content] of fixes) {
-			const safePath = await toSafePath(targetPath, ctx.repoRoot);
-			const relativePath = path.relative(ctx.repoRoot, safePath);
+			const safePath = await toSafePath(targetPath, repoRoot);
+			const relativePath = path.relative(repoRoot, safePath);
 			entries.push({ safePath, relativePath, content });
 		}
 	} catch (error) {
