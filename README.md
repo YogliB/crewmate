@@ -157,6 +157,9 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 - **Extend `crewmateReplied` deduplication to conversation and issue comments**: today only review-comment replies suppress the original mention; top-level conversation/issue replies can be reprocessed if the state file is lost.
 - **Improve single-PR `watch` not-found messaging**: a non-existent PR currently surfaces as a raw `gh api` 404 inside a `poll failed` warning; a cleaner "PR not found" message would help.
 - **Allow working on an unclean worktree/branch**
+- **Config hierarchy in every scope**: configs and config hierarchy should always be addressed, no matter the scope crewmate works on.
+- **Init a local config file**: there should be a way to init a local `.crewmate.json` file with the `init` command.
+- **Init a global profile**: there should be a way to init a `profiles["owner/repo"]` entry globally with the `init` command.
 
 ## More docs
 
