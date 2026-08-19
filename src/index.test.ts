@@ -18,6 +18,7 @@ const startsWithRepos = (value: string | undefined): boolean =>
 	typeof value === "string" && value.startsWith("repos/");
 
 const PR_URL = "https://github.com/owner/repo/pull/123";
+const REPO_TARGET = "owner/repo";
 const ISSUE_URL = "https://github.com/owner/repo/issues/4";
 const FIRST_INDEX = 0;
 const SECOND_INDEX = 1;
@@ -37,6 +38,7 @@ const NO_CALLS = 0;
 const FIRST_CALL = 1;
 const TWO_CALLS = 2;
 const THREE_CALLS = 3;
+const FOUR_CALLS = 4;
 const NO_EXIT_CODE = 0;
 const ERROR_EXIT_CODE = 1;
 const ORIGINAL_CWD = process.cwd();
@@ -2869,6 +2871,94 @@ describe("watch users null", () => {
 	});
 });
 
+describe("run iterations flag", () => {
+	let tempDir = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
+	});
+
+	it("bounds watch and stream polling", async () => {
+		const watchRunner = makeExplainRunner({ answer: "It does something." });
+		await run(["watch", PR_URL, "--iterations", String(TWO_ITERATIONS)], {
+			config: { interval: NO_INTERVAL },
+			runner: watchRunner,
+		});
+		expect(
+			countCalls(
+				watchRunner,
+				"gh",
+				(args) =>
+					args.at(FIRST_INDEX) === "api" &&
+					!args.includes("--method") &&
+					args.some((arg) => startsWithRepos(arg)),
+			),
+		).toBe(FOUR_CALLS);
+
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const streamRunner = makeScopeRunner();
+		await run(["stream", REPO_TARGET, `--iterations=${TWO_ITERATIONS}`], {
+			config: { interval: NO_INTERVAL },
+			runner: streamRunner,
+		});
+		expect(
+			countCalls(
+				streamRunner,
+				"gh",
+				(args) =>
+					args.at(FIRST_INDEX) === "api" && args.some((arg) => arg.startsWith("search/issues?q=")),
+			),
+		).toBe(FOUR_CALLS);
+		write.mockRestore();
+	});
+
+	it("fails when watch or stream iterations value is missing", async () => {
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const previousExitCode = process.exitCode;
+		try {
+			for (const [subcommand, target] of [
+				["watch", PR_URL],
+				["stream", REPO_TARGET],
+			]) {
+				process.exitCode = NO_EXIT_CODE;
+				await run([subcommand, target, "--iterations"]);
+				expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+			}
+			expect(stderr).toHaveBeenCalledTimes(TWO_CALLS);
+			expect(stderr).toHaveBeenCalledWith("Error: --iterations requires a value.\n");
+		} finally {
+			stderr.mockRestore();
+			process.exitCode = previousExitCode;
+		}
+	});
+
+	it("fails when watch or stream iterations value is invalid", async () => {
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		const previousExitCode = process.exitCode;
+		try {
+			for (const [subcommand, target] of [
+				["watch", PR_URL],
+				["stream", REPO_TARGET],
+			]) {
+				process.exitCode = NO_EXIT_CODE;
+				await run([subcommand, target, "--iterations", "1.5"]);
+				expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+			}
+			expect(stderr).toHaveBeenCalledTimes(TWO_CALLS);
+			expect(stderr).toHaveBeenCalledWith("Error: --iterations must be a positive integer.\n");
+		} finally {
+			stderr.mockRestore();
+			process.exitCode = previousExitCode;
+		}
+	});
+});
+
 describe("watch iterations", () => {
 	let tempDir = "";
 
@@ -4486,7 +4576,6 @@ describe("scope targets", () => {
 		vi.unstubAllEnvs();
 	});
 
-	const REPO_TARGET = "owner/repo";
 	const ORG_TARGET = "org:myorg";
 	const GHES_REPO_URL = "https://ghe.example.com/owner/repo";
 	const SCOPE_PR_URL = "https://github.com/owner/repo/pull/1";

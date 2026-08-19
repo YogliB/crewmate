@@ -17,6 +17,7 @@ A CLI that watches GitHub PR comments (review and conversation) and issues for `
 #### Options
 
 - `--interval <seconds>` Seconds between polls (default: 60)
+- `--iterations <count>` Stop after count polls (default: unlimited)
 - `--fix` Attempt to apply a generated fix and push a commit. The PR comment body must also contain the tag `#fix` (case-insensitive).
 - `--model <model>` Use a specific model for explanations and fixes.
 - `--provider <command>` Use a specific provider CLI instead of the default `claude`.
@@ -38,6 +39,7 @@ Emit new `@crewmate` mentions as NDJSON to stdout without invoking the provider 
 #### Options
 
 - `--interval <seconds>` Seconds between polls (default: 60)
+- `--iterations <count>` Stop after count polls (default: unlimited)
 - `--log` Also mirror structured log lines to stderr.
 - `--user <login>` Only emit mentions from this GitHub login (defaults to the active `gh` user when omitted and not set in config)
 - `--unsafe-no-user` Emit mentions from any GitHub user. Disables the default filter that is set to the active `gh` user.

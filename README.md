@@ -57,6 +57,7 @@ crewmate init
 ### `crewmate watch`
 
 - `--interval <seconds>` — seconds between polls. Default is `60`.
+- `--iterations <count>` — stop after count polls. Default is unlimited.
 - `--fix` — try to generate, commit, and push a fix for a single-PR review or conversation comment. The comment body must also contain the tag `#fix`.
 - `--model <model>` — use a specific model for explanations and fixes.
 - `--provider <command>` — use a specific provider CLI instead of `claude`.
@@ -74,6 +75,7 @@ crewmate init
 Emit new `@crewmate` mentions as NDJSON to stdout without invoking a provider or posting replies. Use this to feed an agent or another pipeline.
 
 - `--interval <seconds>` — seconds between polls. Default is `60`.
+- `--iterations <count>` — stop after count polls. Default is unlimited.
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
 - `--user <login>` — only emit mentions from this GitHub user (defaults to the active `gh` user when omitted and not set in config). Always respected.
 - `--unsafe-no-user` — emit mentions from any GitHub user. Disables the default filter that falls back to the active `gh` user. This flag wins over `--user`.
@@ -153,7 +155,6 @@ crewmate watch owner/repo/pull/4 --fix --user myorg-bot
 - **Degit integration**: keep a fast, minimal copy of the target repo in the CLI config folder so agents have code context without a full clone.
 - **Init-time model selection**: when running `crewmate init`, query the configured provider for its available models and let the user select one.
 - **Sandboxed agents by default**: agents run in a sandbox by default.
-- **Add `--once` / `--iterations` flag for `watch` and `stream`**: so the CLI can stop after a single poll (or N polls) instead of running forever. Useful for CI and manual testing.
 - **Extend `crewmateReplied` deduplication to conversation and issue comments**: today only review-comment replies suppress the original mention; top-level conversation/issue replies can be reprocessed if the state file is lost.
 - **Improve single-PR `watch` not-found messaging**: a non-existent PR currently surfaces as a raw `gh api` 404 inside a `poll failed` warning; a cleaner "PR not found" message would help.
 - **Allow working on an unclean worktree/branch**

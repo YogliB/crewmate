@@ -1129,7 +1129,14 @@ const stream = async (
 	);
 };
 
-const VALUE_FLAGS = new Set(["--interval", "--user", "--prompt", "--model", "--provider"]);
+const VALUE_FLAGS = new Set([
+	"--interval",
+	"--iterations",
+	"--user",
+	"--prompt",
+	"--model",
+	"--provider",
+]);
 
 const parseArgs = (
 	argv: string[],
@@ -1179,6 +1186,31 @@ const parseInterval = (
 	return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
 };
 
+const parseIterations = (input: string | undefined, present: boolean): number | undefined => {
+	if (!present) {
+		return undefined;
+	}
+	if (input === undefined) {
+		throw new TypeError("--iterations requires a value.");
+	}
+	const parsed = Number(input);
+	if (!Number.isInteger(parsed) || parsed <= 0) {
+		throw new TypeError("--iterations must be a positive integer.");
+	}
+	return parsed;
+};
+
+const parseCliIterations = (
+	booleans: Set<string>,
+	values: Map<string, string>,
+	configured: number | undefined,
+): number | undefined =>
+	configured ??
+	parseIterations(
+		values.get("--iterations"),
+		booleans.has("--iterations") || values.has("--iterations"),
+	);
+
 const parseRunArgs = (
 	rest: string[],
 ):
@@ -1207,6 +1239,7 @@ const runWatch = async (
 		return;
 	}
 	const { booleans, values, target: rawTarget } = parsed;
+	const iterations = parseCliIterations(booleans, values, options.iterations);
 	const runner = options.runner ?? exec;
 	const target = rawTarget || (await resolveDefaultTarget(runner));
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
@@ -1226,7 +1259,7 @@ const runWatch = async (
 		debug,
 		dryRun,
 		interval,
-		iterations: options.iterations,
+		iterations,
 		logger: options.logger,
 		model,
 		prompt,
@@ -1251,6 +1284,7 @@ const runStream = async (
 		return;
 	}
 	const { booleans, values, target: rawTarget } = parsed;
+	const iterations = parseCliIterations(booleans, values, options.iterations);
 	const toStderr = booleans.has("--log") ? true : undefined;
 	const logger = options.logger ?? createLogger({ toStderr: toStderr ?? false });
 	const warn = makeWarn(toStderr ?? false, logger);
@@ -1273,7 +1307,7 @@ const runStream = async (
 		config: options.config,
 		debug,
 		interval,
-		iterations: options.iterations,
+		iterations,
 		logger: options.logger,
 		runner: options.runner,
 		toStderr,
