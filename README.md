@@ -8,6 +8,7 @@ Watch GitHub PR comments (review and conversation) and issues for `@crewmate` me
 
 You need:
 
+- Node.js 24 or later.
 - [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated.
 - An LLM provider CLI in your PATH. The default is `claude` (Anthropic's CLI), but you can use any `claude`-shaped CLI (`--version`, `--model`, `-p`) via `--provider` or config. Wrap other tools in a shim if needed.
 - A clean git working tree if you are watching a single PR.
@@ -42,6 +43,8 @@ If you are building from source, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md
 crewmate watch [<target>] [options]
 crewmate stream [<target>] [options]
 crewmate init
+crewmate --help
+crewmate --version
 ```
 
 `<target>` is optional when `crewmate watch` or `crewmate stream` is run inside a git repository whose `origin` remote points to GitHub; it defaults to that repository. When provided, it can be:
@@ -53,6 +56,8 @@ crewmate init
 - For GHES, use a full URL (`https://ghe.example.com/owner/repo`).
 
 `crewmate init` is an interactive one-time setup that writes `provider`, `model`, `interval`, `user`, `prompt`, and `fix` defaults to `<config>/crewmate/config.json`.
+
+Use `-h` as an alias for `--help` and `-v` as an alias for `--version`. `watch` and `stream` also accept `-h` or `--help`.
 
 ### `crewmate watch`
 
@@ -79,9 +84,9 @@ Emit new `@crewmate` mentions as NDJSON to stdout without invoking a provider or
 - `--unsafe-no-user` — emit mentions from any GitHub user. Disables the default filter that falls back to the active `gh` user. This flag wins over `--user`.
 - `--debug` — emit extra poll pipeline detail (`fetched-comments`, `mention-filter`, `new-mentions`) to the log.
 
-`crewmate stream` can run outside a git working tree and uses only the global config. The `<target>` can be a single PR, a repo, an org, or a GHES full URL. Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and `path`/`line` for review comments.
+`crewmate stream` can run outside a git working tree; when it does, it uses only the global config. The `<target>` can be a single PR, an issue, a repo, an org, or a GHES full URL. Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and `path`/`line` for review comments.
 
-State (seen comment IDs) is stored in `<config>/crewmate/state.json` and logs in `<config>/crewmate/crewmate.log`, where `<config>` is `$XDG_CONFIG_HOME`, `$HOME/.config` (or `%USERPROFILE%/.config` on Windows), or the current working directory if none of those are set.
+State (seen comment IDs) is stored in `<config>/crewmate/state.json` and logs in `<config>/crewmate/crewmate.log`, where `<config>` is `$XDG_CONFIG_HOME` when set and otherwise the current user's `.config` directory.
 Structured logs are appended on a best-effort basis; the file is not rotated or truncated. Use `--log` to also mirror each log line to stderr.
 
 ## Configuration
@@ -97,9 +102,9 @@ Precedence, strongest first:
 2. Per-repo `.crewmate.json` (when `crewmate watch` or `crewmate stream` is run on a single PR inside that repository's working tree).
 3. Global config (defaults are merged first, then the matching `profiles["owner/repo"]` overrides any overlapping fields).
 
-`repo` and `org` scope watches run outside the target repository and therefore use only the global config.
+`issue`, `repo`, and `org` scope runs do not load a target repository and therefore use only the global config.
 
-Both files use the same profile keys: `provider`, `model`, `interval`, `user`, `prompt`, `fix`, `dryRun`, `log`, and `debug`. Unknown keys are ignored. Invalid types for known keys are warned and ignored. In the global file, the `profiles` map keys (owner/repo) are matched case-insensitively. See `assets/config.schema.json` for the full schema; point your IDE at it for validation and autocomplete.
+Both files use the same profile keys: `provider`, `model`, `interval`, `user`, `prompt`, `fix`, `dryRun`, `log`, `debug`, and `unsafeNoUser`. Unknown keys are ignored. Invalid types for known keys are warned and ignored. In the global file, the `profiles` map keys (owner/repo) are matched case-insensitively. See `assets/config.schema.json` for the full schema; point your IDE at it for validation and autocomplete.
 
 Example `.crewmate.json`:
 
@@ -120,6 +125,10 @@ Example global `config.json`:
 	"profiles": { "myorg/myrepo": { "provider": "my-llm" } }
 }
 ```
+
+## Programmatic API
+
+The package entry point is the default export from `src/index.ts`. It accepts CLI-style arguments and exposes `watch`, `stream`, parsing, discovery, reply, and state helpers as properties. `Mention` and `Scope` are exported TypeScript types.
 
 ## Log events
 

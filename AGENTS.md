@@ -7,15 +7,15 @@ Agent-facing entry point for this repo. For the open format, see [agents.md](htt
 | Topic                | Where to look                                                                                                       |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | Agent rules          | [@caveman.md](.agents/rules/caveman.md), [@ponytail.md](.agents/rules/ponytail.md), [@rtk.md](.agents/rules/rtk.md) |
-| Agent skills         | [@crewmate](.agents/skills/crewmate/SKILL.md)                                                                       |
+| Agent skills         | [@crewmate](.agents/skills/crewmate/SKILL.md), [@documentation](.agents/skills/documentation/SKILL.md)              |
 | System prompt        | [assets/SYSTEM_PROMPT.md](assets/SYSTEM_PROMPT.md)                                                                  |
-| User-facing CLI docs | [README.md](../README.md)                                                                                           |
-| How to contribute    | [docs/CONTRIBUTING.md](CONTRIBUTING.md)                                                                             |
-| Common CLI problems  | [docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md)                                                                       |
-| Security reporting   | [docs/SECURITY.md](SECURITY.md)                                                                                     |
-| Release notes        | [docs/CHANGELOG.md](CHANGELOG.md)                                                                                   |
-| Architecture         | [docs/ARCHITECTURE.md](ARCHITECTURE.md)                                                                             |
-| License              | [LICENSE.md](../LICENSE.md)                                                                                         |
+| User-facing CLI docs | [README.md](README.md)                                                                                              |
+| How to contribute    | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)                                                                        |
+| Common CLI problems  | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)                                                                  |
+| Security reporting   | [docs/SECURITY.md](docs/SECURITY.md)                                                                                |
+| Release notes        | [docs/CHANGELOG.md](docs/CHANGELOG.md)                                                                              |
+| Architecture         | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                                                                        |
+| License              | [LICENSE.md](LICENSE.md)                                                                                            |
 
 ## Setup
 
@@ -38,9 +38,11 @@ nub run build
 
 ## Project layout
 
-- `src/index.ts` — CLI and watch loop.
+- `src/index.ts` — public API, CLI dispatch, and polling.
 - `src/bin.ts` — executable entry point.
+- `src/config.ts` — global and per-repository configuration.
 - `src/fix.ts` — generating replies and applying fixes.
+- `src/init.ts` — interactive global configuration setup.
 - `src/log.ts` — structured logging.
 - `src/state.ts` — persisting seen comment IDs.
 - `dist/` — build output.
@@ -49,7 +51,7 @@ nub run build
 
 ## Lint and format
 
-CI and the pre-commit hook run `oxlint` and `oxfmt`. `nub run format` fixes most issues. CI and the pre-push hook also run `jscpd` (`nub run duplicates:ci`) and `knip` (`nub run knip:ci`) to catch duplication and unused dependencies. A custom `oxlint-repo-guidelines/no-more-docs` rule blocks new Markdown or `docs/` files that are not in the allow-list. Add to [scripts/oxlint-repo-guidelines.js](../scripts/oxlint-repo-guidelines.js) and update this file if a new doc is needed.
+CI and the pre-commit hook run `oxlint` and `oxfmt`. `nub run format` fixes most issues. CI and the pre-push hook also run `jscpd` (`nub run duplicates:ci`) and `knip` (`nub run knip:ci`) to catch duplication and unused dependencies. Custom oxlint rules reject regular source comments and block new Markdown or `docs/` files that are not in the allow-list. Add new docs to [scripts/oxlint-repo-guidelines.js](scripts/oxlint-repo-guidelines.js) and update this file if a new doc is needed.
 
 ## Documentation
 

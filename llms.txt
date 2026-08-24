@@ -1,15 +1,17 @@
 # crewmate
 
-> crewmate is a command-line tool. The project is currently a minimal bare-metal scaffold; this file will grow alongside real functionality.
+> crewmate watches GitHub PR comments and issues for `@crewmate` mentions, then emits events or replies with explanations and generated fixes.
 
 Important notes:
 
-- Development of this repository requires [Nub](https://nubjs.com); end users will be able to install the published package with npm once it ships.
-- There is no CLI behavior beyond a placeholder entry point yet.
+- End users install the published CLI with `npm install -g crewmate`.
+- Development requires Node.js 24+ and [Nub](https://nubjs.com).
+- `crewmate watch` invokes a configurable LLM provider and posts replies; `crewmate stream` emits NDJSON without invoking a provider or posting.
 
 ## User docs
 
 - [README.md](https://raw.githubusercontent.com/YogliB/crewmate/main/README.md): Overview and usage.
+- [docs/TROUBLESHOOTING.md](https://raw.githubusercontent.com/YogliB/crewmate/main/docs/TROUBLESHOOTING.md): Common runtime problems.
 - [docs/CHANGELOG.md](https://raw.githubusercontent.com/YogliB/crewmate/main/docs/CHANGELOG.md): Version history and release notes.
 
 ## Contributor docs

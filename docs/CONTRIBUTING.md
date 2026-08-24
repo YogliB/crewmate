@@ -32,6 +32,8 @@ nub run test:ci
 
 `nub run lint` and `nub run format` will auto-fix most issues; `nub run lint:ci` and `nub run format:ci` only report them.
 
+Oxlint rejects regular source comments; prefer clear names and small functions. Tool directives such as `oxlint-disable-next-line` remain allowed for documented constraints.
+
 ## Common problems
 
 ### `nub install` fails

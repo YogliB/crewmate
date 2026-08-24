@@ -2,6 +2,11 @@
 
 A CLI that watches GitHub PR comments (review and conversation) and issues for `@crewmate` mentions and replies with explanations or generated fixes.
 
+## Global options
+
+- `-h`, `--help` Show this help. `watch` and `stream` also accept this option.
+- `-v`, `--version` Show the installed crewmate version.
+
 ## Commands
 
 ### `crewmate watch [<target>] [options]`
@@ -58,10 +63,12 @@ Configuration is read from:
 
 CLI flags win, then per-repo `.crewmate.json`, then the global config. In the global file, `profiles["owner/repo"]` takes precedence over `defaults`.
 
-`.crewmate.json` is consulted when `crewmate watch` or `crewmate stream` is run on a single PR inside that repository's working tree. `crewmate watch` in `repo` or `org` scope runs outside the target repository and uses only the global config.
+`.crewmate.json` is consulted when `crewmate watch` or `crewmate stream` is run on a single PR inside that repository's working tree. `issue`, `repo`, and `org` scope runs use only the global config.
 
-State is persisted in `$XDG_CONFIG_HOME/crewmate/state.json`.
-Structured logs are always appended to `$XDG_CONFIG_HOME/crewmate/crewmate.log`; use `--log` to also mirror them to stderr.
+Profile keys are `provider`, `model`, `interval`, `user`, `prompt`, `fix`, `dryRun`, `log`, `debug`, and `unsafeNoUser`.
+
+State is persisted in `<config>/crewmate/state.json`, where `<config>` is `$XDG_CONFIG_HOME` when set and otherwise the current user's `.config` directory.
+Structured logs are always appended to `<config>/crewmate/crewmate.log`; use `--log` to also mirror them to stderr.
 Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, `info`, and `debug`; see the README for the full schema.
 
 ## Caveats

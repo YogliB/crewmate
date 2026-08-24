@@ -44,15 +44,15 @@ For single-PR targets, `--dry-run` still runs `gh pr checkout` so it can read th
 
 ## `@crewmate` mention is ignored
 
-`crewmate` only replies to review comments (not replies) that contain `@crewmate` and were not written by `crewmate` itself. The newest unseen mention is handled on each poll; older ones wait for the next poll.
+`crewmate` handles PR review comments, top-level PR conversation comments, issue bodies, and top-level issue comments that contain `@crewmate`. It ignores replies, its own prefixed responses, previously seen mentions, and users excluded by `--user` or config. Each poll processes every unseen mention, newest first.
 
-## The same conversation comment was answered twice
+## The same conversation or issue mention was answered twice
 
-General PR conversation comments do not expose a stable parent id. If you delete or reset `<config>/crewmate/state.json`, `crewmate` cannot tell that a conversation comment was already answered, so it may reply again. Review comments are not affected because `crewmate` can match replies to their parent.
+PR conversation comments and issue bodies/comments do not expose a stable parent id for crewmate's reply. If you delete or reset `<config>/crewmate/state.json`, crewmate may answer them again. Review comments are not affected because crewmate can match replies to their parent.
 
 ## Fix was not applied
 
-The review comment must contain both `@crewmate` and the tag `#fix` (case-insensitive) for `--fix` to run. If the file is missing or `claude` returns no change, `crewmate` replies with the reason.
+The PR review or conversation comment must contain both `@crewmate` and the tag `#fix` (case-insensitive) for `--fix` to run. Fixes are disabled for issue, repo, and org targets. If a changed file is unavailable or the configured provider returns no change, `crewmate` replies with the reason.
 
 ## Still stuck?
 

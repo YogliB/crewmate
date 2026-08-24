@@ -1,11 +1,11 @@
 ---
 name: crewmate
-description: Run crewmate in stream mode and handle incoming @crewmate PR mentions as NDJSON events. Use when the user wants to poll a PR for crewmate mentions, consume the crewmate NDJSON stream, or build an agent that responds to review and conversation comments.
+description: Run crewmate in stream mode and handle incoming @crewmate PR or issue mentions as NDJSON events. Use when the user wants to poll GitHub targets for crewmate mentions, consume the crewmate NDJSON stream, or build a custom responder.
 ---
 
 # crewmate stream
 
-`crewmate stream <pr-url-or-shorthand>` emits one JSON object per new `@crewmate` mention on stdout. It does not invoke the provider, post replies, or run `gh pr checkout`.
+`crewmate stream [<target>]` emits one JSON object per new `@crewmate` mention on stdout. It does not invoke the provider, post replies, or run `gh pr checkout`.
 
 ## Install
 
@@ -26,13 +26,15 @@ You can also copy `.agents/skills/crewmate/SKILL.md` from the repository into yo
 ## Start the stream
 
 ```bash
-crewmate stream <pr-url-or-shorthand> [--user <login>] [--interval <seconds>] [--log]
+crewmate stream [<target>] [--user <login>] [--unsafe-no-user] [--interval <seconds>] [--log] [--debug]
 ```
 
-- `<pr-url-or-shorthand>`: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`.
-- `--user`: only emit mentions from this GitHub login.
+- `<target>`: a PR, issue, repository, organization, or GHES URL. It defaults to the current repository from its `origin` remote.
+- `--user`: only emit mentions from this GitHub login. It defaults to the active `gh` user when unset.
+- `--unsafe-no-user`: emit mentions from any GitHub user.
 - `--interval`: seconds between polls (default 60).
 - `--log`: also mirror log lines to stderr.
+- `--debug`: add poll-pipeline details to the structured log.
 
 ## Event schema
 
@@ -57,12 +59,12 @@ Fields:
 
 - `at`: ISO-8601 timestamp.
 - `event`: always `"mention"`.
-- `owner`, `repo`, `number`: PR coordinates.
-- `commentId`: GitHub comment id.
-- `kind`: `"review"` or `"conversation"`.
+- `owner`, `repo`, `number`: PR or issue coordinates.
+- `commentId`: GitHub comment id, or the issue number for an issue body.
+- `kind`: `"review"`, `"conversation"`, or `"issue"`.
 - `user`: comment author's GitHub login (may be empty if unavailable).
 - `body`: full comment body.
-- `url`: normalized PR URL.
+- `url`: normalized PR or issue URL.
 - `path`, `line`: only present for `kind: "review"`.
 
 ## Handle a mention
@@ -73,8 +75,8 @@ Fields:
 4. If you want `crewmate` to reply, explain, or fix, run `crewmate watch <url>` or `crewmate watch <url> --fix` **instead of** `crewmate stream`. `crewmate stream` and `crewmate watch` share the same state file, so a mention emitted by stream is already marked as seen and `crewmate watch` would skip it.
 5. If you are building a custom responder on top of `crewmate stream`, reply manually:
    - Review comment reply: `gh api repos/<owner>/<repo>/pulls/<number>/comments/<commentId>/replies -f body=<text>`.
-   - Conversation comment: `gh api repos/<owner>/<repo>/issues/<number>/comments -f body=<text>`.
-6. Do not double-post; `crewmate` already tracks seen comment ids in `$XDG_CONFIG_HOME/crewmate/state.json` and saves state after each stdout write in stream mode.
+   - PR conversation or issue reply: `gh api repos/<owner>/<repo>/issues/<number>/comments -f body=<text>`.
+6. Do not double-post; `crewmate` tracks seen comment ids in `<config>/crewmate/state.json` and saves state after each stdout write in stream mode. `<config>` is `$XDG_CONFIG_HOME` when set and otherwise the current user's `.config` directory.
 
 ## Example one-shot handler
 
