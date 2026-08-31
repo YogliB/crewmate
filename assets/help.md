@@ -47,21 +47,27 @@ Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`
 
 ### `crewmate init`
 
-Interactive one-time setup that prompts for `provider`, `model`, `interval`, `user`, `prompt`, and `fix` defaults, then writes them to `$XDG_CONFIG_HOME/crewmate/config.json`.
+Interactive one-time setup that prompts for `provider`, `model`, `interval`, `user`, `prompt`, and `fix` defaults, then writes them to `<config>/crewmate/config.json`.
+
+### `crewmate --help` / `crewmate --version`
+
+Print this help text (also `-h`, or no command at all) or the installed version (also `-v`).
 
 ## Configuration
 
 Configuration is read from:
 
-- `$XDG_CONFIG_HOME/crewmate/config.json` for global defaults and per-repo profiles.
+- `<config>/crewmate/config.json` for global defaults and per-repo profiles.
 - `.crewmate.json` in the repository root for per-repo overrides.
+
+`<config>` is `$XDG_CONFIG_HOME`, or `$HOME/.config` (`%USERPROFILE%/.config` on Windows) when it is unset.
 
 CLI flags win, then per-repo `.crewmate.json`, then the global config. In the global file, `profiles["owner/repo"]` takes precedence over `defaults`.
 
 `.crewmate.json` is consulted when `crewmate watch` or `crewmate stream` is run on a single PR inside that repository's working tree. `crewmate watch` in `repo` or `org` scope runs outside the target repository and uses only the global config.
 
-State is persisted in `$XDG_CONFIG_HOME/crewmate/state.json`.
-Structured logs are always appended to `$XDG_CONFIG_HOME/crewmate/crewmate.log`; use `--log` to also mirror them to stderr.
+State is persisted in `<config>/crewmate/state.json`.
+Structured logs are always appended to `<config>/crewmate/crewmate.log`; use `--log` to also mirror them to stderr.
 Log events include `poll`, `mention`, `reply`, `fix`, `warning`, `error`, `info`, and `debug`; see the README for the full schema.
 
 ## Caveats

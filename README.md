@@ -42,6 +42,8 @@ If you are building from source, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md
 crewmate watch [<target>] [options]
 crewmate stream [<target>] [options]
 crewmate init
+crewmate --help
+crewmate --version
 ```
 
 `<target>` is optional when `crewmate watch` or `crewmate stream` is run inside a git repository whose `origin` remote points to GitHub; it defaults to that repository. When provided, it can be:
@@ -88,7 +90,7 @@ Structured logs are appended on a best-effort basis; the file is not rotated or 
 
 Set defaults and per-repo overrides in two JSON files.
 
-- Global config: `<config>/crewmate/config.json` — global `defaults` plus `profiles` keyed by `owner/repo`.
+- Global config: `<config>/crewmate/config.json` — global `defaults` plus `profiles` keyed by `owner/repo` (or by `owner` for an org-scope target).
 - Per-repo config: `.crewmate.json` in the repository root.
 
 Precedence, strongest first:
@@ -99,7 +101,7 @@ Precedence, strongest first:
 
 `repo` and `org` scope watches run outside the target repository and therefore use only the global config.
 
-Both files use the same profile keys: `provider`, `model`, `interval`, `user`, `prompt`, `fix`, `dryRun`, `log`, and `debug`. Unknown keys are ignored. Invalid types for known keys are warned and ignored. In the global file, the `profiles` map keys (owner/repo) are matched case-insensitively. See `assets/config.schema.json` for the full schema; point your IDE at it for validation and autocomplete.
+Both files use the same profile keys: `provider`, `model`, `interval`, `user`, `prompt`, `fix`, `dryRun`, `log`, `debug`, and `unsafeNoUser`. Unknown keys are ignored. Invalid types for known keys are warned and ignored. In the global file, the `profiles` map keys (owner/repo) are matched case-insensitively. See `assets/config.schema.json` for the full schema; point your IDE at it for validation and autocomplete.
 
 Example `.crewmate.json`:
 

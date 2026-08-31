@@ -32,6 +32,10 @@ nub run test:ci
 
 `nub run lint` and `nub run format` will auto-fix most issues; `nub run lint:ci` and `nub run format:ci` only report them.
 
+## Opening a pull request
+
+Keep changes focused, squash to a single commit, and fill in the [pull request template](../.github/pull_request_template.md). CI runs the checks above plus `nub audit` and CodeQL.
+
 ## Common problems
 
 ### `nub install` fails

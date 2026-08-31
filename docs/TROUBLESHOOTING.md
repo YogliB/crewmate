@@ -44,7 +44,7 @@ For single-PR targets, `--dry-run` still runs `gh pr checkout` so it can read th
 
 ## `@crewmate` mention is ignored
 
-`crewmate` only replies to review comments (not replies) that contain `@crewmate` and were not written by `crewmate` itself. The newest unseen mention is handled on each poll; older ones wait for the next poll.
+`crewmate` replies to review comments, PR conversation comments, issue bodies, and issue comments that contain `@crewmate`, are not themselves replies, and were not written by `crewmate`. Comments from other users are skipped unless you pass `--user <login>` or `--unsafe-no-user`, because the filter defaults to the active `gh` user. Every new unseen mention is handled on each poll; comments added during a poll wait for the next one. Run with `--debug` to see why a comment was filtered out.
 
 ## The same conversation comment was answered twice
 
@@ -52,7 +52,7 @@ General PR conversation comments do not expose a stable parent id. If you delete
 
 ## Fix was not applied
 
-The review comment must contain both `@crewmate` and the tag `#fix` (case-insensitive) for `--fix` to run. If the file is missing or `claude` returns no change, `crewmate` replies with the reason.
+The comment must contain both `@crewmate` and the tag `#fix` (case-insensitive) for `--fix` to run, and it must be a review or PR conversation comment on a single-PR target. `--fix` is disabled for repo, org, and issue scope. If the file is missing or the provider returns no change, `crewmate` replies with the reason.
 
 ## Still stuck?
 

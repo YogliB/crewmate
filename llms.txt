@@ -1,15 +1,18 @@
 # crewmate
 
-> crewmate is a command-line tool. The project is currently a minimal bare-metal scaffold; this file will grow alongside real functionality.
+> crewmate is a CLI that watches GitHub PR comments (review and conversation) and issues for `@crewmate` mentions and replies with an explanation or a generated fix.
 
 Important notes:
 
-- Development of this repository requires [Nub](https://nubjs.com); end users will be able to install the published package with npm once it ships.
-- There is no CLI behavior beyond a placeholder entry point yet.
+- End users install the published package with `npm install -g crewmate`; development of this repository requires [Nub](https://nubjs.com).
+- `crewmate` shells out to the GitHub CLI (`gh`) and to a `claude`-shaped LLM provider CLI, so both must be installed and authenticated.
+- `crewmate watch` replies on GitHub, `crewmate stream` emits mentions as NDJSON, and `crewmate init` writes the global config.
 
 ## User docs
 
-- [README.md](https://raw.githubusercontent.com/YogliB/crewmate/main/README.md): Overview and usage.
+- [README.md](https://raw.githubusercontent.com/YogliB/crewmate/main/README.md): Overview, usage, flags, and configuration.
+- [assets/help.md](https://raw.githubusercontent.com/YogliB/crewmate/main/assets/help.md): Help text shown by `crewmate --help`.
+- [docs/TROUBLESHOOTING.md](https://raw.githubusercontent.com/YogliB/crewmate/main/docs/TROUBLESHOOTING.md): Common runtime problems.
 - [docs/CHANGELOG.md](https://raw.githubusercontent.com/YogliB/crewmate/main/docs/CHANGELOG.md): Version history and release notes.
 
 ## Contributor docs
@@ -21,10 +24,13 @@ Important notes:
 ## Implementation
 
 - [src/bin.ts](https://raw.githubusercontent.com/YogliB/crewmate/main/src/bin.ts): CLI entry point.
-- [src/index.ts](https://raw.githubusercontent.com/YogliB/crewmate/main/src/index.ts): Public API and main entry function.
+- [src/index.ts](https://raw.githubusercontent.com/YogliB/crewmate/main/src/index.ts): Command dispatch, poll loop, `watch`, and `stream`.
+- [src/fix.ts](https://raw.githubusercontent.com/YogliB/crewmate/main/src/fix.ts): Reply generation and fix application.
+- [src/config.ts](https://raw.githubusercontent.com/YogliB/crewmate/main/src/config.ts): Global and per-repo configuration resolution.
 
 ## Optional
 
 - [docs/ARCHITECTURE.md](https://raw.githubusercontent.com/YogliB/crewmate/main/docs/ARCHITECTURE.md): Repository overview and structure.
 - [docs/CODE_OF_CONDUCT.md](https://raw.githubusercontent.com/YogliB/crewmate/main/docs/CODE_OF_CONDUCT.md): Community expectations and behavior standards.
+- [assets/config.schema.json](https://raw.githubusercontent.com/YogliB/crewmate/main/assets/config.schema.json): JSON schema for `config.json` and `.crewmate.json`.
 - [package.json](https://raw.githubusercontent.com/YogliB/crewmate/main/package.json): Scripts, dependencies, engines, and package metadata.

@@ -7,21 +7,27 @@
 ```text
 ./
 ├── src/
-│   ├── index.ts   # CLI and watch loop
+│   ├── index.ts   # CLI, watch loop, and stream
 │   ├── bin.ts     # executable entry point
 │   ├── fix.ts     # reply generation and fix application
+│   ├── config.ts  # global and per-repo config resolution
+│   ├── init.ts    # interactive `crewmate init`
 │   ├── log.ts     # structured logging
 │   └── state.ts   # persistent seen-comment state
 ├── dist/          # built ESM output from tsdown
 ├── assets/
-│   ├── help.md    # help text shown for --help
-│   └── logo.png   # README mascot
+│   ├── help.md            # help text shown for --help
+│   ├── SYSTEM_PROMPT.md   # default review comment prompt
+│   ├── config.schema.json # JSON schema for config files
+│   └── logo.webp          # README mascot
 ├── docs/          # user and contributor documentation
 ├── scripts/
-│   └── oxlint-repo-guidelines.js  # custom oxlint rule guarding doc sprawl
+│   ├── oxlint-repo-guidelines.js  # custom oxlint rule guarding doc sprawl
+│   └── oxlint-no-comment.js       # custom oxlint rule guarding comments
 ├── package.json   # scripts, metadata, and release config
-├── tsdown.config.ts  # build configuration
-└── .github/workflows/  # CI checks (lint, format, duplicates, knip, typecheck, test, security)
+├── tsdown.config.ts   # build configuration
+├── vitest.config.ts   # test and coverage configuration
+└── .github/workflows/  # CI (quality, verification, security, PR quality, publish)
 ```
 
 ## Data Flow
@@ -44,12 +50,16 @@ With `--dry-run`, the generated reply or fix is written to stdout as a human-rea
 
 ## State
 
-Seen comment IDs are stored in `$XDG_CONFIG_HOME/crewmate/state.json` as a JSON map of item URLs to arrays of comment IDs. Issue bodies use the state key `issue:<number>` because an issue body has no separate comment id. The file is read at the start of each poll and written before any reply is posted, so an error does not reprocess the same comment. In `--dry-run` mode, state is not written.
+Seen comment IDs are stored in `$XDG_CONFIG_HOME/crewmate/state.json` as a JSON map of item URLs to arrays of `review:<id>`, `conversation:<id>`, or `issue:<number>` keys. Issue bodies use `issue:<number>` because an issue body has no separate comment id. The file is read at the start of each poll and written before any reply is posted, so an error does not reprocess the same comment. In `--dry-run` mode, state is not written.
+
+## Configuration
+
+`src/config.ts` resolves a profile from the global config (`<config>/crewmate/config.json`) and, for single-PR targets inside a working tree, the per-repo `.crewmate.json`. CLI flags win over both. See the README for the keys and precedence rules.
 
 ## External Dependencies
 
 - `gh` — GitHub CLI, used for API calls and `gh pr checkout`.
-- `claude` — Claude CLI, used to generate explanations and fixes.
+- `claude` — default provider CLI, used to generate explanations and fixes; any `claude`-shaped CLI can replace it via `--provider`.
 - `git` — used to commit and push fixes.
 
 ## Security Notes
