@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { setTimeout } from "node:timers/promises";
 import { readFileSync } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
 import process from "node:process";
 import {
 	dispatchMention,
@@ -26,6 +28,24 @@ const EXPECTED_PATH_PARTS = 4;
 const DEFAULT_INTERVAL_SECONDS = 60;
 const MILLISECONDS_PER_SECOND = 1000;
 const HELP_PATH = new URL("../assets/help.md", import.meta.url);
+
+const isEpipeError = (error: unknown): boolean =>
+	error instanceof Error && (error as NodeJS.ErrnoException).code === "EPIPE";
+
+class OutputError extends Error {
+	constructor(message: string, options?: { cause?: unknown }) {
+		super(message, options);
+		this.name = "OutputError";
+	}
+}
+
+const isOutputError = (error: unknown): boolean => error instanceof OutputError;
+
+const handleStdoutError = (error: Error) => {
+	process.exitCode = isEpipeError(error) ? 0 : 1;
+};
+
+process.stdout.on("error", handleStdoutError);
 
 const execFilePromise = promisify(execFile);
 
@@ -472,6 +492,9 @@ const pollScope: PollScope = async (scope, options, onPr, runner, warn) => {
 				try {
 					await onPr(itemUrl, scope);
 				} catch (error) {
+					if (isEpipeError(error) || isOutputError(error)) {
+						throw error;
+					}
 					const message = errorMessage(error);
 					await warn(`poll failed for ${itemUrl}`, {
 						error: message,
@@ -1063,13 +1086,41 @@ const runScope = async (
 			warn,
 		);
 	} catch (error) {
-		await logger("error", {
-			errorType: error instanceof Error ? error.name : "unknown",
-			message: error instanceof Error ? error.message : String(error),
-			stack: error instanceof Error ? error.stack : undefined,
-			url: normalizedItemUrl,
-		}).catch(() => {});
+		if (!isEpipeError(error)) {
+			await logger("error", {
+				errorType: error instanceof Error ? error.name : "unknown",
+				message: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
+				url: normalizedItemUrl,
+			}).catch(() => {});
+		}
 		throw error;
+	}
+};
+
+const emitLine = async (line: string, outputFile?: string): Promise<void> => {
+	await new Promise<void>((resolve, reject) => {
+		process.stdout.write(line, (error) => {
+			if (error) {
+				reject(
+					isEpipeError(error)
+						? error
+						: new OutputError(`stdout write failed: ${error.message}`, { cause: error }),
+				);
+			} else {
+				resolve();
+			}
+		});
+	});
+	if (outputFile !== undefined) {
+		try {
+			// oxlint-disable-next-line security/detect-non-literal-fs-filename -- outputFile is provided by the user via CLI
+			await fs.mkdir(path.dirname(outputFile), { recursive: true });
+			// oxlint-disable-next-line security/detect-non-literal-fs-filename -- outputFile is provided by the user via CLI
+			await fs.appendFile(outputFile, line, "utf8");
+		} catch (error) {
+			throw new OutputError(`output file write failed: ${errorMessage(error)}`, { cause: error });
+		}
 	}
 };
 
@@ -1133,6 +1184,7 @@ const stream = async (
 		interval?: number;
 		iterations?: number;
 		logger?: Logger;
+		outputFile?: string;
 		runner?: Runner;
 		toStderr?: boolean;
 		unsafeNoUser?: boolean;
@@ -1183,7 +1235,8 @@ const stream = async (
 							event.path = mention.path;
 							event.line = mention.line;
 						}
-						process.stdout.write(JSON.stringify(event) + "\n");
+						const line = JSON.stringify(event) + "\n";
+						await emitLine(line, options.outputFile);
 					},
 					runner: ctx.runner,
 					saveAfterEmit: true,
@@ -1196,7 +1249,14 @@ const stream = async (
 	);
 };
 
-const VALUE_FLAGS = new Set(["--interval", "--user", "--prompt", "--model", "--provider"]);
+const VALUE_FLAGS = new Set([
+	"--interval",
+	"--user",
+	"--prompt",
+	"--model",
+	"--provider",
+	"--output-file",
+]);
 
 const parseArgs = (
 	argv: string[],
@@ -1274,13 +1334,22 @@ const runWatch = async (
 		return;
 	}
 	const { booleans, values, target: rawTarget } = parsed;
+	const toStderr = booleans.has("--log") ? true : undefined;
+	const logger = options.logger ?? createLogger({ toStderr: toStderr ?? false });
+	const warn = makeWarn(toStderr ?? false, logger);
+
+	for (const flag of ["--ack", "--json", "--output-file"]) {
+		if (booleans.has(flag) || values.has(flag)) {
+			await warn("unsupported flag", { flag });
+		}
+	}
+
 	const runner = options.runner ?? exec;
 	const target = rawTarget || (await resolveDefaultTarget(runner));
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
 	const allowFix = booleans.has("--fix") ? true : undefined;
 	const debug = booleans.has("--debug") ? true : undefined;
 	const dryRun = booleans.has("--dry-run") ? true : undefined;
-	const toStderr = booleans.has("--log") ? true : undefined;
 	const unsafeNoUser = booleans.has("--unsafe-no-user") ? true : undefined;
 	const allowedUser = values.get("--user");
 	const prompt = values.get("--prompt");
@@ -1328,6 +1397,15 @@ const runStream = async (
 		}
 	}
 
+	const rawOutputFile = values.get("--output-file");
+
+	if (booleans.has("--output-file")) {
+		throw new TypeError("--output-file requires a value");
+	}
+	if (rawOutputFile === "") {
+		throw new TypeError("--output-file path cannot be empty");
+	}
+
 	const runner = options.runner ?? exec;
 	const target = rawTarget || (await resolveDefaultTarget(runner));
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
@@ -1335,6 +1413,7 @@ const runStream = async (
 	const debug = booleans.has("--debug") ? true : undefined;
 	const unsafeNoUser = booleans.has("--unsafe-no-user") ? true : undefined;
 	const allowedUser = values.get("--user");
+	const outputFile = rawOutputFile;
 
 	await stream(target, {
 		ack,
@@ -1344,6 +1423,7 @@ const runStream = async (
 		interval,
 		iterations: options.iterations,
 		logger: options.logger,
+		outputFile,
 		runner: options.runner,
 		toStderr,
 		unsafeNoUser,
@@ -1387,6 +1467,10 @@ const run = Object.assign(
 			}
 			throw new TypeError(`Unknown command '${subcommand}'. Run 'crewmate --help' for usage.`);
 		} catch (error) {
+			if (isEpipeError(error)) {
+				process.exitCode = 0;
+				return;
+			}
 			process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
 			process.exitCode = 1;
 		}

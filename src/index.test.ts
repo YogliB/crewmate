@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
 import run from "./index.js";
 import { CREWMATE_PREFIX, applyFix, dispatchMention } from "./fix.js";
@@ -76,6 +77,28 @@ const getReactionEmoji = (args: string[]): string | undefined => {
 const warnFn = (logger: Logger) => async (message: string, fields?: Record<string, unknown>) => {
 	await logger("warning", { ...fields, message });
 };
+
+const mockStdoutWrite = ({ error, returnFalse }: { error?: Error; returnFalse?: boolean } = {}) =>
+	vi.spyOn(process.stdout, "write").mockImplementation(((
+		line: unknown,
+		encodingOrCallback?: unknown,
+		callback?: unknown,
+	) => {
+		const cb =
+			typeof callback === "function"
+				? callback
+				: typeof encodingOrCallback === "function"
+					? encodingOrCallback
+					: undefined;
+		if (returnFalse && cb) {
+			process.nextTick(cb, error);
+		} else if (error && cb) {
+			cb(error);
+		} else if (cb) {
+			cb();
+		}
+		return !returnFalse;
+	}) as (chunk: string | Uint8Array, ...rest: unknown[]) => boolean);
 
 const getPrompt = (runner: Runner, provider = "claude"): string | undefined => {
 	const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
@@ -508,21 +531,21 @@ const makeFixRunner = (
 
 describe("run dispatch", () => {
 	it("prints the version for --version", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		await run(["--version"]);
 		expect(write).toHaveBeenCalledWith("crewmate/0.4.0\n");
 		write.mockRestore();
 	});
 
 	it("prints the version for -v", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		await run(["-v"]);
 		expect(write).toHaveBeenCalledWith("crewmate/0.4.0\n");
 		write.mockRestore();
 	});
 
 	it("shows help when no subcommand is given", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const previousExitCode = process.exitCode;
 		process.exitCode = NO_EXIT_CODE;
 		await run([]);
@@ -553,7 +576,7 @@ describe("run dispatch", () => {
 		const previousExitCode = process.exitCode;
 		process.argv = ["node", "crewmate", "--version"];
 		process.exitCode = NO_EXIT_CODE;
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		vi.resetModules();
 		await import("./bin.js");
 		expect(write).toHaveBeenCalledWith("crewmate/0.4.0\n");
@@ -935,14 +958,14 @@ describe("run watch flags", () => {
 	});
 
 	it("prints help for watch --help", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		await run(["watch", "--help"]);
 		expect(write).toHaveBeenCalledWith(expect.stringContaining("crewmate watch"));
 		write.mockRestore();
 	});
 
 	it("prints help for watch PR_URL --help", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		await run(["watch", PR_URL, "--help"]);
 		expect(write).toHaveBeenCalledWith(expect.stringContaining("crewmate watch"));
 		write.mockRestore();
@@ -1008,6 +1031,20 @@ describe("run watch flags", () => {
 		});
 		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
 	});
+
+	it("warns that --output-file is not supported for watch", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["watch", PR_URL, "--output-file", "/tmp/out.ndjson"], {
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+		});
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ message: "unsupported flag", flag: "--output-file" }),
+		);
+	});
 });
 
 describe("run stream missing", () => {
@@ -1024,7 +1061,7 @@ describe("run stream missing", () => {
 	});
 
 	it("streams the current repo when no target is provided", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeScopeRunner();
 		await run(["stream"], { iterations: FIRST_ITERATION, runner });
 		const calls = write.mock.calls.map(([line]) => line as string);
@@ -1034,7 +1071,7 @@ describe("run stream missing", () => {
 	});
 
 	it("streams the current repo when an empty target is provided", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeScopeRunner();
 		await run(["stream", ""], { iterations: FIRST_ITERATION, runner });
 		const calls = write.mock.calls.map(([line]) => line as string);
@@ -1075,7 +1112,7 @@ describe("run stream flags", () => {
 	});
 
 	it("emits one NDJSON line per new mention", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
 		const calls = write.mock.calls.map(([line]) => line as string);
@@ -1108,7 +1145,7 @@ describe("run stream flags", () => {
 	});
 
 	it("emits an issue mention with kind issue and commentId equal to the issue number", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeExplainRunner({ issueBody: "@crewmate hello" });
 		await run(["stream", ISSUE_URL], { iterations: FIRST_ITERATION, runner });
 		const calls = write.mock.calls.map(([line]) => line as string);
@@ -1129,7 +1166,7 @@ describe("run stream flags", () => {
 	});
 
 	it("saves state for every new mention in a multi-mention poll", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeMultiMentionRunner({ conversationBody: "@crewmate hi" });
 		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
 		const calls = write.mock.calls.map(([line]) => line as string);
@@ -1143,7 +1180,7 @@ describe("run stream flags", () => {
 	});
 
 	it("does not re-emit mentions that are already in state", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeMultiMentionRunner({ conversationBody: "@crewmate hi" });
 		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
 		const firstCalls = write.mock.calls.map(([line]) => line as string).length;
@@ -1156,7 +1193,7 @@ describe("run stream flags", () => {
 	});
 
 	it("respects --user", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["stream", PR_URL, "--user", "bob"], { iterations: FIRST_ITERATION, runner });
 		const calls = write.mock.calls.map(([line]) => line as string);
@@ -1196,7 +1233,7 @@ describe("run stream flags", () => {
 	});
 
 	it("writes unsupported flag warnings to stderr and not stdout", async () => {
-		const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const stdout = mockStdoutWrite();
 		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(
@@ -1347,7 +1384,7 @@ describe("run stream flags", () => {
 	});
 
 	it("can run outside a git working tree", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const resolveProfile = vi.spyOn(config, "resolveProfile").mockResolvedValue({});
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
@@ -1400,14 +1437,14 @@ describe("run stream flags", () => {
 	});
 
 	it("prints help for stream --help", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		await run(["stream", "--help"]);
 		expect(write).toHaveBeenCalledWith(expect.stringContaining("crewmate stream"));
 		write.mockRestore();
 	});
 
 	it("prints help for stream PR_URL --help", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		await run(["stream", PR_URL, "--help"]);
 		expect(write).toHaveBeenCalledWith(expect.stringContaining("crewmate stream"));
 		write.mockRestore();
@@ -1421,7 +1458,7 @@ describe("run stream flags", () => {
 	});
 
 	it("treats an empty git root as outside a working tree", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = vi.fn((file: string, args: string[]) => {
 			const [command] = args;
 			const endpoint = findEndpoint(args);
@@ -1468,7 +1505,7 @@ describe("run stream flags", () => {
 	});
 
 	it("emits a conversation mention without path or line", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeExplainRunner({
 			answer: "It does something.",
 			body: "thanks",
@@ -1526,7 +1563,7 @@ describe("run stream flags", () => {
 	});
 
 	it("allows --unsafe-no-user to emit mentions from any user", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeExplainRunner({ user: "bob" });
 		await run(["stream", PR_URL, "--unsafe-no-user"], {
 			iterations: FIRST_ITERATION,
@@ -1538,7 +1575,7 @@ describe("run stream flags", () => {
 	});
 
 	it("makes --unsafe-no-user override --user for stream", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeExplainRunner({ user: "charlie" });
 		await run(["stream", PR_URL, "--user", "bob", "--unsafe-no-user"], {
 			iterations: FIRST_ITERATION,
@@ -1550,7 +1587,7 @@ describe("run stream flags", () => {
 	});
 
 	it("makes --user override a config unsafeNoUser flag for stream", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeExplainRunner({ user: "alice" });
 		await run(["stream", PR_URL, "--user", "bob"], {
 			config: { unsafeNoUser: true },
@@ -1582,7 +1619,7 @@ describe("run stream flags", () => {
 	});
 
 	it("proceeds in stream mode when --unsafe-no-user is set and gh user is missing", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = vi.fn((file: string, args: string[]) => {
 			if (file === "gh" && args[0] === "api" && args.includes("user")) {
 				return Promise.resolve("");
@@ -1605,7 +1642,7 @@ describe("run stream flags", () => {
 	});
 
 	it("acknowledges review mentions with --ack", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["stream", PR_URL, "--ack"], { iterations: FIRST_ITERATION, runner });
 		const calls = write.mock.calls.map(([line]) => line as string);
@@ -1623,7 +1660,7 @@ describe("run stream flags", () => {
 	});
 
 	it("acknowledges issue mentions with --ack", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeExplainRunner({ issueBody: "@crewmate hello" });
 		await run(["stream", ISSUE_URL, "--ack"], { iterations: FIRST_ITERATION, runner });
 		const calls = write.mock.calls.map(([line]) => line as string);
@@ -1700,6 +1737,178 @@ describe("run stream flags", () => {
 			"warning",
 			expect.objectContaining({ message: expect.stringContaining("failed to set ack reaction") }),
 		);
+	});
+
+	it("writes mentions to --output-file", async () => {
+		const write = mockStdoutWrite();
+		const outputFile = path.join(tempDir, "events.ndjson");
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--output-file", outputFile], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const stdoutCalls = write.mock.calls.map(([line]) => line as string);
+		expect(stdoutCalls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		const fileContent = await readFile(outputFile, "utf8");
+		expect(fileContent).toContain('"event":"mention"');
+		expect(fileContent).toContain('"commentId":1');
+		write.mockRestore();
+	});
+
+	it("creates the output file directory when it does not exist", async () => {
+		const write = mockStdoutWrite();
+		const outputFile = path.join(tempDir, "nested", "events.ndjson");
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--output-file", outputFile], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const fileContent = await readFile(outputFile, "utf8");
+		expect(fileContent).toContain('"event":"mention"');
+		write.mockRestore();
+	});
+
+	it("exits with an error when stdout write fails", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const write = mockStdoutWrite({ error: new Error("write failed") });
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		write.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+
+	it("exits cleanly when the stdout consumer closes the pipe", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const epipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+		const write = mockStdoutWrite({ error: epipeError });
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		expect(process.exitCode).toBe(NO_EXIT_CODE);
+		write.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+
+	it("delivers each line after the stdout drain when backpressure is applied", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const write = mockStdoutWrite({ returnFalse: true });
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		expect(process.exitCode).toBe(NO_EXIT_CODE);
+		write.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+
+	it("does not save state when the output file cannot be written", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const write = mockStdoutWrite();
+		const outputFile = path.join(tempDir, "isdir");
+		await mkdir(outputFile);
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--output-file", outputFile], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		const state = await run.loadState(run.statePath());
+		expect(state.get(PR_URL)).toBeUndefined();
+		write.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+
+	it("exits with an error when --output-file write fails with EPIPE", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const write = mockStdoutWrite();
+		const epipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+		const appendSpy = vi.spyOn(fs, "appendFile").mockRejectedValueOnce(epipeError);
+		const outputFile = path.join(tempDir, "events.ndjson");
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--output-file", outputFile], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		appendSpy.mockRestore();
+		write.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+
+	it("exits with an error when --output-file is passed without a value", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--output-file"], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+
+	it("exits with an error when --output-file is given an empty path", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--output-file="], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+
+	it("stops repo scope streaming when --output-file cannot be written", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const write = mockStdoutWrite();
+		const outputFile = path.join(tempDir, "isdir");
+		await mkdir(outputFile);
+		const runner = makeScopeRunner();
+		await run(["stream", "owner/repo", "--output-file", outputFile], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		write.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+
+	it("stops repo scope streaming on non-EPIPE stdout write failure", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const write = mockStdoutWrite({ error: new Error("write failed") });
+		const runner = makeScopeRunner();
+		await run(["stream", "owner/repo"], { iterations: FIRST_ITERATION, runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		write.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+});
+
+describe("stdout error handling", () => {
+	it("treats EPIPE on stdout as a clean stop", () => {
+		const epipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		expect(() => process.stdout.emit("error", epipeError)).not.toThrow();
+		expect(process.exitCode).toBe(0);
+		process.exitCode = previousExitCode;
+	});
+
+	it("records a non-zero exit code for non-EPIPE stdout errors", () => {
+		const otherError = new Error("stdout exploded");
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		expect(() => process.stdout.emit("error", otherError)).not.toThrow();
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
 	});
 });
 
@@ -4109,21 +4318,21 @@ describe("conversation comments", () => {
 
 describe("run help", () => {
 	it("prints help when --help is requested", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		await run(["--help"]);
 		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
 		write.mockRestore();
 	});
 
 	it("prints help when -h is requested", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		await run(["-h"]);
 		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
 		write.mockRestore();
 	});
 
 	it("prints help when -h is passed after a target", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = vi.fn(() => Promise.resolve("")) as unknown as Runner;
 		await run(["watch", PR_URL, "-h"], { runner });
 		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
@@ -4133,7 +4342,7 @@ describe("run help", () => {
 
 	it("renders help as ANSI-styled text in a TTY", async () => {
 		const previousIsTTY = process.stdout.isTTY;
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		process.stdout.isTTY = true;
 		await run(["--help"]);
 		const output = String(write.mock.calls[0][0]);
@@ -4148,7 +4357,7 @@ describe("run help", () => {
 
 	it("renders help without ANSI when output is not a TTY", async () => {
 		const previousIsTTY = process.stdout.isTTY;
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		process.stdout.isTTY = false;
 		await run(["--help"]);
 		const output = String(write.mock.calls[0][0]);
@@ -4162,7 +4371,7 @@ describe("run help", () => {
 	it("renders help without ANSI when NO_COLOR is set", async () => {
 		const previousIsTTY = process.stdout.isTTY;
 		const previousNoColor = process.env.NO_COLOR;
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		process.stdout.isTTY = true;
 		process.env.NO_COLOR = "1";
 		await run(["--help"]);
@@ -5457,7 +5666,7 @@ describe("scope targets", () => {
 	});
 
 	it("streams a repo scope and emits one line per discovered PR", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeScopeRunner();
 		await run(["stream", REPO_TARGET], { iterations: FIRST_ITERATION, runner });
 		const calls = write.mock.calls.map(([line]) => line as string);
@@ -5471,7 +5680,7 @@ describe("scope targets", () => {
 	});
 
 	it("streams with --debug and emits debug log events", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const logger = vi.fn() as unknown as Logger & {
 			mock: { calls: [string, Record<string, unknown>][] };
 		};
@@ -5486,7 +5695,7 @@ describe("scope targets", () => {
 	});
 
 	it("streams an org scope and sets GH_HOST", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const write = mockStdoutWrite();
 		const runner = makeScopeRunner({ prUrl: "https://ghe.example.com/owner/repo/pull/1" });
 		await run(["stream", "https://ghe.example.com/orgs/myorg"], {
 			iterations: FIRST_ITERATION,

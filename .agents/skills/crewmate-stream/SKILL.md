@@ -26,7 +26,7 @@ You can also copy `.agents/skills/crewmate-stream/SKILL.md` from the repository 
 ## Start the stream
 
 ```bash
-crewmate stream <pr-url-or-shorthand> [--user <login>] [--interval <seconds>] [--log] [--ack]
+crewmate stream <pr-url-or-shorthand> [--user <login>] [--interval <seconds>] [--log] [--ack] [--output-file <path>]
 ```
 
 - `<pr-url-or-shorthand>`: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`. Can also be an issue, a repo, an org, or a GHES full URL.
@@ -34,6 +34,7 @@ crewmate stream <pr-url-or-shorthand> [--user <login>] [--interval <seconds>] [-
 - `--interval`: seconds between polls (default 60).
 - `--log`: also mirror log lines to stderr.
 - `--ack`: post an `eyes` reaction on each new mention and include the returned `reactionId` in the event.
+- `--output-file`: also append each emitted NDJSON line to the given file, creating its parent directory if needed.
 
 ## Event schema
 
