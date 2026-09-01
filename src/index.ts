@@ -32,6 +32,20 @@ const HELP_PATH = new URL("../assets/help.md", import.meta.url);
 const isEpipeError = (error: unknown): boolean =>
 	error instanceof Error && (error as NodeJS.ErrnoException).code === "EPIPE";
 
+class OutputError extends Error {
+	code?: string;
+	constructor(message: string, options?: { cause?: unknown }) {
+		super(message, options);
+		this.name = "OutputError";
+		const cause = options?.cause;
+		if (cause instanceof Error && "code" in cause) {
+			this.code = (cause as NodeJS.ErrnoException).code;
+		}
+	}
+}
+
+const isOutputError = (error: unknown): boolean => error instanceof OutputError;
+
 const handleStdoutError = (error: Error) => {
 	process.exitCode = isEpipeError(error) ? 0 : 1;
 };
@@ -483,7 +497,7 @@ const pollScope: PollScope = async (scope, options, onPr, runner, warn) => {
 				try {
 					await onPr(itemUrl, scope);
 				} catch (error) {
-					if (isEpipeError(error)) {
+					if (isEpipeError(error) || isOutputError(error)) {
 						throw error;
 					}
 					const message = errorMessage(error);
@@ -1092,15 +1106,22 @@ const runScope = async (
 const emitLine = async (line: string, outputFile?: string): Promise<void> => {
 	await new Promise<void>((resolve, reject) => {
 		process.stdout.write(line, (error) => {
-			if (error) reject(error);
-			else resolve();
+			if (error) {
+				reject(new OutputError(`stdout write failed: ${error.message}`, { cause: error }));
+			} else {
+				resolve();
+			}
 		});
 	});
 	if (outputFile !== undefined) {
-		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- outputFile is provided by the user via CLI
-		await mkdir(path.dirname(outputFile), { recursive: true });
-		// oxlint-disable-next-line security/detect-non-literal-fs-filename -- outputFile is provided by the user via CLI
-		await appendFile(outputFile, line, "utf8");
+		try {
+			// oxlint-disable-next-line security/detect-non-literal-fs-filename -- outputFile is provided by the user via CLI
+			await mkdir(path.dirname(outputFile), { recursive: true });
+			// oxlint-disable-next-line security/detect-non-literal-fs-filename -- outputFile is provided by the user via CLI
+			await appendFile(outputFile, line, "utf8");
+		} catch (error) {
+			throw new OutputError(`output file write failed: ${errorMessage(error)}`, { cause: error });
+		}
 	}
 };
 

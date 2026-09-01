@@ -1844,6 +1844,33 @@ describe("run stream flags", () => {
 		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
 		process.exitCode = previousExitCode;
 	});
+
+	it("stops repo scope streaming when --output-file cannot be written", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const write = mockStdoutWrite();
+		const outputFile = path.join(tempDir, "isdir");
+		await mkdir(outputFile);
+		const runner = makeScopeRunner();
+		await run(["stream", "owner/repo", "--output-file", outputFile], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		write.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+
+	it("stops repo scope streaming on non-EPIPE stdout write failure", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const write = mockStdoutWrite({ error: new Error("write failed") });
+		const runner = makeScopeRunner();
+		await run(["stream", "owner/repo"], { iterations: FIRST_ITERATION, runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		write.mockRestore();
+		process.exitCode = previousExitCode;
+	});
 });
 
 describe("stdout error handling", () => {
