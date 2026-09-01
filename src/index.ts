@@ -9,6 +9,7 @@ import {
 	getLogin,
 	CREWMATE_PREFIX,
 	type Mention,
+	reactionEndpoint,
 	type Runner,
 	stripFences,
 } from "./fix.js";
@@ -301,6 +302,55 @@ const saveMention = async (
 	const stateKey = `${mention.kind}:${mention.id}`;
 	state.set(prUrl, [...(state.get(prUrl) ?? []), stateKey]);
 	await saveState(state);
+};
+
+const ackMention = async (
+	mention: Mention,
+	owner: string,
+	repo: string,
+	number: string,
+	ghHost: string,
+	runner: Runner,
+	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
+): Promise<number | undefined> => {
+	const commentId = mention.kind === "issue" ? Number(number) : mention.id;
+	const base = {
+		commentId,
+		kind: mention.kind,
+		number,
+		owner,
+		repo,
+	};
+	try {
+		const output = await runner(
+			"gh",
+			[
+				"api",
+				"--method",
+				"POST",
+				reactionEndpoint({ owner, repo, kind: mention.kind, number, commentId }),
+				"-f",
+				"content=eyes",
+			],
+			{ env: { GH_HOST: ghHost } },
+		);
+		if (output.trim() === "") {
+			await warn("failed to set ack reaction: empty response", base);
+			return undefined;
+		}
+		try {
+			const json = JSON.parse(output) as { id?: unknown };
+			if (typeof json.id === "number") {
+				return json.id;
+			}
+			await warn("failed to set ack reaction: response did not contain a numeric id", base);
+		} catch (error) {
+			await warn(`failed to set ack reaction: ${errorMessage(error)}`, base);
+		}
+	} catch (error) {
+		await warn(`failed to set ack reaction: ${errorMessage(error)}`, base);
+	}
+	return undefined;
 };
 
 const pollMentions = async (
@@ -1076,6 +1126,7 @@ const watch = async (
 const stream = async (
 	target: string,
 	options: {
+		ack?: boolean;
 		allowedUser?: string;
 		config?: Partial<Profile>;
 		debug?: boolean;
@@ -1093,6 +1144,7 @@ const stream = async (
 		{
 			onPr: async (ctx, prUrl) => {
 				const parsed = parseTarget(prUrl) as Extract<Scope, { kind: "pr" | "issue" }>;
+				const ghHost = hostWithPort(parsed.host, parsed.port);
 				await pollMentions(prUrl, {
 					allowFix: false,
 					allowedUser: ctx.allowedUser,
@@ -1100,6 +1152,18 @@ const stream = async (
 					dryRun: false,
 					logger: ctx.logger,
 					onMention: async (mention, _checkedOut) => {
+						let reactionId: number | undefined;
+						if (options.ack) {
+							reactionId = await ackMention(
+								mention,
+								parsed.owner,
+								parsed.repo,
+								parsed.number,
+								ghHost,
+								ctx.runner,
+								ctx.warn,
+							);
+						}
 						const event: Record<string, unknown> = {
 							at: new Date().toISOString(),
 							event: "mention",
@@ -1112,6 +1176,9 @@ const stream = async (
 							body: mention.body,
 							url: prUrl,
 						};
+						if (reactionId !== undefined) {
+							event.reactionId = reactionId;
+						}
 						if (mention.kind === "review") {
 							event.path = mention.path;
 							event.line = mention.line;
@@ -1264,11 +1331,13 @@ const runStream = async (
 	const runner = options.runner ?? exec;
 	const target = rawTarget || (await resolveDefaultTarget(runner));
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
+	const ack = booleans.has("--ack") ? true : undefined;
 	const debug = booleans.has("--debug") ? true : undefined;
 	const unsafeNoUser = booleans.has("--unsafe-no-user") ? true : undefined;
 	const allowedUser = values.get("--user");
 
 	await stream(target, {
+		ack,
 		allowedUser,
 		config: options.config,
 		debug,

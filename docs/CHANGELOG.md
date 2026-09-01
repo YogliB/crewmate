@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Split agent skills into `crewmate` (the agent-in-charge handler) and `crewmate-stream` (the CLI pump).
+- Add `--ack` to `crewmate stream` to post an `eyes` reaction and emit the returned `reactionId` in the NDJSON event.
+
 ## 0.3.1
 
 - `crewmate stream` warns about unsupported flags before resolving the default target.

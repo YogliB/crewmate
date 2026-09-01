@@ -1,40 +1,17 @@
 ---
 name: crewmate
-description: Run crewmate in stream mode and handle incoming @crewmate PR mentions as NDJSON events. Use when the user wants to poll a PR for crewmate mentions, consume the crewmate NDJSON stream, or build an agent that responds to review and conversation comments.
+description: Respond to a @crewmate mention as the agent-in-charge. Use when a crewmate stream event is received or the user wants to reply to, explain, or fix a PR review, conversation, or issue comment.
 ---
 
-# crewmate stream
+# crewmate
 
-`crewmate stream <pr-url-or-shorthand>` emits one JSON object per new `@crewmate` mention on stdout. It does not invoke the provider, post replies, or run `gh pr checkout`.
+This skill makes the agent the handler for `@crewmate` mentions. The `crewmate` CLI streams events; the agent reads each event and decides what to do.
 
-## Install
+Do not run `crewmate watch` in this mode. `watch` invokes a provider CLI and is meant for fully autonomous runs. The agent is the provider here.
 
-If `crewmate` is not installed, install the CLI first:
+## What you will receive
 
-```bash
-npm install -g crewmate
-```
-
-If this skill is not installed, add it from the repository:
-
-```bash
-npx skills add YogliB/crewmate --skill crewmate
-```
-
-You can also copy `.agents/skills/crewmate/SKILL.md` from the repository into your agent's skills directory.
-
-## Start the stream
-
-```bash
-crewmate stream <pr-url-or-shorthand> [--user <login>] [--interval <seconds>] [--log]
-```
-
-- `<pr-url-or-shorthand>`: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`.
-- `--user`: only emit mentions from this GitHub login.
-- `--interval`: seconds between polls (default 60).
-- `--log`: also mirror log lines to stderr.
-
-## Event schema
+A single NDJSON event from `crewmate stream` or `crewmate stream <url> --ack`:
 
 ```json
 {
@@ -44,6 +21,7 @@ crewmate stream <pr-url-or-shorthand> [--user <login>] [--interval <seconds>] [-
 	"repo": "repo",
 	"number": 4,
 	"commentId": 123,
+	"reactionId": 456,
 	"kind": "review",
 	"user": "alice",
 	"body": "@crewmate explain this line",
@@ -53,58 +31,42 @@ crewmate stream <pr-url-or-shorthand> [--user <login>] [--interval <seconds>] [-
 }
 ```
 
-Fields:
+## Handler flow
 
-- `at`: ISO-8601 timestamp.
-- `event`: always `"mention"`.
-- `owner`, `repo`, `number`: PR coordinates.
-- `commentId`: GitHub comment id.
-- `kind`: `"review"` or `"conversation"`.
-- `user`: comment author's GitHub login (may be empty if unavailable).
-- `body`: full comment body.
-- `url`: normalized PR URL.
-- `path`, `line`: only present for `kind: "review"`.
+1. **Skip non-mention events.** If `event !== "mention"`, ignore.
+2. **Read the comment.** Use `body`, `kind`, `path`, `line` (for `review`), and `number`.
+3. **Check for `#fix`.** A `#fix` tag in the body (case-insensitive) means the user wants a code change. Only `review` and `conversation` comments on a PR can be fixed; issue mentions cannot.
+4. **Fetch context.**
+   - `review`: get the file at `path` from the local checkout, or from the PR head with `gh api repos/<owner>/<repo>/contents/<path>?ref=refs/pull/<number>/head -H "Accept: application/vnd.github.raw"`.
+   - `conversation`: get the PR's changed files with `gh api repos/<owner>/<repo>/pulls/<number>/files?per_page=100`, then read each file's content.
+   - `issue`: no file context needed.
+5. **Generate the answer.** Use the agent's own model. Do not shell out to `claude -p` or `crewmate watch`. For review comments, `assets/SYSTEM_PROMPT.md` is a good starting point.
+6. **Post the reply.** Prefix it with `⚓ crewmate:` so `crewmate` can recognize its own replies. Use the correct endpoint:
+   - `review`: `gh api --method POST repos/<owner>/<repo>/pulls/<number>/comments/<commentId>/replies -f body=<text>`
+   - `conversation` / `issue`: `gh api --method POST repos/<owner>/<repo>/issues/<number>/comments -f body=<text>`
+7. **Manage the reaction.**
+   - If the stream was started with `--ack`, it already posted an `eyes` reaction and gave you `reactionId`.
+   - Delete it with `gh api --method DELETE repos/<owner>/<repo>/.../reactions/<reactionId>` (use the same endpoint the CLI used).
+   - Post the final reaction: `gh api --method POST repos/<owner>/<repo>/.../reactions -f content=<emoji>`.
+   - Use `+1` for a normal reply, `rocket` for a successful fix, `-1` for an error or no change.
+8. **Apply a fix if requested.**
+   - For a `review` fix: write the corrected file content to `path` in the local checkout, then `git add`, `git commit -m "fix: address crewmate comment"`, `git push`. If there is no checkout, post the corrected content as a reply instead.
+   - For a `conversation` fix: `gh pr checkout -R <owner>/<repo> <number>`, then apply the same flow to the changed files.
+9. **Do not double-post.** `crewmate stream` already marks the mention as seen. As long as your reply starts with `⚓ crewmate:`, it should not be reprocessed.
 
-## Handle a mention
+## Start the stream
 
-1. Parse each NDJSON line as JSON.
-2. If `event !== "mention"`, skip.
-3. Inspect `body` and `kind`.
-4. If you want `crewmate` to reply, explain, or fix, run `crewmate watch <url>` or `crewmate watch <url> --fix` **instead of** `crewmate stream`. `crewmate stream` and `crewmate watch` share the same state file, so a mention emitted by stream is already marked as seen and `crewmate watch` would skip it.
-5. If you are building a custom responder on top of `crewmate stream`, reply manually:
-   - Review comment reply: `gh api repos/<owner>/<repo>/pulls/<number>/comments/<commentId>/replies -f body=<text>`.
-   - Conversation comment: `gh api repos/<owner>/<repo>/issues/<number>/comments -f body=<text>`.
-6. Do not double-post; `crewmate` already tracks seen comment ids in `$XDG_CONFIG_HOME/crewmate/state.json` and saves state after each stdout write in stream mode.
-
-## Example one-shot handler
-
-A custom responder that posts a manual reply. This is useful when you want different behavior from `crewmate watch`.
+If no stream is running, start it with:
 
 ```bash
-crewmate stream owner/repo/pull/4 --user myorg-bot | while IFS= read -r line; do
-	event=$(echo "$line" | jq -r '.event')
-	[ "$event" = "mention" ] || continue
-
-	owner=$(echo "$line" | jq -r '.owner')
-	repo=$(echo "$line" | jq -r '.repo')
-	number=$(echo "$line" | jq -r '.number')
-	commentId=$(echo "$line" | jq -r '.commentId')
-	kind=$(echo "$line" | jq -r '.kind')
-	body=$(echo "$line" | jq -r '.body')
-
-	if [ "$kind" = "review" ] && printf '%s' "$body" | grep -qi '#fix'; then
-		# Generate and apply your own fix, then reply to the review comment.
-		reply="Got it — I'll push a fix for this."
-		gh api "repos/${owner}/${repo}/pulls/${number}/comments/${commentId}/replies" -f "body=${reply}"
-	else
-		reply="Looking into this."
-		if [ "$kind" = "review" ]; then
-			gh api "repos/${owner}/${repo}/pulls/${number}/comments/${commentId}/replies" -f "body=${reply}"
-		else
-			gh api "repos/${owner}/${repo}/issues/${number}/comments" -f "body=${reply}"
-		fi
-	fi
-done
+crewmate stream <pr-url-or-shorthand> --ack
 ```
 
-If you just want `crewmate` to reply or fix, use `crewmate watch` instead.
+Then process each line. The `--ack` flag is recommended so the human sees an `eyes` reaction while the agent is thinking.
+
+## Common endpoints
+
+- Review comment reply: `gh api --method POST repos/<owner>/<repo>/pulls/<number>/comments/<commentId>/replies -f body=<text>`
+- Conversation / issue comment: `gh api --method POST repos/<owner>/<repo>/issues/<number>/comments -f body=<text>`
+- Delete a reaction: `gh api --method DELETE repos/<owner>/<repo>/[pulls|issues]/comments/<commentId>/reactions/<reactionId>` or `repos/<owner>/<repo>/issues/<number>/reactions/<reactionId>`
+- Post a reaction: `gh api --method POST repos/<owner>/<repo>/[pulls|issues]/comments/<commentId>/reactions -f content=<emoji>` or `repos/<owner>/<repo>/issues/<number>/reactions -f content=<emoji>`
