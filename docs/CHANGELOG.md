@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0
+
 - Split agent skills into `crewmate` (the agent-in-charge handler) and `crewmate-stream` (the CLI pump).
 - Add `--ack` to `crewmate stream` to post an `eyes` reaction and emit the returned `reactionId` in the NDJSON event.
 
