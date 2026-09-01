@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { setTimeout } from "node:timers/promises";
 import { readFileSync } from "node:fs";
-import { appendFile, mkdir } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import {
@@ -33,14 +33,9 @@ const isEpipeError = (error: unknown): boolean =>
 	error instanceof Error && (error as NodeJS.ErrnoException).code === "EPIPE";
 
 class OutputError extends Error {
-	code?: string;
 	constructor(message: string, options?: { cause?: unknown }) {
 		super(message, options);
 		this.name = "OutputError";
-		const cause = options?.cause;
-		if (cause instanceof Error && "code" in cause) {
-			this.code = (cause as NodeJS.ErrnoException).code;
-		}
 	}
 }
 
@@ -1107,7 +1102,11 @@ const emitLine = async (line: string, outputFile?: string): Promise<void> => {
 	await new Promise<void>((resolve, reject) => {
 		process.stdout.write(line, (error) => {
 			if (error) {
-				reject(new OutputError(`stdout write failed: ${error.message}`, { cause: error }));
+				reject(
+					isEpipeError(error)
+						? error
+						: new OutputError(`stdout write failed: ${error.message}`, { cause: error }),
+				);
 			} else {
 				resolve();
 			}
@@ -1116,9 +1115,9 @@ const emitLine = async (line: string, outputFile?: string): Promise<void> => {
 	if (outputFile !== undefined) {
 		try {
 			// oxlint-disable-next-line security/detect-non-literal-fs-filename -- outputFile is provided by the user via CLI
-			await mkdir(path.dirname(outputFile), { recursive: true });
+			await fs.mkdir(path.dirname(outputFile), { recursive: true });
 			// oxlint-disable-next-line security/detect-non-literal-fs-filename -- outputFile is provided by the user via CLI
-			await appendFile(outputFile, line, "utf8");
+			await fs.appendFile(outputFile, line, "utf8");
 		} catch (error) {
 			throw new OutputError(`output file write failed: ${errorMessage(error)}`, { cause: error });
 		}

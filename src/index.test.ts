@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import fs from "node:fs/promises";
 import path from "node:path";
 import run from "./index.js";
 import { CREWMATE_PREFIX, applyFix, dispatchMention } from "./fix.js";
@@ -1817,6 +1818,24 @@ describe("run stream flags", () => {
 		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
 		const state = await run.loadState(run.statePath());
 		expect(state.get(PR_URL)).toBeUndefined();
+		write.mockRestore();
+		process.exitCode = previousExitCode;
+	});
+
+	it("exits with an error when --output-file write fails with EPIPE", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const write = mockStdoutWrite();
+		const epipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+		const appendSpy = vi.spyOn(fs, "appendFile").mockRejectedValueOnce(epipeError);
+		const outputFile = path.join(tempDir, "events.ndjson");
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--output-file", outputFile], {
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		appendSpy.mockRestore();
 		write.mockRestore();
 		process.exitCode = previousExitCode;
 	});
