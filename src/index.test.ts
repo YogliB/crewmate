@@ -1597,6 +1597,110 @@ describe("run stream flags", () => {
 		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
 		write.mockRestore();
 	});
+
+	it("does not post reactions without --ack", async () => {
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
+		expect(countCalls(runner, "gh", isReactionPost)).toBe(NO_CALLS);
+	});
+
+	it("acknowledges review mentions with --ack", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--ack"], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		const events = calls
+			.filter((line) => line.includes('"event":"mention"'))
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			commentId: FIRST_ID,
+			kind: "review",
+			reactionId: expect.any(Number),
+		});
+		expect(countCalls(runner, "gh", isReactionPost)).toBe(1);
+		write.mockRestore();
+	});
+
+	it("acknowledges issue mentions with --ack", async () => {
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		const runner = makeExplainRunner({ issueBody: "@crewmate hello" });
+		await run(["stream", ISSUE_URL, "--ack"], { iterations: FIRST_ITERATION, runner });
+		const calls = write.mock.calls.map(([line]) => line as string);
+		const events = calls
+			.filter((line) => line.includes('"event":"mention"'))
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			commentId: 4,
+			kind: "issue",
+			reactionId: expect.any(Number),
+		});
+		expect(countCalls(runner, "gh", isReactionPost)).toBe(1);
+		write.mockRestore();
+	});
+
+	it("warns and continues when --ack reaction returns an empty response", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && isReactionPost(args)) {
+				return Promise.resolve("");
+			}
+			return resolveExplain(file, args, { answer: "" });
+		}) as unknown as Runner;
+		await run(["stream", PR_URL, "--ack"], { iterations: FIRST_ITERATION, logger, runner });
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ message: "failed to set ack reaction: empty response" }),
+		);
+	});
+
+	it("warns and continues when --ack reaction response has a non-numeric id", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && isReactionPost(args)) {
+				return Promise.resolve(JSON.stringify({ id: "not-a-number" }));
+			}
+			return resolveExplain(file, args, { answer: "" });
+		}) as unknown as Runner;
+		await run(["stream", PR_URL, "--ack"], { iterations: FIRST_ITERATION, logger, runner });
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({
+				message: "failed to set ack reaction: response did not contain a numeric id",
+			}),
+		);
+	});
+
+	it("warns and continues when --ack reaction response is not valid json", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && isReactionPost(args)) {
+				return Promise.resolve("not json");
+			}
+			return resolveExplain(file, args, { answer: "" });
+		}) as unknown as Runner;
+		await run(["stream", PR_URL, "--ack"], { iterations: FIRST_ITERATION, logger, runner });
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ message: expect.stringContaining("failed to set ack reaction") }),
+		);
+	});
+
+	it("warns and continues when --ack reaction post fails", async () => {
+		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
+		const runner = vi.fn((file: string, args: string[]) => {
+			if (file === "gh" && isReactionPost(args)) {
+				return Promise.reject(new Error("reaction failed"));
+			}
+			return resolveExplain(file, args, { answer: "" });
+		}) as unknown as Runner;
+		await run(["stream", PR_URL, "--ack"], { iterations: FIRST_ITERATION, logger, runner });
+		expect(logger).toHaveBeenCalledWith(
+			"warning",
+			expect.objectContaining({ message: expect.stringContaining("failed to set ack reaction") }),
+		);
+	});
 });
 
 describe("parsePrUrl", () => {

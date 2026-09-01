@@ -39,11 +39,12 @@ Emit new `@crewmate` mentions as NDJSON to stdout without invoking the provider 
 
 - `--interval <seconds>` Seconds between polls (default: 60)
 - `--log` Also mirror structured log lines to stderr.
+- `--ack` Post an `eyes` reaction to each new mention and include the returned `reactionId` in the emitted event. Useful when an agent is the handler.
 - `--user <login>` Only emit mentions from this GitHub login (defaults to the active `gh` user when omitted and not set in config)
 - `--unsafe-no-user` Emit mentions from any GitHub user. Disables the default filter that is set to the active `gh` user.
 - `--debug` Emit extra poll pipeline detail (fetched comments, mention-filter results, new mentions) to the log.
 
-Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and for review comments `path` and `line`. State is saved after the line is written, so a restart re-fetches but does not re-emit already seen mentions.
+Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and for review comments `path` and `line`. When `--ack` is used, `reactionId` is also included. State is saved after the line is written, so a restart re-fetches but does not re-emit already seen mentions.
 
 ### `crewmate init`
 

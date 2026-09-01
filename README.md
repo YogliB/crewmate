@@ -28,10 +28,11 @@ You need:
 npm install -g crewmate
 ```
 
-You can also install the `crewmate` skill from this repository:
+You can also install the `crewmate` skills from this repository:
 
 ```bash
 npx skills add YogliB/crewmate --skill crewmate
+npx skills add YogliB/crewmate --skill crewmate-stream
 ```
 
 If you are building from source, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
@@ -75,11 +76,12 @@ Emit new `@crewmate` mentions as NDJSON to stdout without invoking a provider or
 
 - `--interval <seconds>` — seconds between polls. Default is `60`.
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
+- `--ack` — post an `eyes` reaction to each new mention and include the returned `reactionId` in the emitted event. Useful when an agent is the handler.
 - `--user <login>` — only emit mentions from this GitHub user (defaults to the active `gh` user when omitted and not set in config). Always respected.
 - `--unsafe-no-user` — emit mentions from any GitHub user. Disables the default filter that falls back to the active `gh` user. This flag wins over `--user`.
 - `--debug` — emit extra poll pipeline detail (`fetched-comments`, `mention-filter`, `new-mentions`) to the log.
 
-`crewmate stream` can run outside a git working tree and uses only the global config. The `<target>` can be a single PR, a repo, an org, or a GHES full URL. Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and `path`/`line` for review comments.
+`crewmate stream` can run outside a git working tree and uses only the global config. The `<target>` can be a single PR, a repo, an org, or a GHES full URL. Each emitted line is a JSON object with `at`, `event`, `owner`, `repo`, `number`, `commentId`, `kind`, `user`, `body`, `url`, and `path`/`line` for review comments. When `--ack` is used, `reactionId` is also included.
 
 State (seen comment IDs) is stored in `<config>/crewmate/state.json` and logs in `<config>/crewmate/crewmate.log`, where `<config>` is `$XDG_CONFIG_HOME`, `$HOME/.config` (or `%USERPROFILE%/.config` on Windows), or the current working directory if none of those are set.
 Structured logs are appended on a best-effort basis; the file is not rotated or truncated. Use `--log` to also mirror each log line to stderr.

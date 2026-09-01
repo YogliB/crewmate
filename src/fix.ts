@@ -115,15 +115,27 @@ const logContext = (
 	repo: ctx.repo,
 });
 
-const reactionTarget = (ctx: ReplyContext): string =>
-	ctx.kind === "issue" ? `issue ${ctx.number}` : `comment ${ctx.commentId}`;
+type ReactionTarget = {
+	commentId: number;
+	kind: Mention["kind"];
+	number: string;
+	owner: string;
+	repo: string;
+};
 
-const reactionEndpoint = (ctx: ReplyContext, previousId?: number): string => {
-	if (ctx.kind === "issue") {
-		return `repos/${ctx.owner}/${ctx.repo}/issues/${ctx.number}/reactions${previousId === undefined ? "" : `/${previousId}`}`;
+const reactionTarget = ({ kind, number, commentId }: ReactionTarget): string =>
+	kind === "issue" ? `issue ${number}` : `comment ${commentId}`;
+
+const reactionEndpoint = (
+	{ owner, repo, kind, number, commentId }: ReactionTarget,
+	previousId?: number,
+): string => {
+	const suffix = previousId === undefined ? "" : `/${previousId}`;
+	if (kind === "issue") {
+		return `repos/${owner}/${repo}/issues/${number}/reactions${suffix}`;
 	}
-	const kind = ctx.kind === "conversation" ? "issues" : "pulls";
-	return `repos/${ctx.owner}/${ctx.repo}/${kind}/comments/${ctx.commentId}/reactions${previousId === undefined ? "" : `/${previousId}`}`;
+	const subpath = kind === "conversation" ? "issues" : "pulls";
+	return `repos/${owner}/${repo}/${subpath}/comments/${commentId}/reactions${suffix}`;
 };
 
 const setReaction = async (ctx: ReplyContext, emoji: string): Promise<void> => {
@@ -802,4 +814,4 @@ const dispatchMention = async (
 	}
 };
 
-export { CREWMATE_PREFIX, stripFences, getLogin, dispatchMention, errorMessage };
+export { CREWMATE_PREFIX, stripFences, getLogin, dispatchMention, errorMessage, reactionEndpoint };
