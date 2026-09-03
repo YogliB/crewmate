@@ -15,6 +15,8 @@ const allowedDocs = new Set([
 	"docs/SECURITY.md",
 	"docs/TROUBLESHOOTING.md",
 	".github/pull_request_template.md",
+	"skills/crewmate/SKILL.md",
+	"skills/crewmate-stream/SKILL.md",
 ]);
 const docsAnchorFile = path.resolve("src/index.ts");
 let docViolations;
