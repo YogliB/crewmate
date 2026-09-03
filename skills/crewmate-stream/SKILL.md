@@ -21,7 +21,7 @@ If this skill is not installed, add it from the repository:
 npx skills add YogliB/crewmate --skill crewmate-stream
 ```
 
-You can also copy `.agents/skills/crewmate-stream/SKILL.md` from the repository into your agent's skills directory.
+You can also copy `skills/crewmate-stream/SKILL.md` from the repository into your agent's skills directory.
 
 ## Start the stream
 
