@@ -1,5 +1,10 @@
 # crewmate
 
+[![Known Vulnerabilities](https://snyk.io/test/npm/crewmate/badge.svg)](https://snyk.io/test/npm/crewmate)
+[![npm package version](https://badgen.net/npm/v/crewmate)](https://npm.im/crewmate)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-v3.0%20adopted-ff69b4.svg)](docs/CODE_OF_CONDUCT.md)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](http://makeapullrequest.com)
+
 <img src="assets/logo.webp" alt="crewmate mascot" width="120" />
 
 Watch GitHub PR comments (review and conversation) and issues for `@crewmate` mentions and reply with an explanation or a generated fix.
