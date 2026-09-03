@@ -137,7 +137,9 @@ const resolveReaction = (args: string[]): string | undefined => {
 const conversationComments = (body?: string, user = "alice"): string =>
 	body === undefined || body === ""
 		? "[]"
-		: JSON.stringify([[{ body, id: THIRD_ID, user: { login: user } }]]);
+		: JSON.stringify([
+				[{ body, id: THIRD_ID, created_at: "2026-09-03T00:00:00.000Z", user: { login: user } }],
+			]);
 
 const issueBodyResponse = (body: string, number: number, user = "alice"): string =>
 	JSON.stringify({ number, body, user: { login: user } });
@@ -1320,6 +1322,37 @@ describe("run stream flags", () => {
 		}
 	});
 
+	it("exits with an error when --since is used without a value", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since"], { runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+
+	it("exits with an error for an invalid --since timestamp", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since", "not-a-date"], { runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+
+	it("accepts a valid --since timestamp", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since", "2026-09-02T00:00:00.000Z"], {
+			config: { interval: 0 },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(process.exitCode).toBe(NO_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+
 	it("passes options.iterations to stream", async () => {
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["stream", PR_URL], {
@@ -2486,6 +2519,49 @@ describe("findNewMentions", () => {
 		expect(mentions).toHaveLength(TWO_CALLS);
 		expect(mentions[0].id).toBe(SECOND_ID);
 		expect(mentions[1].id).toBe(FIRST_ID);
+	});
+
+	it("filters mentions older than the since timestamp", () => {
+		const comments: Mention[] = [
+			{
+				body: "@crewmate old",
+				createdAt: "2026-09-01T00:00:00.000Z",
+				id: FIRST_ID,
+				inReplyToId: undefined,
+				kind: "review",
+				line: FIRST_LINE,
+				path: "src/index.ts",
+				user: { login: "alice" },
+			},
+			{
+				body: "@crewmate new",
+				createdAt: "2026-09-03T00:00:00.000Z",
+				id: SECOND_ID,
+				inReplyToId: undefined,
+				kind: "review",
+				line: FIRST_LINE,
+				path: "src/index.ts",
+				user: { login: "alice" },
+			},
+			{
+				body: "@crewmate no timestamp",
+				id: THIRD_ID,
+				inReplyToId: undefined,
+				kind: "review",
+				line: FIRST_LINE,
+				path: "src/index.ts",
+				user: { login: "alice" },
+			},
+		];
+		const mentions = run.findNewMentions(
+			comments,
+			[],
+			undefined,
+			false,
+			new Date("2026-09-02T00:00:00.000Z"),
+		);
+		expect(mentions).toHaveLength(1);
+		expect(mentions[0].id).toBe(SECOND_ID);
 	});
 });
 
