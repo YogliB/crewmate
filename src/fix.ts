@@ -25,6 +25,7 @@ const SYSTEM_PROMPT_PATH = new URL("../assets/SYSTEM_PROMPT.md", import.meta.url
 type MentionBase = {
 	id: number;
 	body: string;
+	createdAt?: string;
 	user?: unknown;
 	inReplyToId?: number;
 };

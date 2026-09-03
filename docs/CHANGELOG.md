@@ -1,6 +1,9 @@
 # crewmate changelog
 
-## Unreleased
+## 0.6.0
+
+- Add `crewmate stream --since <ISO-timestamp>` to skip older mentions.
+- Improve `crewmate stream` docs for agent/IDE use, including `npx --yes`, `--output-file`, `tail -n 0 -f`, and a response-loop example.
 
 ## 0.5.0
 
