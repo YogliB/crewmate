@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0
+
 - Fix `crewmate stream` stdout buffering in non-TTY and piped environments by awaiting each NDJSON line's write callback.
 - Add `--output-file <path>` to `crewmate stream` for durable event persistence.
 - Treat stdout consumer `EPIPE` as a clean exit while keeping output-file and repo/org sink failures fatal.
