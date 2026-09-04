@@ -1353,6 +1353,34 @@ describe("run stream flags", () => {
 		process.exitCode = previousExitCode;
 	});
 
+	it.each(["2026-09-02", "2026-09-02T10:30", "2026-09-02T10:30:00", "2026-09-02T10:30:00+02:00"])(
+		"accepts the ISO-8601 timestamp %s",
+		async (value) => {
+			const previousExitCode = process.exitCode;
+			process.exitCode = NO_EXIT_CODE;
+			const runner = makeExplainRunner({ answer: "It does something." });
+			await run(["stream", PR_URL, "--since", value], {
+				config: { interval: 0 },
+				iterations: FIRST_ITERATION,
+				runner,
+			});
+			expect(process.exitCode).toBe(NO_EXIT_CODE);
+			process.exitCode = previousExitCode;
+		},
+	);
+
+	it.each(["2026-13-99T00:00:00Z", "2026-09-02T10:00:00.1.2Z", "2026-09-02T10:00:00.abZ"])(
+		"rejects the invalid --since timestamp %s",
+		async (value) => {
+			const previousExitCode = process.exitCode;
+			process.exitCode = NO_EXIT_CODE;
+			const runner = makeExplainRunner({ answer: "It does something." });
+			await run(["stream", PR_URL, "--since", value], { runner });
+			expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+			process.exitCode = previousExitCode;
+		},
+	);
+
 	it("passes options.iterations to stream", async () => {
 		const runner = makeExplainRunner({ answer: "It does something." });
 		await run(["stream", PR_URL], {
