@@ -254,8 +254,8 @@ const debugMentionSummary = (mention: Mention) => ({
 	kind: mention.kind,
 });
 
-const isAfter = (createdAt: string | undefined, since: Date): boolean => {
-	if (createdAt === undefined) return false;
+const passesSinceFilter = (createdAt: string | undefined, since: Date): boolean => {
+	if (createdAt === undefined) return true;
 	const parsed = Date.parse(createdAt);
 	return !Number.isNaN(parsed) && parsed >= since.getTime();
 };
@@ -273,7 +273,7 @@ const findNewMentions = (
 		.filter((comment) => {
 			const details = getMentionFilterDetails(comment, seen, crewmateRepliedIds, allowedUser);
 			if (!details.passes) return false;
-			return since === undefined || isAfter(comment.createdAt, since);
+			return since === undefined || passesSinceFilter(comment.createdAt, since);
 		})
 		.toSorted((first, second) => second.id - first.id);
 };
@@ -1332,11 +1332,42 @@ const parseInterval = (
 	return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
 };
 
+const ISO_8601_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const TWO_DIGITS = /^\d{2}$/;
+const MILLIS = /^\d{1,3}$/;
+const ZONE_OFFSET = /[+-]\d{2}:\d{2}$/;
+
+const isIso8601Time = (input: string): boolean => {
+	let time = input;
+	if (time.endsWith("Z")) {
+		time = time.slice(0, -1);
+	} else {
+		const offset = ZONE_OFFSET.exec(time);
+		if (offset !== null) time = time.slice(0, -offset[0].length);
+	}
+	const [clock, millis, ...extra] = time.split(".");
+	if (extra.length > 0) return false;
+	if (millis !== undefined && !MILLIS.test(millis)) return false;
+	const segments = clock.split(":");
+	return (
+		(segments.length === 2 || segments.length === 3) && segments.every((s) => TWO_DIGITS.test(s))
+	);
+};
+
+const isIso8601Timestamp = (input: string): boolean => {
+	const [date, time, ...rest] = input.split("T");
+	if (rest.length > 0 || !ISO_8601_DATE.test(date)) return false;
+	return time === undefined || isIso8601Time(time);
+};
+
 const parseSince = (input: string | undefined): Date | undefined => {
 	if (input === undefined) return undefined;
+	if (!isIso8601Timestamp(input)) {
+		throw new TypeError(`Invalid --since timestamp: ${input} (expected ISO-8601)`);
+	}
 	const parsed = Date.parse(input);
 	if (Number.isNaN(parsed)) {
-		throw new TypeError(`Invalid --since timestamp: ${input}`);
+		throw new TypeError(`Invalid --since timestamp: ${input} (expected ISO-8601)`);
 	}
 	return new Date(parsed);
 };

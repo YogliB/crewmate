@@ -2560,8 +2560,18 @@ describe("findNewMentions", () => {
 			false,
 			new Date("2026-09-02T00:00:00.000Z"),
 		);
-		expect(mentions).toHaveLength(1);
-		expect(mentions[0].id).toBe(SECOND_ID);
+		expect(mentions).toHaveLength(TWO_CALLS);
+		expect(mentions[0].id).toBe(THIRD_ID);
+		expect(mentions[1].id).toBe(SECOND_ID);
+	});
+
+	it("rejects a non-ISO-8601 --since timestamp", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since", "September 2, 2026"], { runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
 	});
 });
 
