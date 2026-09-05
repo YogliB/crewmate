@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.6.0]
+
+- Add `crewmate stream --since <ISO-timestamp>` to skip older mentions.
+- Improve `crewmate stream` docs for agent/IDE use, including `npx --yes`, `--output-file`, `tail -n 0 -f`, and a response-loop example.
+
 ## [0.5.0]
 
 - Fix `crewmate stream` stdout buffering in non-TTY and piped environments by awaiting each NDJSON line's write callback.
@@ -40,7 +45,8 @@
 
 - Initial release of `crewmate`: `crewmate watch` and `crewmate stream` monitor a single PR, a repo, or an org (including GHES) for `@crewmate` mentions and reply with explanations or generated fixes.
 
-[Unreleased]: https://github.com/YogliB/crewmate/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/YogliB/crewmate/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/YogliB/crewmate/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/YogliB/crewmate/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/YogliB/crewmate/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/YogliB/crewmate/compare/v0.3.0...v0.3.1

@@ -137,7 +137,9 @@ const resolveReaction = (args: string[]): string | undefined => {
 const conversationComments = (body?: string, user = "alice"): string =>
 	body === undefined || body === ""
 		? "[]"
-		: JSON.stringify([[{ body, id: THIRD_ID, user: { login: user } }]]);
+		: JSON.stringify([
+				[{ body, id: THIRD_ID, created_at: "2026-09-03T00:00:00.000Z", user: { login: user } }],
+			]);
 
 const issueBodyResponse = (body: string, number: number, user = "alice"): string =>
 	JSON.stringify({ number, body, user: { login: user } });
@@ -171,6 +173,7 @@ const resolveGhExplain = (
 					[
 						{
 							body: request.body ?? "@crewmate hello",
+							created_at: "2026-09-03T00:00:00.000Z",
 							id: FIRST_ID,
 							in_reply_to_id: null,
 							line: EXPLANATION_LINE,
@@ -533,14 +536,14 @@ describe("run dispatch", () => {
 	it("prints the version for --version", async () => {
 		const write = mockStdoutWrite();
 		await run(["--version"]);
-		expect(write).toHaveBeenCalledWith("crewmate/0.5.0\n");
+		expect(write).toHaveBeenCalledWith("crewmate/0.6.0\n");
 		write.mockRestore();
 	});
 
 	it("prints the version for -v", async () => {
 		const write = mockStdoutWrite();
 		await run(["-v"]);
-		expect(write).toHaveBeenCalledWith("crewmate/0.5.0\n");
+		expect(write).toHaveBeenCalledWith("crewmate/0.6.0\n");
 		write.mockRestore();
 	});
 
@@ -579,7 +582,7 @@ describe("run dispatch", () => {
 		const write = mockStdoutWrite();
 		vi.resetModules();
 		await import("./bin.js");
-		expect(write).toHaveBeenCalledWith("crewmate/0.5.0\n");
+		expect(write).toHaveBeenCalledWith("crewmate/0.6.0\n");
 		process.argv = previousArgv;
 		process.exitCode = previousExitCode;
 		write.mockRestore();
@@ -1318,6 +1321,133 @@ describe("run stream flags", () => {
 				expect.objectContaining({ message: "unsupported flag", flag }),
 			);
 		}
+	});
+
+	it("exits with an error when --since is used without a value", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since"], { runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+
+	it("exits with an error for an invalid --since timestamp", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since", "not-a-date"], { runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+
+	it("accepts a valid --since timestamp", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since", "2026-09-02T00:00:00.000Z"], {
+			config: { interval: 0 },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(process.exitCode).toBe(NO_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+
+	it.each([
+		"2026-09-02",
+		"2026-09-02T10:30",
+		"2026-09-02T10:30:00",
+		"2026-09-02T10:30:00+02:00",
+		"2026-09-02T10:30:00+0200",
+		"2026-09-02T10:30:00-0530",
+		"2026-09-02T10:30:00.123456Z",
+	])("accepts the ISO-8601 timestamp %s", async (value) => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since", value], {
+			config: { interval: 0 },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		expect(process.exitCode).toBe(NO_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+
+	it.each([
+		"2026-13-99T00:00:00Z",
+		"2026-02-30T00:00:00Z",
+		"2026-09-02T10:00:00.1.2Z",
+		"2026-09-02T10:00:00.abZ",
+		"2026-09-02T24:00:00Z",
+		"2026-09-02T10:60:00Z",
+		"2026-09-02T10:00:60Z",
+		"2026-09-02T10",
+		"2026-09-02T1:30",
+		"2026-09-02T10:00:00:00Z",
+		"2026-09-02T10T00Z",
+		"2026-09-02T10:00:00+24:00",
+		"2026-09-02T10:00:00+02:99",
+	])("rejects the invalid --since timestamp %s", async (value) => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since", value], { runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
+
+	it("emits mentions at or after --since end to end", async () => {
+		const write = mockStdoutWrite();
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since", "2026-09-02T00:00:00.000Z"], {
+			config: { interval: 0 },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const stdoutCalls = write.mock.calls.map(([line]) => line as string);
+		expect(stdoutCalls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		write.mockRestore();
+	});
+
+	it("skips mentions older than --since end to end", async () => {
+		const write = mockStdoutWrite();
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since", "2026-09-04T00:00:00.000Z"], {
+			config: { interval: 0 },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const stdoutCalls = write.mock.calls.map(([line]) => line as string);
+		expect(stdoutCalls.some((line) => line.includes('"event":"mention"'))).toBe(false);
+		write.mockRestore();
+	});
+
+	it("reads a timezone-less --since timestamp as UTC", async () => {
+		const write = mockStdoutWrite();
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since", "2026-09-03T00:30"], {
+			config: { interval: 0 },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const stdoutCalls = write.mock.calls.map(([line]) => line as string);
+		expect(stdoutCalls.some((line) => line.includes('"event":"mention"'))).toBe(false);
+		write.mockRestore();
+	});
+
+	it("applies the --since offset before comparing", async () => {
+		const write = mockStdoutWrite();
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since", "2026-09-03T00:30+03:00"], {
+			config: { interval: 0 },
+			iterations: FIRST_ITERATION,
+			runner,
+		});
+		const stdoutCalls = write.mock.calls.map(([line]) => line as string);
+		expect(stdoutCalls.some((line) => line.includes('"event":"mention"'))).toBe(true);
+		write.mockRestore();
 	});
 
 	it("passes options.iterations to stream", async () => {
@@ -2487,6 +2617,59 @@ describe("findNewMentions", () => {
 		expect(mentions[0].id).toBe(SECOND_ID);
 		expect(mentions[1].id).toBe(FIRST_ID);
 	});
+
+	it("filters mentions older than the since timestamp", () => {
+		const comments: Mention[] = [
+			{
+				body: "@crewmate old",
+				createdAt: "2026-09-01T00:00:00.000Z",
+				id: FIRST_ID,
+				inReplyToId: undefined,
+				kind: "review",
+				line: FIRST_LINE,
+				path: "src/index.ts",
+				user: { login: "alice" },
+			},
+			{
+				body: "@crewmate new",
+				createdAt: "2026-09-03T00:00:00.000Z",
+				id: SECOND_ID,
+				inReplyToId: undefined,
+				kind: "review",
+				line: FIRST_LINE,
+				path: "src/index.ts",
+				user: { login: "alice" },
+			},
+			{
+				body: "@crewmate no timestamp",
+				id: THIRD_ID,
+				inReplyToId: undefined,
+				kind: "review",
+				line: FIRST_LINE,
+				path: "src/index.ts",
+				user: { login: "alice" },
+			},
+		];
+		const mentions = run.findNewMentions(
+			comments,
+			[],
+			undefined,
+			false,
+			new Date("2026-09-02T00:00:00.000Z"),
+		);
+		expect(mentions).toHaveLength(TWO_CALLS);
+		expect(mentions[0].id).toBe(THIRD_ID);
+		expect(mentions[1].id).toBe(SECOND_ID);
+	});
+
+	it("rejects a non-ISO-8601 --since timestamp", async () => {
+		const previousExitCode = process.exitCode;
+		process.exitCode = NO_EXIT_CODE;
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run(["stream", PR_URL, "--since", "September 2, 2026"], { runner });
+		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
+		process.exitCode = previousExitCode;
+	});
 });
 
 describe("stripFences", () => {
@@ -2604,6 +2787,32 @@ describe("watch explain", () => {
 		expect(calls[0][1]).toMatchObject({ stage: "fetched-comments" });
 		expect(calls[1][1]).toMatchObject({ stage: "mention-filter" });
 		expect(calls[2][1]).toMatchObject({ stage: "new-mentions" });
+	});
+
+	it("logs sincePass in debug mention-filter details when since is set", async () => {
+		const logger = vi.fn() as unknown as Logger & {
+			mock: { calls: [string, Record<string, unknown>][] };
+		};
+		const runner = makeExplainRunner({ answer: "It does something." });
+		await run.watch(PR_URL, {
+			debug: true,
+			interval: NO_INTERVAL,
+			iterations: FIRST_ITERATION,
+			logger,
+			runner,
+			since: new Date("2026-09-04T00:00:00.000Z"),
+		});
+		const calls = logger.mock.calls.filter(([level]) => level === "debug");
+		const filterCall = calls.find(
+			([, fields]) => (fields as { stage: string }).stage === "mention-filter",
+		);
+		if (filterCall === undefined) throw new Error("mention-filter debug event not logged");
+		const details = (filterCall[1] as { details: Record<string, unknown>[] }).details;
+		expect(details[0]).toMatchObject({
+			createdAt: "2026-09-03T00:00:00.000Z",
+			sincePass: false,
+		});
+		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
 	});
 
 	it("skips mentions from other users", async () => {

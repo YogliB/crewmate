@@ -127,13 +127,15 @@ const parsePrUrl = (
 const toMention = (raw: Record<string, unknown>, kind: Mention["kind"]): Mention | undefined => {
 	if (typeof raw.id !== "number" || typeof raw.body !== "string") return undefined;
 	const inReplyToId = typeof raw.in_reply_to_id === "number" ? raw.in_reply_to_id : undefined;
+	const createdAt = typeof raw.created_at === "string" ? raw.created_at : undefined;
 	if (kind === "conversation" || kind === "issue") {
-		return { id: raw.id, body: raw.body, user: raw.user, kind, inReplyToId };
+		return { id: raw.id, body: raw.body, createdAt, user: raw.user, kind, inReplyToId };
 	}
 	if (typeof raw.path !== "string" || typeof raw.line !== "number") return undefined;
 	return {
 		id: raw.id,
 		body: raw.body,
+		createdAt,
 		user: raw.user,
 		kind: "review",
 		path: raw.path,
@@ -248,22 +250,32 @@ const getMentionFilterDetails = (
 };
 
 const debugMentionSummary = (mention: Mention) => ({
+	createdAt: mention.createdAt,
 	id: mention.id,
 	kind: mention.kind,
 });
+
+const passesSinceFilter = (createdAt: string | undefined, since: Date): boolean => {
+	if (createdAt === undefined) return true;
+	const parsed = Date.parse(createdAt);
+	return !Number.isNaN(parsed) && parsed >= since.getTime();
+};
 
 const findNewMentions = (
 	comments: Mention[],
 	seenIds: string[],
 	allowedUser?: string,
 	isFresh = false,
+	since?: Date,
 ): Mention[] => {
 	const seen = new Set(seenIds);
 	const crewmateRepliedIds = findCrewmateRepliedIds(comments, isFresh);
 	return comments
-		.filter(
-			(comment) => getMentionFilterDetails(comment, seen, crewmateRepliedIds, allowedUser).passes,
-		)
+		.filter((comment) => {
+			const details = getMentionFilterDetails(comment, seen, crewmateRepliedIds, allowedUser);
+			if (!details.passes) return false;
+			return since === undefined || passesSinceFilter(comment.createdAt, since);
+		})
 		.toSorted((first, second) => second.id - first.id);
 };
 
@@ -384,6 +396,7 @@ const pollMentions = async (
 		onMention: (mention: Mention, checkedOut: Set<string>) => Promise<void>;
 		runner: Runner;
 		saveAfterEmit: boolean;
+		since?: Date;
 		warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
 	},
 ): Promise<void> => {
@@ -410,6 +423,9 @@ const pollMentions = async (
 		const filterDetails = comments.map((comment) => ({
 			...debugMentionSummary(comment),
 			...getMentionFilterDetails(comment, seen, crewmateRepliedIds, options.allowedUser),
+			...(options.since === undefined
+				? {}
+				: { sincePass: passesSinceFilter(comment.createdAt, options.since) }),
 		}));
 
 		await options.logger("debug", {
@@ -420,7 +436,13 @@ const pollMentions = async (
 		});
 	}
 
-	const mentions = findNewMentions(comments, [...seen], options.allowedUser, isFresh);
+	const mentions = findNewMentions(
+		comments,
+		[...seen],
+		options.allowedUser,
+		isFresh,
+		options.since,
+	);
 
 	if (options.debug) {
 		await options.logger("debug", {
@@ -931,6 +953,7 @@ type ScopeRunOptions = {
 	prompt?: string;
 	provider?: string;
 	runner?: Runner;
+	since?: Date;
 	toStderr?: boolean;
 	unsafeNoUser?: boolean;
 };
@@ -946,6 +969,7 @@ type ScopeContext = {
 	provider: string | undefined;
 	repoRoot: string | undefined;
 	runner: Runner;
+	since: Date | undefined;
 	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
 };
 
@@ -1073,6 +1097,7 @@ const runScope = async (
 			provider,
 			repoRoot,
 			runner,
+			since: options.since,
 			warn,
 		};
 
@@ -1139,6 +1164,7 @@ const watch = async (
 		provider?: string;
 		runner?: Runner;
 		iterations?: number;
+		since?: Date;
 		toStderr?: boolean;
 		unsafeNoUser?: boolean;
 	} = {},
@@ -1166,6 +1192,7 @@ const watch = async (
 					}),
 				runner: ctx.runner,
 				saveAfterEmit: false,
+				since: ctx.since,
 				warn: ctx.warn,
 			});
 		},
@@ -1186,6 +1213,7 @@ const stream = async (
 		logger?: Logger;
 		outputFile?: string;
 		runner?: Runner;
+		since?: Date;
 		toStderr?: boolean;
 		unsafeNoUser?: boolean;
 	} = {},
@@ -1240,6 +1268,7 @@ const stream = async (
 					},
 					runner: ctx.runner,
 					saveAfterEmit: true,
+					since: ctx.since,
 					warn: ctx.warn,
 				});
 			},
@@ -1256,6 +1285,7 @@ const VALUE_FLAGS = new Set([
 	"--model",
 	"--provider",
 	"--output-file",
+	"--since",
 ]);
 
 const parseArgs = (
@@ -1306,6 +1336,69 @@ const parseInterval = (
 	return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
 };
 
+const SINCE_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const SINCE_ZONE = /(Z|[+-]\d{2}:?\d{2})$/;
+const SINCE_CLOCK = /^\d{2}$/;
+const SINCE_FRACTION = /^\d+$/;
+
+const MINUTE_MILLIS = 60_000;
+
+const padTwoDigits = (value: number): string => String(value).padStart(2, "0");
+
+const zoneOffsetMinutes = (zone: string): number | undefined => {
+	if (zone === "Z") return 0;
+	const digits = zone.slice(1).replace(":", "");
+	const hours = Number(digits.slice(0, 2));
+	const minutes = Number(digits.slice(2));
+	if (hours > 23 || minutes > 59) return undefined;
+	return (zone.startsWith("-") ? -1 : 1) * (hours * 60 + minutes);
+};
+
+const parseSince = (input: string | undefined): Date | undefined => {
+	if (input === undefined) return undefined;
+	const invalid = `Invalid --since timestamp: ${input} (expected ISO-8601)`;
+	const parts = input.split("T");
+	const dateMatch = SINCE_DATE.exec(parts[0]);
+	if (dateMatch === null || parts.length > 2) throw new TypeError(invalid);
+	const [, year, month, day] = dateMatch;
+	const dayMillis = Date.UTC(Number(year), Number(month) - 1, Number(day));
+	const calendar = new Date(dayMillis);
+	const canonical = `${calendar.getUTCFullYear()}-${padTwoDigits(calendar.getUTCMonth() + 1)}-${padTwoDigits(calendar.getUTCDate())}`;
+	if (canonical !== `${year}-${month}-${day}`) throw new TypeError(invalid);
+	if (parts.length === 1) return new Date(dayMillis);
+
+	let time = parts[1];
+	let offsetMinutes = 0;
+	const zoneMatch = SINCE_ZONE.exec(time);
+	if (zoneMatch !== null) {
+		const parsed = zoneOffsetMinutes(zoneMatch[1]);
+		if (parsed === undefined) throw new TypeError(invalid);
+		offsetMinutes = parsed;
+		time = time.slice(0, -zoneMatch[1].length);
+	}
+	const [clock, fraction, ...extra] = time.split(".");
+	const segments = clock.split(":");
+	if (
+		extra.length > 0 ||
+		(fraction !== undefined && !SINCE_FRACTION.test(fraction)) ||
+		!(segments.length === 2 || segments.length === 3) ||
+		!segments.every((segment) => SINCE_CLOCK.test(segment))
+	) {
+		throw new TypeError(invalid);
+	}
+	const hour = Number(segments[0]);
+	const minute = Number(segments[1]);
+	const second = Number(segments[2] ?? "0");
+	if (hour > 23 || minute > 59 || second > 59) throw new TypeError(invalid);
+	const fractionMillis = fraction === undefined ? 0 : Number(fraction.padEnd(3, "0").slice(0, 3));
+	const millis =
+		dayMillis +
+		((hour * 60 + minute) * 60 + second) * MILLISECONDS_PER_SECOND +
+		fractionMillis -
+		offsetMinutes * MINUTE_MILLIS;
+	return new Date(millis);
+};
+
 const parseRunArgs = (
 	rest: string[],
 ):
@@ -1338,7 +1431,7 @@ const runWatch = async (
 	const logger = options.logger ?? createLogger({ toStderr: toStderr ?? false });
 	const warn = makeWarn(toStderr ?? false, logger);
 
-	for (const flag of ["--ack", "--json", "--output-file"]) {
+	for (const flag of ["--ack", "--json", "--output-file", "--since"]) {
 		if (booleans.has(flag) || values.has(flag)) {
 			await warn("unsupported flag", { flag });
 		}
@@ -1405,10 +1498,14 @@ const runStream = async (
 	if (rawOutputFile === "") {
 		throw new TypeError("--output-file path cannot be empty");
 	}
+	if (booleans.has("--since")) {
+		throw new TypeError("--since requires an ISO-8601 timestamp");
+	}
 
 	const runner = options.runner ?? exec;
 	const target = rawTarget || (await resolveDefaultTarget(runner));
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
+	const since = parseSince(values.get("--since"));
 	const ack = booleans.has("--ack") ? true : undefined;
 	const debug = booleans.has("--debug") ? true : undefined;
 	const unsafeNoUser = booleans.has("--unsafe-no-user") ? true : undefined;
@@ -1425,6 +1522,7 @@ const runStream = async (
 		logger: options.logger,
 		outputFile,
 		runner: options.runner,
+		since,
 		toStderr,
 		unsafeNoUser,
 	});
