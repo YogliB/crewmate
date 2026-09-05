@@ -41,7 +41,7 @@ crewmate stream <pr-url-or-shorthand> [--user <login>] [--interval <seconds>] [-
 - `--log`: also mirror log lines to stderr.
 - `--ack`: post an `eyes` reaction on each new mention and include the returned `reactionId` in the event.
 - `--output-file`: also append each emitted NDJSON line to the given file, creating its parent directory if needed.
-- `--since`: only emit mentions whose GitHub `created_at` is at or after the given ISO-8601 timestamp.
+- `--since`: only emit mentions whose GitHub `created_at` is at or after the given ISO-8601 timestamp. A timestamp without an offset is read as UTC.
 
 ## Agent / IDE usage
 

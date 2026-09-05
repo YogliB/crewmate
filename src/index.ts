@@ -250,6 +250,7 @@ const getMentionFilterDetails = (
 };
 
 const debugMentionSummary = (mention: Mention) => ({
+	createdAt: mention.createdAt,
 	id: mention.id,
 	kind: mention.kind,
 });
@@ -422,6 +423,9 @@ const pollMentions = async (
 		const filterDetails = comments.map((comment) => ({
 			...debugMentionSummary(comment),
 			...getMentionFilterDetails(comment, seen, crewmateRepliedIds, options.allowedUser),
+			...(options.since === undefined
+				? {}
+				: { sincePass: passesSinceFilter(comment.createdAt, options.since) }),
 		}));
 
 		await options.logger("debug", {
@@ -1332,44 +1336,67 @@ const parseInterval = (
 	return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
 };
 
-const ISO_8601_DATE = /^\d{4}-\d{2}-\d{2}$/;
-const TWO_DIGITS = /^\d{2}$/;
-const MILLIS = /^\d{1,3}$/;
-const ZONE_OFFSET = /[+-]\d{2}:\d{2}$/;
+const SINCE_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const SINCE_ZONE = /(Z|[+-]\d{2}:?\d{2})$/;
+const SINCE_CLOCK = /^\d{2}$/;
+const SINCE_FRACTION = /^\d+$/;
 
-const isIso8601Time = (input: string): boolean => {
-	let time = input;
-	if (time.endsWith("Z")) {
-		time = time.slice(0, -1);
-	} else {
-		const offset = ZONE_OFFSET.exec(time);
-		if (offset !== null) time = time.slice(0, -offset[0].length);
-	}
-	const [clock, millis, ...extra] = time.split(".");
-	if (extra.length > 0) return false;
-	if (millis !== undefined && !MILLIS.test(millis)) return false;
-	const segments = clock.split(":");
-	return (
-		(segments.length === 2 || segments.length === 3) && segments.every((s) => TWO_DIGITS.test(s))
-	);
-};
+const MINUTE_MILLIS = 60_000;
 
-const isIso8601Timestamp = (input: string): boolean => {
-	const [date, time, ...rest] = input.split("T");
-	if (rest.length > 0 || !ISO_8601_DATE.test(date)) return false;
-	return time === undefined || isIso8601Time(time);
+const padTwoDigits = (value: number): string => String(value).padStart(2, "0");
+
+const zoneOffsetMinutes = (zone: string): number | undefined => {
+	if (zone === "Z") return 0;
+	const digits = zone.slice(1).replace(":", "");
+	const hours = Number(digits.slice(0, 2));
+	const minutes = Number(digits.slice(2));
+	if (hours > 23 || minutes > 59) return undefined;
+	return (zone.startsWith("-") ? -1 : 1) * (hours * 60 + minutes);
 };
 
 const parseSince = (input: string | undefined): Date | undefined => {
 	if (input === undefined) return undefined;
-	if (!isIso8601Timestamp(input)) {
-		throw new TypeError(`Invalid --since timestamp: ${input} (expected ISO-8601)`);
+	const invalid = `Invalid --since timestamp: ${input} (expected ISO-8601)`;
+	const parts = input.split("T");
+	const dateMatch = SINCE_DATE.exec(parts[0]);
+	if (dateMatch === null || parts.length > 2) throw new TypeError(invalid);
+	const [, year, month, day] = dateMatch;
+	const dayMillis = Date.UTC(Number(year), Number(month) - 1, Number(day));
+	const calendar = new Date(dayMillis);
+	const canonical = `${calendar.getUTCFullYear()}-${padTwoDigits(calendar.getUTCMonth() + 1)}-${padTwoDigits(calendar.getUTCDate())}`;
+	if (canonical !== `${year}-${month}-${day}`) throw new TypeError(invalid);
+	if (parts.length === 1) return new Date(dayMillis);
+
+	let time = parts[1];
+	let offsetMinutes = 0;
+	const zoneMatch = SINCE_ZONE.exec(time);
+	if (zoneMatch !== null) {
+		const parsed = zoneOffsetMinutes(zoneMatch[1]);
+		if (parsed === undefined) throw new TypeError(invalid);
+		offsetMinutes = parsed;
+		time = time.slice(0, -zoneMatch[1].length);
 	}
-	const parsed = Date.parse(input);
-	if (Number.isNaN(parsed)) {
-		throw new TypeError(`Invalid --since timestamp: ${input} (expected ISO-8601)`);
+	const [clock, fraction, ...extra] = time.split(".");
+	const segments = clock.split(":");
+	if (
+		extra.length > 0 ||
+		(fraction !== undefined && !SINCE_FRACTION.test(fraction)) ||
+		!(segments.length === 2 || segments.length === 3) ||
+		!segments.every((segment) => SINCE_CLOCK.test(segment))
+	) {
+		throw new TypeError(invalid);
 	}
-	return new Date(parsed);
+	const hour = Number(segments[0]);
+	const minute = Number(segments[1]);
+	const second = Number(segments[2] ?? "0");
+	if (hour > 23 || minute > 59 || second > 59) throw new TypeError(invalid);
+	const fractionMillis = fraction === undefined ? 0 : Number(fraction.padEnd(3, "0").slice(0, 3));
+	const millis =
+		dayMillis +
+		((hour * 60 + minute) * 60 + second) * MILLISECONDS_PER_SECOND +
+		fractionMillis -
+		offsetMinutes * MINUTE_MILLIS;
+	return new Date(millis);
 };
 
 const parseRunArgs = (

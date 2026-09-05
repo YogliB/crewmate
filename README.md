@@ -85,7 +85,7 @@ Emit new `@crewmate` mentions as NDJSON to stdout without invoking a provider or
 - `--log` — mirror structured log lines to stderr as well as writing them to the log file.
 - `--ack` — post an `eyes` reaction to each new mention and include the returned `reactionId` in the emitted event. Useful when an agent is the handler.
 - `--output-file <path>` — also append each emitted NDJSON line to the given file, creating its parent directory if needed. Useful when stdout is piped to a slow or non-TTY consumer.
-- `--since <ISO-timestamp>` — only emit mentions whose GitHub `created_at` is at or after this timestamp. Useful when starting a stream and you want to skip older comments.
+- `--since <ISO-timestamp>` — only emit mentions whose GitHub `created_at` is at or after this timestamp. Useful when starting a stream and you want to skip older comments. A timestamp without an offset is read as UTC.
 - `--user <login>` — only emit mentions from this GitHub user (defaults to the active `gh` user when omitted and not set in config). Always respected.
 - `--unsafe-no-user` — emit mentions from any GitHub user. Disables the default filter that falls back to the active `gh` user. This flag wins over `--user`.
 - `--debug` — emit extra poll pipeline detail (`fetched-comments`, `mention-filter`, `new-mentions`) to the log.
