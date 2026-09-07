@@ -44,7 +44,7 @@ For single-PR targets, `--dry-run` still runs `gh pr checkout` so it can read th
 
 ## `@crewmate` mention is ignored
 
-`crewmate` only replies to review comments (not replies) that contain `@crewmate` and were not written by `crewmate` itself. The newest unseen mention is handled on each poll; older ones wait for the next poll.
+`crewmate` only replies to review comments, PR conversation comments, and issue bodies/comments that contain `@crewmate` and were not written by `crewmate` itself. By default it also ignores mentions from anyone other than the active `gh` user (or `--user`); pass `--unsafe-no-user` to respond to everyone. Every unseen mention is handled on each poll; use `--debug` to see why a mention was filtered out.
 
 ## The same conversation comment was answered twice
 

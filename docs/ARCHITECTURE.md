@@ -7,21 +7,26 @@
 ```text
 ./
 ├── src/
-│   ├── index.ts   # CLI and watch loop
+│   ├── index.ts   # CLI, watch loop, and stream mode
 │   ├── bin.ts     # executable entry point
+│   ├── config.ts  # global and per-repo config loading
+│   ├── init.ts    # interactive `crewmate init`
 │   ├── fix.ts     # reply generation and fix application
 │   ├── log.ts     # structured logging
 │   └── state.ts   # persistent seen-comment state
 ├── dist/          # built ESM output from tsdown
 ├── assets/
 │   ├── help.md    # help text shown for --help
-│   └── logo.png   # README mascot
+│   ├── SYSTEM_PROMPT.md   # default system prompt
+│   ├── config.schema.json # JSON schema for config files
+│   └── logo.webp  # README mascot
 ├── docs/          # user and contributor documentation
 ├── scripts/
 │   └── oxlint-repo-guidelines.js  # custom oxlint rule guarding doc sprawl
 ├── package.json   # scripts, metadata, and release config
 ├── tsdown.config.ts  # build configuration
-└── .github/workflows/  # CI checks (lint, format, duplicates, knip, typecheck, test, security)
+├── skills/        # agent skills (@crewmate, @crewmate-stream)
+└── .github/workflows/  # CI checks (lint, format, duplicates, knip, typecheck, test, security), npm publish, and GitHub release
 ```
 
 ## Data Flow
@@ -33,7 +38,7 @@
                                                                            [src/log.ts] --> $XDG_CONFIG_HOME/crewmate/crewmate.log
 ```
 
-`src/index.ts` fetches comments with `gh api`. For a repo or org scope it first discovers open PRs and open issues via the `search/issues` endpoint (with a fallback to `repos/<owner>/<repo>/issues` on older GHES), then for each item it finds the newest unseen `@crewmate` mention and either:
+`src/index.ts` fetches comments with `gh api`. For a repo or org scope it first discovers open PRs and open issues via the `search/issues` endpoint (with a fallback to `repos/<owner>/<repo>/issues` on older GHES), then for each item it processes every unseen `@crewmate` mention and either:
 
 - calls `src/fix.ts` to explain the line or respond to a conversation/issue comment, or
 - calls `src/fix.ts` to generate and apply a fix when the comment contains `#fix` and `--fix` is enabled. For review comments `src/fix.ts` uses the comment's `path` and `line`; for PR conversation comments it fetches the PR's changed files from the GitHub API and asks the provider to return the corrected file content.

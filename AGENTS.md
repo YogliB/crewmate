@@ -8,13 +8,13 @@ Agent-facing entry point for this repo. For the open format, see [agents.md](htt
 | -------------------- | ------------------------------------------------------------------------------------------ |
 | Agent skills         | [@crewmate](skills/crewmate/SKILL.md), [@crewmate-stream](skills/crewmate-stream/SKILL.md) |
 | System prompt        | [assets/SYSTEM_PROMPT.md](assets/SYSTEM_PROMPT.md)                                         |
-| User-facing CLI docs | [README.md](../README.md)                                                                  |
-| How to contribute    | [docs/CONTRIBUTING.md](CONTRIBUTING.md)                                                    |
-| Common CLI problems  | [docs/TROUBLESHOOTING.md](TROUBLESHOOTING.md)                                              |
-| Security reporting   | [docs/SECURITY.md](SECURITY.md)                                                            |
-| Release notes        | [docs/CHANGELOG.md](CHANGELOG.md)                                                          |
-| Architecture         | [docs/ARCHITECTURE.md](ARCHITECTURE.md)                                                    |
-| License              | [LICENSE.md](../LICENSE.md)                                                                |
+| User-facing CLI docs | [README.md](README.md)                                                                     |
+| How to contribute    | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)                                               |
+| Common CLI problems  | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)                                         |
+| Security reporting   | [docs/SECURITY.md](docs/SECURITY.md)                                                       |
+| Release notes        | [docs/CHANGELOG.md](docs/CHANGELOG.md)                                                     |
+| Architecture         | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                                               |
+| License              | [LICENSE.md](LICENSE.md)                                                                   |
 
 ## Setup
 
@@ -37,18 +37,21 @@ nub run build
 
 ## Project layout
 
-- `src/index.ts` — CLI and watch loop.
+- `src/index.ts` — CLI, watch loop, and stream mode.
 - `src/bin.ts` — executable entry point.
+- `src/config.ts` — loading global and per-repo config.
+- `src/init.ts` — interactive `crewmate init`.
 - `src/fix.ts` — generating replies and applying fixes.
 - `src/log.ts` — structured logging.
 - `src/state.ts` — persisting seen comment IDs.
 - `dist/` — build output.
 - `assets/help.md` — help text shown by `--help`.
 - `assets/SYSTEM_PROMPT.md` — default system prompt for review comment replies.
+- `assets/config.schema.json` — JSON schema for `config.json` and `.crewmate.json`.
 
 ## Lint and format
 
-CI and the pre-commit hook run `oxlint` and `oxfmt`. `nub run format` fixes most issues. CI and the pre-push hook also run `jscpd` (`nub run duplicates:ci`) and `knip` (`nub run knip:ci`) to catch duplication and unused dependencies. A custom `oxlint-repo-guidelines/no-more-docs` rule blocks new Markdown or `docs/` files that are not in the allow-list. Add to [scripts/oxlint-repo-guidelines.js](../scripts/oxlint-repo-guidelines.js) and update this file if a new doc is needed.
+CI and the pre-commit hook run `oxlint` and `oxfmt`. `nub run format` fixes most issues. CI and the pre-push hook also run `jscpd` (`nub run duplicates:ci`) and `knip` (`nub run knip:ci`) to catch duplication and unused dependencies. A custom `oxlint-repo-guidelines/no-more-docs` rule blocks new Markdown or `docs/` files that are not in the allow-list. Add to [scripts/oxlint-repo-guidelines.js](scripts/oxlint-repo-guidelines.js) and update this file if a new doc is needed.
 
 ## Documentation
 
