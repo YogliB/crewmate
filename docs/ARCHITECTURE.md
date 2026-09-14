@@ -7,21 +7,26 @@
 ```text
 ./
 ├── src/
-│   ├── index.ts   # CLI and watch loop
+│   ├── index.ts   # CLI, watch loop, and stream mode
 │   ├── bin.ts     # executable entry point
 │   ├── fix.ts     # reply generation and fix application
+│   ├── config.ts  # global and per-repo config loading
+│   ├── init.ts    # interactive `crewmate init`
 │   ├── log.ts     # structured logging
 │   └── state.ts   # persistent seen-comment state
 ├── dist/          # built ESM output from tsdown
 ├── assets/
 │   ├── help.md    # help text shown for --help
-│   └── logo.png   # README mascot
+│   ├── SYSTEM_PROMPT.md    # default system prompt for replies
+│   ├── config.schema.json  # JSON schema for config files
+│   └── logo.webp  # README mascot
 ├── docs/          # user and contributor documentation
+├── skills/        # agent skills (crewmate, crewmate-stream)
 ├── scripts/
 │   └── oxlint-repo-guidelines.js  # custom oxlint rule guarding doc sprawl
 ├── package.json   # scripts, metadata, and release config
 ├── tsdown.config.ts  # build configuration
-└── .github/workflows/  # CI checks (lint, format, duplicates, knip, typecheck, test, security)
+└── .github/workflows/  # CI checks (lint, format, duplicates, knip, typecheck, test, security) and tag-driven release/publish
 ```
 
 ## Data Flow

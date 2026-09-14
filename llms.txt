@@ -1,11 +1,11 @@
 # crewmate
 
-> crewmate is a command-line tool. The project is currently a minimal bare-metal scaffold; this file will grow alongside real functionality.
+> crewmate is a command-line tool that watches GitHub PR comments and issues for `@crewmate` mentions and replies with an explanation or a generated fix (`crewmate watch`), or emits new mentions as NDJSON for an agent to handle (`crewmate stream`).
 
 Important notes:
 
-- Development of this repository requires [Nub](https://nubjs.com); end users will be able to install the published package with npm once it ships.
-- There is no CLI behavior beyond a placeholder entry point yet.
+- Development of this repository requires [Nub](https://nubjs.com); end users install the published package with `npm install -g crewmate`.
+- Runtime dependencies are the GitHub CLI (`gh`) and a `claude`-shaped LLM provider CLI.
 
 ## User docs
 
