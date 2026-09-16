@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.7.0]
+
+- Add `--closed` to include closed PRs and issues in repository scope. Passing a specific PR or issue URL works regardless of state.
+- Remove the built-in fix machinery: the `--fix` flag, `#fix` tag handling, `fix`/`nochange` reply kinds, and the `fix` log event. `crewmate` replies with explanations only; pair `crewmate stream` with an agent to apply changes.
+- Remove `crewmate init`.
+- Remove organization scope targets (`org:<name>` and org URLs).
+- Remove per-repo `.crewmate.json` and global `defaults`/`profiles`. Config is now a single flat `<config>/crewmate/config.json`; removed keys (`fix`, `dryRun`, `defaults`, `profiles`) are warned about and ignored.
+- Add job-based state with `pending`/`running`/`succeeded`/`failed` statuses, retries with exponential backoff (up to 3 attempts), and an error reply posted after the final attempt.
+- Write state atomically and prune each target to at most 500 tracked mentions. State files from 0.6.0 are migrated on load.
+- Add a per-config-directory lock so only one `watch`/`stream` process runs at a time.
+- Add `--timeout` / `timeoutSeconds` to kill provider calls that run too long (default 600 seconds).
+- Rotate `crewmate.log` to `crewmate.log.1` when it exceeds 1 MB.
+- `crewmate watch` no longer runs `gh pr checkout`, `git commit`, or `git push`; PR file contents are read through the GitHub API, so a clean working tree is no longer required.
+
 ## [0.6.0]
 
 - Add `crewmate stream --since <ISO-timestamp>` to skip older mentions.
@@ -45,7 +59,8 @@
 
 - Initial release of `crewmate`: `crewmate watch` and `crewmate stream` monitor a single PR, a repo, or an org (including GHES) for `@crewmate` mentions and reply with explanations or generated fixes.
 
-[Unreleased]: https://github.com/YogliB/crewmate/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/YogliB/crewmate/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/YogliB/crewmate/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/YogliB/crewmate/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/YogliB/crewmate/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/YogliB/crewmate/compare/v0.3.1...v0.4.0

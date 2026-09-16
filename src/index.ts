@@ -6,26 +6,38 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import {
-	dispatchMention,
+	CREWMATE_PREFIX,
 	errorMessage,
 	getLogin,
-	CREWMATE_PREFIX,
-	type Mention,
+	handleMention,
+	postReply,
 	reactionEndpoint,
+	type Mention,
+	type ReplyContext,
 	type Runner,
-	stripFences,
-} from "./fix.js";
+} from "./reply.js";
 
 import { createLogger, type Logger } from "./log.js";
-import { loadState, saveState, statePath } from "./state.js";
-import { resolveProfile, type Profile } from "./config.js";
-import { runInit } from "./init.js";
+import {
+	acquireLock,
+	isJobClosed,
+	isJobDue,
+	type Job,
+	loadState,
+	MAX_ATTEMPTS,
+	pruneState,
+	retryDelaySeconds,
+	saveState,
+	statePath,
+} from "./state.js";
+import { loadConfig, type Profile } from "./config.js";
 
 export type { Mention };
 
 const CLI_ARGV_OFFSET = 2;
 const EXPECTED_PATH_PARTS = 4;
 const DEFAULT_INTERVAL_SECONDS = 60;
+const DEFAULT_TIMEOUT_SECONDS = 600;
 const MILLISECONDS_PER_SECOND = 1000;
 const HELP_PATH = new URL("../assets/help.md", import.meta.url);
 
@@ -53,6 +65,7 @@ const exec: Runner = async (file, args, options) => {
 	const { stdout } = await execFilePromise(file, args, {
 		encoding: "utf8",
 		env: options?.env ? { ...process.env, ...options.env } : process.env,
+		...(options?.timeoutMs === undefined ? {} : { timeout: options.timeoutMs }),
 	});
 	return stdout;
 };
@@ -93,35 +106,19 @@ const ISSUE_SHORTHAND = new RegExp(
 	`^(?!\\.\\.?(?:\\/|$))(${NAME})\\/(?!\\.\\.?(?:\\/|$))(${NAME})\\/issues\\/(\\d+)\\/?$`,
 );
 
+const REPO_SHORTHAND = new RegExp(
+	`^(?!\\.\\.?(?:\\/|$))(${NAME})\\/(?!\\.\\.?(?:\\/|$))(${NAME})\\/?$`,
+);
+
 const parsePrUrl = (
 	prUrl: string,
 ): { host: string; owner: string; port?: string; repo: string; number: string } => {
-	if (/^https?:\/\//i.test(prUrl)) {
-		const url = new URL(prUrl);
-		const parts = url.pathname.split("/").filter(Boolean);
-		const [owner, repo, pull, number] = parts;
-		if (
-			parts.length !== EXPECTED_PATH_PARTS ||
-			pull !== "pull" ||
-			typeof owner !== "string" ||
-			typeof repo !== "string" ||
-			typeof number !== "string" ||
-			!isValidName(owner) ||
-			!isValidName(repo) ||
-			!/^\d+$/.test(number)
-		) {
-			throw new TypeError(`Invalid PR reference: ${prUrl}`);
-		}
-		return { host: url.hostname, number, owner, repo, ...(url.port ? { port: url.port } : {}) };
+	const parsed = parseTarget(prUrl);
+	if (parsed.kind !== "pr") {
+		throw new TypeError(`Invalid PR reference: ${prUrl}`);
 	}
-
-	const shorthand = PR_SHORTHAND.exec(prUrl);
-	if (shorthand) {
-		const [, owner, repo, number] = shorthand;
-		return { host: "github.com", number, owner, repo };
-	}
-
-	throw new TypeError(`Invalid PR reference: ${prUrl}`);
+	const { host, owner, port, repo, number } = parsed;
+	return { host, owner, ...(port === undefined ? {} : { port }), repo, number };
 };
 
 const toMention = (raw: Record<string, unknown>, kind: Mention["kind"]): Mention | undefined => {
@@ -149,7 +146,7 @@ const fetchKind = async (
 	repo: string,
 	number: string,
 	kind: Mention["kind"],
-	hostWithPort: string,
+	hostWithPortValue: string,
 	runner: Runner,
 ): Promise<Mention[]> => {
 	const endpoint =
@@ -157,7 +154,7 @@ const fetchKind = async (
 			? `repos/${owner}/${repo}/issues/${number}/comments`
 			: `repos/${owner}/${repo}/pulls/${number}/comments`;
 	const output = await runner("gh", ["api", "--paginate", "--slurp", endpoint], {
-		env: { GH_HOST: hostWithPort },
+		env: { GH_HOST: hostWithPortValue },
 	});
 	return (JSON.parse(output) as Record<string, unknown>[][])
 		.flat()
@@ -169,11 +166,11 @@ const fetchIssueBody = async (
 	owner: string,
 	repo: string,
 	number: string,
-	hostWithPort: string,
+	hostWithPortValue: string,
 	runner: Runner,
 ): Promise<Mention | undefined> => {
 	const output = await runner("gh", ["api", `repos/${owner}/${repo}/issues/${number}`], {
-		env: { GH_HOST: hostWithPort },
+		env: { GH_HOST: hostWithPortValue },
 	});
 	const issue = JSON.parse(output) as Record<string, unknown>;
 	if (typeof issue.number !== "number" || typeof issue.body !== "string") return undefined;
@@ -219,14 +216,14 @@ type MentionFilterDetails = {
 	startsWithPrefix: boolean;
 	hasMention: boolean;
 	isReply: boolean;
-	isSeen: boolean;
+	isClosed: boolean;
 	isCrewmateReplied: boolean;
 	userAllowed: boolean;
 };
 
 const getMentionFilterDetails = (
 	comment: Mention,
-	seen: Set<string>,
+	closed: Set<string>,
 	crewmateRepliedIds: Set<string>,
 	allowedUser?: string,
 ): MentionFilterDetails => {
@@ -234,16 +231,16 @@ const getMentionFilterDetails = (
 	const startsWithPrefix = comment.body.startsWith(CREWMATE_PREFIX);
 	const hasMention = /(?:^|\W)@crewmate\b/i.test(comment.body);
 	const isReply = comment.inReplyToId !== undefined;
-	const isSeen = seen.has(key);
+	const isClosed = closed.has(key);
 	const isCrewmateReplied = crewmateRepliedIds.has(key);
 	const userAllowed = allowedUser === undefined || getLogin(comment.user) === allowedUser;
 	return {
 		passes:
-			!startsWithPrefix && hasMention && !isReply && !isSeen && !isCrewmateReplied && userAllowed,
+			!startsWithPrefix && hasMention && !isReply && !isClosed && !isCrewmateReplied && userAllowed,
 		startsWithPrefix,
 		hasMention,
 		isReply,
-		isSeen,
+		isClosed,
 		isCrewmateReplied,
 		userAllowed,
 	};
@@ -263,16 +260,16 @@ const passesSinceFilter = (createdAt: string | undefined, since: Date): boolean 
 
 const findNewMentions = (
 	comments: Mention[],
-	seenIds: string[],
+	closedIds: string[],
 	allowedUser?: string,
 	isFresh = false,
 	since?: Date,
 ): Mention[] => {
-	const seen = new Set(seenIds);
+	const closed = new Set(closedIds);
 	const crewmateRepliedIds = findCrewmateRepliedIds(comments, isFresh);
 	return comments
 		.filter((comment) => {
-			const details = getMentionFilterDetails(comment, seen, crewmateRepliedIds, allowedUser);
+			const details = getMentionFilterDetails(comment, closed, crewmateRepliedIds, allowedUser);
 			if (!details.passes) return false;
 			return since === undefined || passesSinceFilter(comment.createdAt, since);
 		})
@@ -281,259 +278,6 @@ const findNewMentions = (
 
 const findNewMention = (...args: Parameters<typeof findNewMentions>): Mention | undefined =>
 	findNewMentions(...args).at(0);
-
-const respondToMention = async (
-	mention: Mention,
-	prUrl: string,
-	options: {
-		allowFix: boolean;
-		checkedOut: Set<string>;
-		dryRun: boolean;
-		logger: Logger;
-		model?: string;
-		prompt?: string;
-		provider?: string;
-		repoRoot?: string;
-		runner: Runner;
-		warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
-	},
-): Promise<void> => {
-	const { runner } = options;
-	const parsed = parseTarget(prUrl);
-	if (parsed.kind !== "pr" && parsed.kind !== "issue") {
-		throw new TypeError(`Invalid item reference: ${prUrl}`);
-	}
-	const { host, owner, port, repo, number } = parsed;
-	const commentId = mention.id;
-	const ctx = {
-		checkedOut: options.checkedOut,
-		commentId,
-		dryRun: options.dryRun,
-		ghHost: hostWithPort(host, port),
-		kind: mention.kind,
-		logger: options.logger,
-		model: options.model,
-		number,
-		owner,
-		prUrl,
-		prompt: options.prompt,
-		provider: options.provider,
-		repo,
-		repoRoot: options.repoRoot,
-		runner,
-		warn: options.warn,
-	};
-	await dispatchMention(mention, ctx, { allowFix: options.allowFix });
-};
-
-const saveMention = async (
-	state: Map<string, string[]>,
-	prUrl: string,
-	mention: Mention,
-): Promise<void> => {
-	const stateKey = `${mention.kind}:${mention.id}`;
-	state.set(prUrl, [...(state.get(prUrl) ?? []), stateKey]);
-	await saveState(state);
-};
-
-const ackMention = async (
-	mention: Mention,
-	owner: string,
-	repo: string,
-	number: string,
-	ghHost: string,
-	runner: Runner,
-	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
-): Promise<number | undefined> => {
-	const commentId = mention.kind === "issue" ? Number(number) : mention.id;
-	const base = {
-		commentId,
-		kind: mention.kind,
-		number,
-		owner,
-		repo,
-	};
-	try {
-		const output = await runner(
-			"gh",
-			[
-				"api",
-				"--method",
-				"POST",
-				reactionEndpoint({ owner, repo, kind: mention.kind, number, commentId }),
-				"-f",
-				"content=eyes",
-			],
-			{ env: { GH_HOST: ghHost } },
-		);
-		if (output.trim() === "") {
-			await warn("failed to set ack reaction: empty response", base);
-			return undefined;
-		}
-		try {
-			const json = JSON.parse(output) as { id?: unknown };
-			if (typeof json.id === "number") {
-				return json.id;
-			}
-			await warn("failed to set ack reaction: response did not contain a numeric id", base);
-		} catch (error) {
-			await warn(`failed to set ack reaction: ${errorMessage(error)}`, base);
-		}
-	} catch (error) {
-		await warn(`failed to set ack reaction: ${errorMessage(error)}`, base);
-	}
-	return undefined;
-};
-
-const pollMentions = async (
-	prUrl: string,
-	options: {
-		allowFix?: boolean;
-		allowedUser?: string;
-		debug?: boolean;
-		dryRun: boolean;
-		logger: Logger;
-		onMention: (mention: Mention, checkedOut: Set<string>) => Promise<void>;
-		runner: Runner;
-		saveAfterEmit: boolean;
-		since?: Date;
-		warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
-	},
-): Promise<void> => {
-	await options.logger("poll", { url: prUrl });
-	const state = await loadState(undefined, async () =>
-		options.warn("state file is corrupted, resetting", { reason: "state-corrupted" }),
-	);
-	const comments = await fetchMentions(prUrl, options.runner);
-	const isFresh = (state.get(prUrl)?.length ?? 0) === 0;
-	const seen = new Set(state.get(prUrl) ?? []);
-	const crewmateRepliedIds = findCrewmateRepliedIds(comments, isFresh);
-
-	if (options.debug) {
-		await options.logger("debug", {
-			stage: "fetched-comments",
-			url: prUrl,
-			count: comments.length,
-			comments: comments.map((comment) => ({
-				...debugMentionSummary(comment),
-				inReplyToId: comment.inReplyToId,
-			})),
-		});
-
-		const filterDetails = comments.map((comment) => ({
-			...debugMentionSummary(comment),
-			...getMentionFilterDetails(comment, seen, crewmateRepliedIds, options.allowedUser),
-			...(options.since === undefined
-				? {}
-				: { sincePass: passesSinceFilter(comment.createdAt, options.since) }),
-		}));
-
-		await options.logger("debug", {
-			stage: "mention-filter",
-			url: prUrl,
-			allowedUser: options.allowedUser,
-			details: filterDetails,
-		});
-	}
-
-	const mentions = findNewMentions(
-		comments,
-		[...seen],
-		options.allowedUser,
-		isFresh,
-		options.since,
-	);
-
-	if (options.debug) {
-		await options.logger("debug", {
-			stage: "new-mentions",
-			url: prUrl,
-			count: mentions.length,
-			mentions: mentions.map((mention) => debugMentionSummary(mention)),
-		});
-	}
-
-	const checkedOut = new Set<string>();
-	for (const mention of mentions) {
-		await options.logger("mention", {
-			allowFix: options.allowFix,
-			commentId: mention.id,
-			dryRun: options.dryRun,
-			kind: mention.kind,
-			user: getLogin(mention.user),
-			url: prUrl,
-		});
-		if (!options.dryRun && !options.saveAfterEmit) {
-			await saveMention(state, prUrl, mention);
-		}
-		await options.onMention(mention, checkedOut);
-		if (!options.dryRun && options.saveAfterEmit) {
-			await saveMention(state, prUrl, mention);
-		}
-	}
-	if (!options.dryRun && isFresh && crewmateRepliedIds.size > 0) {
-		const existing = new Set(state.get(prUrl) ?? []);
-		for (const id of crewmateRepliedIds) {
-			existing.add(id);
-		}
-		state.set(prUrl, [...existing]);
-		await saveState(state);
-	}
-};
-
-type PollScope = (
-	scope: Scope,
-	options: {
-		interval: number;
-		iterations: number;
-		target: string;
-	},
-	onPr: (prUrl: string, scope: Scope) => Promise<void>,
-	runner: Runner,
-	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
-) => Promise<void>;
-
-const pollScope: PollScope = async (scope, options, onPr, runner, warn) => {
-	let warnedNoOpenItems = false;
-	for (let index = 0; index < options.iterations; index += 1) {
-		const itemUrls =
-			scope.kind === "pr" || scope.kind === "issue"
-				? [toItemUrl(scope)]
-				: await fetchOpenItems(scope, runner, warn);
-		if (itemUrls.length === 0) {
-			if (!warnedNoOpenItems) {
-				warnedNoOpenItems = true;
-				await warn("No open items found for the target", {
-					reason: "no-open-items",
-					target: options.target,
-				});
-			}
-		} else {
-			warnedNoOpenItems = false;
-			for (const itemUrl of itemUrls) {
-				try {
-					await onPr(itemUrl, scope);
-				} catch (error) {
-					if (isEpipeError(error) || isOutputError(error)) {
-						throw error;
-					}
-					const message = errorMessage(error);
-					await warn(`poll failed for ${itemUrl}`, {
-						error: message,
-						itemUrl,
-						reason: "poll-failed",
-					});
-					if (scope.kind === "pr" || scope.kind === "issue") {
-						throw error;
-					}
-				}
-			}
-		}
-		if (index < options.iterations - 1) {
-			await setTimeout(options.interval * MILLISECONDS_PER_SECOND);
-		}
-	}
-};
 
 const hostWithPort = (host: string, port?: string): string => (port ? `${host}:${port}` : host);
 
@@ -647,24 +391,9 @@ const toItemUrl = (scope: Extract<Scope, { kind: "pr" | "issue" }>): string =>
 export type Scope =
 	| { kind: "pr"; host: string; owner: string; port?: string; repo: string; number: string }
 	| { kind: "issue"; host: string; owner: string; port?: string; repo: string; number: string }
-	| { kind: "repo"; host: string; owner: string; port?: string; repo: string }
-	| { kind: "org"; host: string; org: string; port?: string };
-
-type RepoScope = Extract<Scope, { kind: "repo" }>;
-
-const REPO_SHORTHAND = new RegExp(
-	`^(?!\\.\\.?(?:\\/|$))(${NAME})\\/(?!\\.\\.?(?:\\/|$))(${NAME})\\/?$`,
-);
+	| { kind: "repo"; host: string; owner: string; port?: string; repo: string };
 
 const parseTarget = (target: string): Scope => {
-	if (target.startsWith("org:")) {
-		const org = target.slice(4).replace(/\/$/, "");
-		if (!isValidName(org)) {
-			throw new TypeError(`Invalid target: ${target}`);
-		}
-		return { kind: "org", host: "github.com", org };
-	}
-
 	if (/^https:\/\//i.test(target)) {
 		let url: URL;
 		try {
@@ -675,22 +404,12 @@ const parseTarget = (target: string): Scope => {
 		const parts = url.pathname.split("/").filter(Boolean);
 		const [first, second, third, fourth] = parts;
 
-		if (
-			parts.length === 2 &&
-			first === "orgs" &&
-			typeof second === "string" &&
-			isValidName(second)
-		) {
-			return {
-				kind: "org",
-				host: url.hostname,
-				org: second,
-				...(url.port ? { port: url.port } : {}),
-			};
+		if (first === "orgs") {
+			throw new TypeError(`Invalid target: ${target}`);
 		}
 
 		if (
-			parts.length === 4 &&
+			parts.length === EXPECTED_PATH_PARTS &&
 			third === "pull" &&
 			typeof first === "string" &&
 			typeof second === "string" &&
@@ -710,7 +429,7 @@ const parseTarget = (target: string): Scope => {
 		}
 
 		if (
-			parts.length === 4 &&
+			parts.length === EXPECTED_PATH_PARTS &&
 			third === "issues" &&
 			typeof first === "string" &&
 			typeof second === "string" &&
@@ -778,14 +497,16 @@ const toScopeItemUrl = (scope: { host: string; port?: string }, url: string): st
 };
 
 const fetchOpenItemsRepoFallback = async (
-	scope: RepoScope,
+	scope: Extract<Scope, { kind: "repo" }>,
 	runner: Runner,
 	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
+	includeClosed: boolean,
 ): Promise<string[]> => {
 	try {
+		const state = includeClosed ? "all" : "open";
 		const output = await runner(
 			"gh",
-			["api", "--paginate", "--slurp", `repos/${scope.owner}/${scope.repo}/issues?state=open`],
+			["api", "--paginate", "--slurp", `repos/${scope.owner}/${scope.repo}/issues?state=${state}`],
 			{ env: { GH_HOST: hostWithPort(scope.host, scope.port) } },
 		);
 		const pages = JSON.parse(output) as { html_url?: unknown }[][];
@@ -815,9 +536,8 @@ const fetchOpenItemsRepoFallback = async (
 };
 
 const searchItemsByQuery = async (
-	scope: Extract<Scope, { kind: "repo" | "org" }>,
+	scope: Extract<Scope, { kind: "repo" }>,
 	runner: Runner,
-	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
 	query: string,
 ): Promise<string[]> => {
 	const encoded = encodeURIComponent(query);
@@ -844,7 +564,7 @@ const isNotFound = (error: unknown): boolean => {
 };
 
 const warnSearchFailure = async (
-	scope: Extract<Scope, { kind: "repo" | "org" }>,
+	scope: Extract<Scope, { kind: "repo" }>,
 	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
 	query: string,
 	error: unknown,
@@ -872,23 +592,19 @@ const fetchOpenItems = async (
 	scope: Scope,
 	runner: Runner,
 	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
+	includeClosed = false,
 ): Promise<string[]> => {
-	if (scope.kind === "pr" || scope.kind === "issue") {
+	if (scope.kind !== "repo") {
 		throw new Error("fetchOpenItems should not be called for a single item");
 	}
 
-	const prQuery =
-		scope.kind === "repo"
-			? `repo:${scope.owner}/${scope.repo} is:pr is:open`
-			: `org:${scope.org} is:pr is:open`;
-	const issueQuery =
-		scope.kind === "repo"
-			? `repo:${scope.owner}/${scope.repo} is:issue is:open`
-			: `org:${scope.org} is:issue is:open`;
+	const stateFilter = includeClosed ? "" : " is:open";
+	const prQuery = `repo:${scope.owner}/${scope.repo} is:pr${stateFilter}`;
+	const issueQuery = `repo:${scope.owner}/${scope.repo} is:issue${stateFilter}`;
 
 	const [prResult, issueResult] = await Promise.allSettled([
-		searchItemsByQuery(scope, runner, warn, prQuery),
-		searchItemsByQuery(scope, runner, warn, issueQuery),
+		searchItemsByQuery(scope, runner, prQuery),
+		searchItemsByQuery(scope, runner, issueQuery),
 	]);
 
 	const allUrls: string[] = [];
@@ -918,16 +634,11 @@ const fetchOpenItems = async (
 	}
 
 	if (failures.length > 0 && failures.every(({ reason }) => isNotFound(reason.reason))) {
-		if (scope.kind === "repo") {
-			return fetchOpenItemsRepoFallback(scope, runner, warn);
-		}
-		throw new Error("org scope requires GHES 3.x+ search/issues");
+		return fetchOpenItemsRepoFallback(scope, runner, warn, includeClosed);
 	}
 
 	return [];
 };
-
-const fetchOpenPrs = fetchOpenItems;
 
 const makeWarn =
 	(loggerMirrorsToStderr: boolean, log: Logger) =>
@@ -940,26 +651,293 @@ const makeWarn =
 		await log("warning", { ...fields, message });
 	};
 
+const ackMention = async (
+	mention: Mention,
+	owner: string,
+	repo: string,
+	number: string,
+	ghHost: string,
+	runner: Runner,
+	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
+): Promise<number | undefined> => {
+	const commentId = mention.kind === "issue" ? Number(number) : mention.id;
+	const base = {
+		commentId,
+		kind: mention.kind,
+		number,
+		owner,
+		repo,
+	};
+	try {
+		const output = await runner(
+			"gh",
+			[
+				"api",
+				"--method",
+				"POST",
+				reactionEndpoint({ owner, repo, kind: mention.kind, number, commentId }),
+				"-f",
+				"content=eyes",
+			],
+			{ env: { GH_HOST: ghHost } },
+		);
+		if (output.trim() === "") {
+			await warn("failed to set ack reaction: empty response", base);
+			return undefined;
+		}
+		try {
+			const json = JSON.parse(output) as { id?: unknown };
+			if (typeof json.id === "number") {
+				return json.id;
+			}
+			await warn("failed to set ack reaction: response did not contain a numeric id", base);
+		} catch (error) {
+			await warn(`failed to set ack reaction: ${errorMessage(error)}`, base);
+		}
+	} catch (error) {
+		await warn(`failed to set ack reaction: ${errorMessage(error)}`, base);
+	}
+	return undefined;
+};
+
+type PollOptions = {
+	allowedUser?: string;
+	debug: boolean;
+	dryRun: boolean;
+	logger: Logger;
+	onMention: (mention: Mention) => Promise<void>;
+	onTerminalFailure?: (mention: Mention, error: unknown) => Promise<void>;
+	runner: Runner;
+	since?: Date;
+	stateFile?: string;
+	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
+};
+
+const pollMentions = async (itemUrl: string, options: PollOptions): Promise<void> => {
+	await options.logger("poll", { url: itemUrl });
+	const jobs = await loadState(options.stateFile, async () =>
+		options.warn("state file is corrupted, resetting", { reason: "state-corrupted" }),
+	);
+	const save = async () => {
+		await saveState(jobs, options.stateFile);
+	};
+	const comments = await fetchMentions(itemUrl, options.runner);
+	const targetJobs = jobs.get(itemUrl) ?? new Map<string, Job>();
+	jobs.set(itemUrl, targetJobs);
+	const isFresh = targetJobs.size === 0;
+	const closed = new Set(
+		[...targetJobs.entries()].filter(([, job]) => isJobClosed(job)).map(([key]) => key),
+	);
+	const crewmateRepliedIds = findCrewmateRepliedIds(comments, isFresh);
+
+	if (options.debug) {
+		await options.logger("debug", {
+			stage: "fetched-comments",
+			url: itemUrl,
+			count: comments.length,
+			comments: comments.map((comment) => ({
+				...debugMentionSummary(comment),
+				inReplyToId: comment.inReplyToId,
+			})),
+		});
+
+		const filterDetails = comments.map((comment) => ({
+			...debugMentionSummary(comment),
+			...getMentionFilterDetails(comment, closed, crewmateRepliedIds, options.allowedUser),
+			...(options.since === undefined
+				? {}
+				: { sincePass: passesSinceFilter(comment.createdAt, options.since) }),
+		}));
+
+		await options.logger("debug", {
+			stage: "mention-filter",
+			url: itemUrl,
+			allowedUser: options.allowedUser,
+			details: filterDetails,
+		});
+	}
+
+	const mentions = findNewMentions(
+		comments,
+		[...closed],
+		options.allowedUser,
+		isFresh,
+		options.since,
+	);
+
+	if (options.debug) {
+		await options.logger("debug", {
+			stage: "new-mentions",
+			url: itemUrl,
+			count: mentions.length,
+			mentions: mentions.map((mention) => debugMentionSummary(mention)),
+		});
+	}
+
+	for (const mention of mentions) {
+		const key = `${mention.kind}:${mention.id}`;
+		const job = targetJobs.get(key) ?? {
+			attempts: 0,
+			status: "pending",
+			updatedAt: new Date().toISOString(),
+		};
+		if (!isJobDue(job, new Date())) {
+			await options.logger("skip", { key, reason: "not-due", url: itemUrl });
+			continue;
+		}
+		await options.logger("mention", {
+			attempt: job.attempts + 1,
+			commentId: mention.id,
+			dryRun: options.dryRun,
+			kind: mention.kind,
+			user: getLogin(mention.user),
+			url: itemUrl,
+		});
+		if (options.dryRun) {
+			await options.onMention(mention);
+			continue;
+		}
+		job.status = "running";
+		job.attempts += 1;
+		job.updatedAt = new Date().toISOString();
+		targetJobs.set(key, job);
+		await save();
+		try {
+			await options.onMention(mention);
+			job.status = "succeeded";
+			delete job.nextAttemptAt;
+			delete job.lastError;
+			job.updatedAt = new Date().toISOString();
+			await save();
+			await options.logger("handled", { attempts: job.attempts, key, url: itemUrl });
+		} catch (error) {
+			if (isEpipeError(error) || isOutputError(error)) {
+				throw error;
+			}
+			const message = errorMessage(error);
+			job.status = "failed";
+			job.lastError = message;
+			job.updatedAt = new Date().toISOString();
+			if (job.attempts >= MAX_ATTEMPTS) {
+				delete job.nextAttemptAt;
+				await save();
+				await options.warn(`mention ${key} failed permanently after ${job.attempts} attempts`, {
+					error: message,
+					key,
+					reason: "mention-failed-terminal",
+					url: itemUrl,
+				});
+				if (options.onTerminalFailure !== undefined) {
+					await options.onTerminalFailure(mention, error);
+				}
+			} else {
+				job.nextAttemptAt = new Date(
+					Date.now() + retryDelaySeconds(job.attempts) * MILLISECONDS_PER_SECOND,
+				).toISOString();
+				await save();
+				await options.warn(`mention ${key} failed, will retry`, {
+					attempts: job.attempts,
+					error: message,
+					key,
+					nextAttemptAt: job.nextAttemptAt,
+					reason: "mention-failed-retry",
+					url: itemUrl,
+				});
+			}
+		}
+	}
+
+	if (!options.dryRun && isFresh && crewmateRepliedIds.size > 0) {
+		for (const key of crewmateRepliedIds) {
+			targetJobs.set(key, {
+				attempts: 1,
+				status: "succeeded",
+				updatedAt: new Date().toISOString(),
+			});
+		}
+		await save();
+	}
+};
+
+type PollScope = (
+	scope: Scope,
+	options: {
+		includeClosed?: boolean;
+		interval: number;
+		iterations: number;
+		target: string;
+	},
+	onItem: (itemUrl: string) => Promise<void>,
+	runner: Runner,
+	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
+) => Promise<void>;
+
+const pollScope: PollScope = async (scope, options, onItem, runner, warn) => {
+	let warnedNoOpenItems = false;
+	for (let index = 0; index < options.iterations; index += 1) {
+		const itemUrls =
+			scope.kind === "pr" || scope.kind === "issue"
+				? [toItemUrl(scope)]
+				: await fetchOpenItems(scope, runner, warn, options.includeClosed);
+		if (itemUrls.length === 0) {
+			if (!warnedNoOpenItems) {
+				warnedNoOpenItems = true;
+				await warn("No open items found for the target", {
+					reason: "no-open-items",
+					target: options.target,
+				});
+			}
+		} else {
+			warnedNoOpenItems = false;
+			for (const itemUrl of itemUrls) {
+				try {
+					await onItem(itemUrl);
+				} catch (error) {
+					if (isEpipeError(error) || isOutputError(error)) {
+						throw error;
+					}
+					const message = errorMessage(error);
+					await warn(`poll failed for ${itemUrl}`, {
+						error: message,
+						itemUrl,
+						reason: "poll-failed",
+					});
+					if (scope.kind === "pr" || scope.kind === "issue") {
+						throw error;
+					}
+				}
+			}
+		}
+		if (index < options.iterations - 1) {
+			await setTimeout(options.interval * MILLISECONDS_PER_SECOND);
+		}
+	}
+};
+
 type ScopeRunOptions = {
-	allowFix?: boolean;
+	ack?: boolean;
 	allowedUser?: string;
 	config?: Partial<Profile>;
 	debug?: boolean;
 	dryRun?: boolean;
+	includeClosed?: boolean;
 	interval?: number;
 	iterations?: number;
 	logger?: Logger;
+	lockDir?: string;
 	model?: string;
+	outputFile?: string;
 	prompt?: string;
 	provider?: string;
 	runner?: Runner;
 	since?: Date;
+	stateFile?: string;
+	timeoutSeconds?: number;
 	toStderr?: boolean;
 	unsafeNoUser?: boolean;
 };
 
 type ScopeContext = {
-	allowFix: boolean;
 	allowedUser: string | undefined;
 	debug: boolean;
 	dryRun: boolean;
@@ -967,9 +945,10 @@ type ScopeContext = {
 	model: string | undefined;
 	prompt: string | undefined;
 	provider: string | undefined;
-	repoRoot: string | undefined;
 	runner: Runner;
 	since: Date | undefined;
+	stateFile: string | undefined;
+	timeoutSeconds: number;
 	warn: (message: string, fields?: Record<string, unknown>) => Promise<void>;
 };
 
@@ -977,8 +956,7 @@ const runScope = async (
 	target: string,
 	options: ScopeRunOptions,
 	callbacks: {
-		onPr: (ctx: ScopeContext, prUrl: string, scope: Scope) => Promise<void>;
-		requiresGitForPr: boolean;
+		onItem: (ctx: ScopeContext, itemUrl: string) => Promise<void>;
 		requiresProvider: boolean;
 	},
 ): Promise<void> => {
@@ -992,32 +970,13 @@ const runScope = async (
 		normalizedItemUrl =
 			scope.kind === "pr" ? toPrUrl(scope) : scope.kind === "issue" ? toIssueUrl(scope) : target;
 
-		let repoRoot: string | undefined;
-		let profile: Partial<Profile>;
 		const ghHost = hostWithPort(scope.host, scope.port);
 		const ghHostEnv = { env: { GH_HOST: ghHost } };
 		await runner("gh", ["--version"], ghHostEnv);
 		await authenticateHost(runner, ghHost, ghHostEnv);
 
-		if (scope.kind === "pr") {
-			try {
-				repoRoot = (await runner("git", ["rev-parse", "--show-toplevel"])).trim() || undefined;
-			} catch {
-				if (callbacks.requiresGitForPr) {
-					throw new Error("watch requires a git working tree");
-				}
-			}
+		const profile = options.config ?? (await loadConfig(configWarn));
 
-			profile =
-				options.config ?? (await resolveProfile(scope.owner, scope.repo, repoRoot, configWarn));
-		} else if (scope.kind === "issue") {
-			profile =
-				options.config ?? (await resolveProfile(scope.owner, scope.repo, undefined, configWarn));
-		} else {
-			const owner = scope.kind === "org" ? scope.org : scope.owner;
-			const repo = scope.kind === "org" ? undefined : scope.repo;
-			profile = options.config ?? (await resolveProfile(owner, repo, undefined, configWarn));
-		}
 		const unsafeNoUser =
 			options.unsafeNoUser ??
 			(options.allowedUser === undefined ? profile.unsafeNoUser : false) ??
@@ -1033,8 +992,9 @@ const runScope = async (
 		const interval = options.interval ?? profile.interval ?? DEFAULT_INTERVAL_SECONDS;
 		const debug = options.debug ?? profile.debug ?? false;
 		const prompt = options.prompt ?? profile.prompt;
-		let allowFix = options.allowFix ?? profile.fix ?? false;
-		const dryRun = options.dryRun ?? profile.dryRun ?? false;
+		const dryRun = options.dryRun ?? false;
+		const timeoutSeconds =
+			options.timeoutSeconds ?? profile.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
 		toStderr = options.toStderr ?? profile.log ?? false;
 		if (!options.logger) {
 			logger = createLogger({ toStderr });
@@ -1058,14 +1018,6 @@ const runScope = async (
 			);
 		}
 
-		if (scope.kind !== "pr" && allowFix) {
-			await warn("fix is not supported for repo, org, or issue scope targets; disabling", {
-				reason: "scope-fix-disabled",
-				target,
-			});
-			allowFix = false;
-		}
-
 		if (callbacks.requiresProvider) {
 			await runner(provider || "claude", ["--version"]);
 		}
@@ -1076,18 +1028,16 @@ const runScope = async (
 			if (!toStderr) {
 				try {
 					process.stderr.write(
-						"Dry-run mode: no GitHub comments, reactions, or git add/commit/push will be made.\n",
+						"Dry-run mode: no GitHub comments, reactions, or state changes will be made.\n",
 					);
 				} catch {}
 			}
 			await logger("info", {
-				message:
-					"Dry-run mode: no GitHub comments, reactions, or git add/commit/push will be made.",
+				message: "Dry-run mode: no GitHub comments, reactions, or state changes will be made.",
 			});
 		}
 
 		const ctx: ScopeContext = {
-			allowFix,
 			allowedUser,
 			debug,
 			dryRun,
@@ -1095,17 +1045,18 @@ const runScope = async (
 			model,
 			prompt,
 			provider,
-			repoRoot,
 			runner,
 			since: options.since,
+			stateFile: options.stateFile,
+			timeoutSeconds,
 			warn,
 		};
 
 		await pollScope(
 			scope,
-			{ interval, iterations, target },
-			async (prUrl, pollScopeScope) => {
-				await callbacks.onPr(ctx, prUrl, pollScopeScope);
+			{ includeClosed: options.includeClosed ?? false, interval, iterations, target },
+			async (itemUrl) => {
+				await callbacks.onItem(ctx, itemUrl);
 			},
 			runner,
 			warn,
@@ -1149,97 +1100,94 @@ const emitLine = async (line: string, outputFile?: string): Promise<void> => {
 	}
 };
 
-const watch = async (
-	target: string,
-	options: {
-		interval?: number;
-		allowFix?: boolean;
-		allowedUser?: string;
-		config?: Partial<Profile>;
-		debug?: boolean;
-		dryRun?: boolean;
-		logger?: Logger;
-		model?: string;
-		prompt?: string;
-		provider?: string;
-		runner?: Runner;
-		iterations?: number;
-		since?: Date;
-		toStderr?: boolean;
-		unsafeNoUser?: boolean;
-	} = {},
-): Promise<void> => {
-	await runScope(target, options, {
-		onPr: async (ctx, prUrl, _scope) => {
-			await pollMentions(prUrl, {
-				allowFix: ctx.allowFix,
-				allowedUser: ctx.allowedUser,
-				debug: ctx.debug,
-				dryRun: ctx.dryRun,
-				logger: ctx.logger,
-				onMention: (mention, checkedOut) =>
-					respondToMention(mention, prUrl, {
-						allowFix: ctx.allowFix,
-						checkedOut,
-						dryRun: ctx.dryRun,
-						logger: ctx.logger,
-						model: ctx.model,
-						prompt: ctx.prompt,
-						provider: ctx.provider,
-						repoRoot: ctx.repoRoot,
-						runner: ctx.runner,
-						warn: ctx.warn,
-					}),
-				runner: ctx.runner,
-				saveAfterEmit: false,
-				since: ctx.since,
-				warn: ctx.warn,
-			});
-		},
-		requiresGitForPr: true,
-		requiresProvider: true,
+const makeReplyContext = (
+	ctx: ScopeContext,
+	mention: Mention,
+	scope: Extract<Scope, { kind: "pr" | "issue" }>,
+): ReplyContext => ({
+	commentId: mention.kind === "issue" ? Number(scope.number) : mention.id,
+	dryRun: ctx.dryRun,
+	ghHost: hostWithPort(scope.host, scope.port),
+	kind: mention.kind,
+	logger: ctx.logger,
+	model: ctx.model,
+	number: scope.number,
+	owner: scope.owner,
+	prompt: ctx.prompt,
+	provider: ctx.provider,
+	repo: scope.repo,
+	runner: ctx.runner,
+	timeoutSeconds: ctx.timeoutSeconds,
+	warn: ctx.warn,
+});
+
+const watch = async (target: string, options: ScopeRunOptions = {}): Promise<void> => {
+	const release = await acquireLock({
+		dir: options.lockDir ?? path.dirname(options.stateFile ?? statePath()),
 	});
+	try {
+		await runScope(target, options, {
+			onItem: async (ctx, itemUrl) => {
+				const scope = parseTarget(itemUrl) as Extract<Scope, { kind: "issue" | "pr" }>;
+				await pollMentions(itemUrl, {
+					allowedUser: ctx.allowedUser,
+					debug: ctx.debug,
+					dryRun: ctx.dryRun,
+					logger: ctx.logger,
+					onMention: async (mention) => {
+						const replyCtx = makeReplyContext(ctx, mention, scope);
+						await handleMention(mention, replyCtx);
+					},
+					onTerminalFailure: async (mention, error) => {
+						const replyCtx = makeReplyContext(ctx, mention, scope);
+						try {
+							await postReply(
+								replyCtx,
+								`Failed to respond after ${MAX_ATTEMPTS} attempts: ${errorMessage(error)}`,
+								"error",
+							);
+						} catch (replyError) {
+							await ctx.warn("failed to post failure reply", {
+								error: errorMessage(replyError),
+								reason: "failure-reply-failed",
+							});
+						}
+					},
+					runner: ctx.runner,
+					since: ctx.since,
+					stateFile: ctx.stateFile,
+					warn: ctx.warn,
+				});
+			},
+			requiresProvider: true,
+		});
+	} finally {
+		await release();
+	}
 };
 
-const stream = async (
-	target: string,
-	options: {
-		ack?: boolean;
-		allowedUser?: string;
-		config?: Partial<Profile>;
-		debug?: boolean;
-		interval?: number;
-		iterations?: number;
-		logger?: Logger;
-		outputFile?: string;
-		runner?: Runner;
-		since?: Date;
-		toStderr?: boolean;
-		unsafeNoUser?: boolean;
-	} = {},
-): Promise<void> => {
-	await runScope(
-		target,
-		{ ...options, allowFix: false, dryRun: false },
-		{
-			onPr: async (ctx, prUrl) => {
-				const parsed = parseTarget(prUrl) as Extract<Scope, { kind: "pr" | "issue" }>;
-				const ghHost = hostWithPort(parsed.host, parsed.port);
-				await pollMentions(prUrl, {
-					allowFix: false,
+const stream = async (target: string, options: ScopeRunOptions = {}): Promise<void> => {
+	const release = await acquireLock({
+		dir: options.lockDir ?? path.dirname(options.stateFile ?? statePath()),
+	});
+	try {
+		await runScope(target, options, {
+			onItem: async (ctx, itemUrl) => {
+				const scope = parseTarget(itemUrl) as Extract<Scope, { kind: "issue" | "pr" }>;
+				await pollMentions(itemUrl, {
 					allowedUser: ctx.allowedUser,
 					debug: ctx.debug,
 					dryRun: false,
 					logger: ctx.logger,
-					onMention: async (mention, _checkedOut) => {
+					onMention: async (mention) => {
 						let reactionId: number | undefined;
 						if (options.ack) {
 							reactionId = await ackMention(
 								mention,
-								parsed.owner,
-								parsed.repo,
-								parsed.number,
-								ghHost,
+								scope.owner,
+								scope.repo,
+								scope.number,
+								hostWithPort(scope.host, scope.port),
 								ctx.runner,
 								ctx.warn,
 							);
@@ -1247,14 +1195,14 @@ const stream = async (
 						const event: Record<string, unknown> = {
 							at: new Date().toISOString(),
 							event: "mention",
-							owner: parsed.owner,
-							repo: parsed.repo,
-							number: Number(parsed.number),
-							commentId: mention.kind === "issue" ? Number(parsed.number) : mention.id,
+							owner: scope.owner,
+							repo: scope.repo,
+							number: Number(scope.number),
+							commentId: mention.kind === "issue" ? Number(scope.number) : mention.id,
 							kind: mention.kind,
 							user: getLogin(mention.user),
 							body: mention.body,
-							url: prUrl,
+							url: itemUrl,
 						};
 						if (reactionId !== undefined) {
 							event.reactionId = reactionId;
@@ -1267,15 +1215,16 @@ const stream = async (
 						await emitLine(line, options.outputFile);
 					},
 					runner: ctx.runner,
-					saveAfterEmit: true,
 					since: ctx.since,
+					stateFile: ctx.stateFile,
 					warn: ctx.warn,
 				});
 			},
-			requiresGitForPr: false,
 			requiresProvider: false,
-		},
-	);
+		});
+	} finally {
+		await release();
+	}
 };
 
 const VALUE_FLAGS = new Set([
@@ -1286,6 +1235,7 @@ const VALUE_FLAGS = new Set([
 	"--provider",
 	"--output-file",
 	"--since",
+	"--timeout",
 ]);
 
 const parseArgs = (
@@ -1334,6 +1284,15 @@ const parseInterval = (
 	}
 	const parsed = Math.trunc(Number(value));
 	return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
+};
+
+const parseTimeout = (input: string | undefined): number | undefined => {
+	if (input === undefined) return undefined;
+	const parsed = Math.trunc(Number(input));
+	if (Number.isNaN(parsed) || parsed <= 0) {
+		throw new TypeError(`Invalid --timeout seconds: ${input}`);
+	}
+	return parsed;
 };
 
 const SINCE_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -1419,7 +1378,9 @@ const runWatch = async (
 		config?: Partial<Profile>;
 		iterations?: number;
 		logger?: Logger;
+		lockDir?: string;
 		runner?: Runner;
+		stateFile?: string;
 	},
 ): Promise<void> => {
 	const parsed = parseRunArgs(rest);
@@ -1440,16 +1401,17 @@ const runWatch = async (
 	const runner = options.runner ?? exec;
 	const target = rawTarget || (await resolveDefaultTarget(runner));
 	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
-	const allowFix = booleans.has("--fix") ? true : undefined;
+	const timeoutSeconds = parseTimeout(values.get("--timeout"));
 	const debug = booleans.has("--debug") ? true : undefined;
 	const dryRun = booleans.has("--dry-run") ? true : undefined;
+	const includeClosed = booleans.has("--closed") ? true : undefined;
 	const unsafeNoUser = booleans.has("--unsafe-no-user") ? true : undefined;
 	const allowedUser = values.get("--user");
 	const prompt = values.get("--prompt");
 	const model = values.get("--model");
 	const provider = values.get("--provider");
 	await watch(target, {
-		allowFix,
+		includeClosed,
 		allowedUser,
 		config: options.config,
 		debug,
@@ -1457,10 +1419,13 @@ const runWatch = async (
 		interval,
 		iterations: options.iterations,
 		logger: options.logger,
+		lockDir: options.lockDir,
 		model,
 		prompt,
 		provider,
 		runner: options.runner,
+		stateFile: options.stateFile,
+		timeoutSeconds,
 		toStderr,
 		unsafeNoUser,
 	});
@@ -1472,7 +1437,9 @@ const runStream = async (
 		config?: Partial<Profile>;
 		iterations?: number;
 		logger?: Logger;
+		lockDir?: string;
 		runner?: Runner;
+		stateFile?: string;
 	},
 ): Promise<void> => {
 	const parsed = parseRunArgs(rest);
@@ -1484,7 +1451,15 @@ const runStream = async (
 	const logger = options.logger ?? createLogger({ toStderr: toStderr ?? false });
 	const warn = makeWarn(toStderr ?? false, logger);
 
-	for (const flag of ["--fix", "--dry-run", "--json", "--model", "--provider", "--prompt"]) {
+	for (const flag of [
+		"--fix",
+		"--dry-run",
+		"--json",
+		"--model",
+		"--provider",
+		"--prompt",
+		"--timeout",
+	]) {
 		if (booleans.has(flag) || values.has(flag)) {
 			await warn("unsupported flag", { flag });
 		}
@@ -1502,27 +1477,34 @@ const runStream = async (
 		throw new TypeError("--since requires an ISO-8601 timestamp");
 	}
 
-	const runner = options.runner ?? exec;
-	const target = rawTarget || (await resolveDefaultTarget(runner));
-	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
-	const since = parseSince(values.get("--since"));
-	const ack = booleans.has("--ack") ? true : undefined;
 	const debug = booleans.has("--debug") ? true : undefined;
+	const includeClosed = booleans.has("--closed") ? true : undefined;
 	const unsafeNoUser = booleans.has("--unsafe-no-user") ? true : undefined;
 	const allowedUser = values.get("--user");
+	const interval = parseInterval(values.get("--interval"), { fallback: undefined });
 	const outputFile = rawOutputFile;
+	const since = parseSince(values.get("--since"));
+	const ack = booleans.has("--ack") ? true : undefined;
+	const runner = options.runner ?? exec;
+	let target = rawTarget;
+	if (target === undefined || target === "") {
+		target = await resolveDefaultTarget(runner);
+	}
 
 	await stream(target, {
 		ack,
+		includeClosed,
 		allowedUser,
 		config: options.config,
 		debug,
 		interval,
 		iterations: options.iterations,
 		logger: options.logger,
+		lockDir: options.lockDir,
 		outputFile,
 		runner: options.runner,
 		since,
+		stateFile: options.stateFile,
 		toStderr,
 		unsafeNoUser,
 	});
@@ -1535,7 +1517,9 @@ const run = Object.assign(
 			config?: Partial<Profile>;
 			iterations?: number;
 			logger?: Logger;
+			lockDir?: string;
 			runner?: Runner;
+			stateFile?: string;
 		} = {},
 	): Promise<void> => {
 		try {
@@ -1559,10 +1543,6 @@ const run = Object.assign(
 				await runStream(rest, options);
 				return;
 			}
-			if (subcommand === "init") {
-				await runInit();
-				return;
-			}
 			throw new TypeError(`Unknown command '${subcommand}'. Run 'crewmate --help' for usage.`);
 		} catch (error) {
 			if (isEpipeError(error)) {
@@ -1577,7 +1557,6 @@ const run = Object.assign(
 		exec,
 		fetchMentions,
 		fetchOpenItems,
-		fetchOpenPrs,
 		findFlag,
 		findNewMention,
 		findNewMentions,
@@ -1586,12 +1565,14 @@ const run = Object.assign(
 		parseGitRemoteUrl,
 		parseInterval,
 		parsePrUrl,
+		parseSince,
 		parseTarget,
-		respondToMention,
+		pollMentions,
+		parseTimeout,
+		pruneState,
 		saveState,
 		statePath,
 		stream,
-		stripFences,
 		watch,
 	},
 );

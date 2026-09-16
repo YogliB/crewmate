@@ -1,124 +1,50 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import fs from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import process from "node:process";
 import run from "./index.js";
-import { CREWMATE_PREFIX, applyFix, dispatchMention } from "./fix.js";
-import { createLogger, type Logger } from "./log.js";
-import { homedir, tmpdir } from "node:os";
-import type { Mention } from "./index.js";
-import * as config from "./config.js";
+import { CREWMATE_PREFIX } from "./reply.js";
+import type { Logger } from "./log.js";
+
+const mention = (overrides: Record<string, unknown> = {}) =>
+	({
+		body: "@crewmate hello",
+		id: 1,
+		kind: "review",
+		line: 1,
+		path: "a.ts",
+		user: { login: "alice" },
+		...overrides,
+	}) as never;
+
+const failingLogger: Logger = () => Promise.reject(new Error("log broken"));
 
 type Runner = (
 	file: string,
 	args: string[],
-	options?: { env?: Record<string, string | undefined> },
+	options?: { env?: Record<string, string | undefined>; timeoutMs?: number },
 ) => Promise<string>;
+
+const PR_URL = "https://github.com/owner/repo/pull/4";
+const ISSUE_URL = "https://github.com/owner/repo/issues/4";
 
 const startsWithRepos = (value: string | undefined): boolean =>
 	typeof value === "string" && value.startsWith("repos/");
 
-const PR_URL = "https://github.com/owner/repo/pull/123";
-const ISSUE_URL = "https://github.com/owner/repo/issues/4";
-const FIRST_INDEX = 0;
-const SECOND_INDEX = 1;
-const FIRST_ID = 1;
-const SECOND_ID = 2;
-const THIRD_ID = 3;
-let nextReactionId = 100;
-const takeNextReactionId = () => nextReactionId++;
-const FIRST_LINE = 1;
-const EXPLANATION_LINE = 5;
-const INVALID_LOGIN = 123;
-const NO_ITERATIONS = 0;
-const FIRST_ITERATION = 1;
-const TWO_ITERATIONS = 2;
-const NO_INTERVAL = 0;
-const NO_CALLS = 0;
-const FIRST_CALL = 1;
-const TWO_CALLS = 2;
-const THREE_CALLS = 3;
-const NO_EXIT_CODE = 0;
-const ERROR_EXIT_CODE = 1;
-const ORIGINAL_CWD = process.cwd();
-
-const countCalls = (
-	runner: Runner,
-	file: string,
-	argMatcher?: (args: string[], options?: { env?: Record<string, string | undefined> }) => boolean,
-): number =>
-	(
-		runner as unknown as {
-			mock: { calls: [string, string[], { env?: Record<string, string | undefined> }?][] };
-		}
-	).mock.calls.filter(
-		([calledFile, args, options]) =>
-			calledFile === file && (argMatcher === undefined || argMatcher(args, options)),
-	).length;
-
-const isReplyPost = (args: string[]): boolean =>
-	args.includes("POST") && args.some((arg) => typeof arg === "string" && arg.startsWith("body="));
-
-const isReactionPost = (args: string[]): boolean => {
-	const endpoint = findEndpoint(args);
-	return args.includes("POST") && !!endpoint?.includes("/reactions");
-};
-
-const isReactionDelete = (args: string[]): boolean => {
-	const endpoint = findEndpoint(args);
-	return args.includes("DELETE") && !!endpoint?.includes("/reactions");
-};
-
-const getReactionEmoji = (args: string[]): string | undefined => {
-	const content = args.find((arg) => typeof arg === "string" && arg.startsWith("content="));
-	return content?.slice("content=".length);
-};
-
-const warnFn = (logger: Logger) => async (message: string, fields?: Record<string, unknown>) => {
-	await logger("warning", { ...fields, message });
-};
-
-const mockStdoutWrite = ({ error, returnFalse }: { error?: Error; returnFalse?: boolean } = {}) =>
-	vi.spyOn(process.stdout, "write").mockImplementation(((
-		line: unknown,
-		encodingOrCallback?: unknown,
-		callback?: unknown,
-	) => {
-		const cb =
-			typeof callback === "function"
-				? callback
-				: typeof encodingOrCallback === "function"
-					? encodingOrCallback
-					: undefined;
-		if (returnFalse && cb) {
-			process.nextTick(cb, error);
-		} else if (error && cb) {
-			cb(error);
-		} else if (cb) {
-			cb();
-		}
-		return !returnFalse;
-	}) as (chunk: string | Uint8Array, ...rest: unknown[]) => boolean);
-
-const getPrompt = (runner: Runner, provider = "claude"): string | undefined => {
-	const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-		([file, args]) => file === provider && args.includes("-p"),
-	);
-	const index = call?.[1].indexOf("-p");
-	return typeof index === "number" && index >= 0 ? call?.[1].at(index + 1) : undefined;
-};
-
 const findEndpoint = (args: string[]): string | undefined =>
-	args.find((arg) => typeof arg === "string" && startsWithRepos(arg));
+	args.find((arg) => startsWithRepos(arg));
 
 const endpointPath = (endpoint: string): string => endpoint.split("?")[0] ?? endpoint;
 
 const PULLS_COMMENTS_PATTERN = /^repos\/[^/]+\/[^/]+\/pulls\/\d+\/comments$/;
-const PULLS_FILES_PATTERN = /^repos\/[^/]+\/[^/]+\/pulls\/\d+\/files$/;
 const ISSUE_BODY_PATTERN = /^repos\/[^/]+\/[^/]+\/issues\/(\d+)$/;
 const ISSUE_COMMENTS_PATTERN = /^repos\/[^/]+\/[^/]+\/issues\/\d+\/comments$/;
 const REACTION_PATTERN =
 	/^repos\/[^/]+\/[^/]+\/(?:issues|pulls)\/comments\/\d+\/reactions(?:\/\d+)?$|^repos\/[^/]+\/[^/]+\/issues\/\d+\/reactions(?:\/\d+)?$/;
+
+let nextReactionId = 100;
+const takeNextReactionId = () => nextReactionId++;
 
 const resolveReaction = (args: string[]): string | undefined => {
 	const endpoint = findEndpoint(args);
@@ -134,6775 +60,1977 @@ const resolveReaction = (args: string[]): string | undefined => {
 	return undefined;
 };
 
-const conversationComments = (body?: string, user = "alice"): string =>
-	body === undefined || body === ""
-		? "[]"
-		: JSON.stringify([
-				[{ body, id: THIRD_ID, created_at: "2026-09-03T00:00:00.000Z", user: { login: user } }],
-			]);
-
-const issueBodyResponse = (body: string, number: number, user = "alice"): string =>
-	JSON.stringify({ number, body, user: { login: user } });
-
-const resolveGhExplain = (
-	args: string[],
-	request: {
-		body?: string;
-		conversationBody?: string;
-		issueBody?: string;
-		path?: string;
-		user?: string;
-	} = {},
-): Promise<string> => {
-	const [command] = args;
-	if (command === "api" && args.includes("user")) {
-		return Promise.resolve("alice");
-	}
-	if (command === "api" && args.some((arg) => startsWithRepos(arg))) {
-		const reaction = resolveReaction(args);
-		if (reaction !== undefined) return Promise.resolve(reaction);
-		const endpoint = findEndpoint(args);
-		if (endpoint === undefined) return Promise.resolve("");
-		if (args.includes("POST") || args.includes("DELETE")) {
-			return Promise.resolve("");
-		}
-		const endpointPathValue = endpointPath(endpoint);
-		if (PULLS_COMMENTS_PATTERN.test(endpointPathValue)) {
-			return Promise.resolve(
-				JSON.stringify([
-					[
-						{
-							body: request.body ?? "@crewmate hello",
-							created_at: "2026-09-03T00:00:00.000Z",
-							id: FIRST_ID,
-							in_reply_to_id: null,
-							line: EXPLANATION_LINE,
-							path: request.path ?? "src/index.ts",
-							user: { login: request.user ?? "alice" },
-						},
-					],
-				]),
-			);
-		}
-		const issueMatch = ISSUE_BODY_PATTERN.exec(endpointPathValue);
-		if (issueMatch) {
-			const number = Number(issueMatch[1]);
-			return Promise.resolve(
-				issueBodyResponse(
-					request.issueBody ?? request.conversationBody ?? "@crewmate hello",
-					number,
-					request.user,
-				),
-			);
-		}
-		if (ISSUE_COMMENTS_PATTERN.test(endpointPathValue)) {
-			return Promise.resolve(conversationComments(request.conversationBody, request.user));
-		}
-	}
-	return Promise.resolve("");
+type ReviewCommentSpec = {
+	body?: string;
+	id?: number;
+	inReplyToId?: number | null;
+	line?: number;
+	path?: string;
+	user?: string;
+	createdAt?: string;
 };
 
-const resolveGit = (args: string[]): Promise<string> => {
-	const [command, subcommand] = args;
-	if (command === "rev-parse" && subcommand === "--show-toplevel") {
-		return Promise.resolve(process.cwd());
-	}
-	if (command === "rev-parse" && subcommand === "--short") {
-		return Promise.resolve("abc123");
-	}
-	if (command === "remote" && subcommand === "get-url" && args.at(2) === "origin") {
-		return Promise.resolve("https://github.com/owner/repo.git");
-	}
-	return Promise.resolve("");
-};
+const reviewCommentsPage = (specs: ReviewCommentSpec[]): string =>
+	JSON.stringify([
+		specs.map((spec, index) => ({
+			body: spec.body ?? "@crewmate hello",
+			created_at: spec.createdAt ?? "2026-09-03T00:00:00.000Z",
+			id: spec.id ?? index + 1,
+			in_reply_to_id: spec.inReplyToId ?? null,
+			line: spec.line ?? 5,
+			path: spec.path ?? "src/index.ts",
+			user: { login: spec.user ?? "alice" },
+		})),
+	]);
 
-const makeScopeRunner = ({
-	prUrl = PR_URL,
-	issueUrl,
-	rawContent = "example",
-	body = "@crewmate hello",
-	filePath = "src/index.ts",
-	conversationBody,
-	issueBody = "",
-	user = "alice",
-}: {
+type RunnerBehavior = {
+	answer?: string | Error;
+	comments?: ReviewCommentSpec[];
+	conversationBody?: string;
+	conversationUser?: string;
+	failAuth?: boolean;
+	failUserLookup?: boolean;
+	ghUser?: string;
+	issueBody?: string;
+	issueNumber?: number;
 	prUrl?: string;
 	issueUrl?: string;
-	rawContent?: string;
-	body?: string;
-	filePath?: string;
-	conversationBody?: string;
-	issueBody?: string;
-	user?: string;
-} = {}): Runner =>
+	rawContent?: string | Error;
+	reactionResponse?: string | Error;
+	remoteUrl?: string | Error;
+	providerName?: string;
+	searchFailsPr?: Error;
+	searchFailsIssue?: Error;
+	searchPrUrls?: string[];
+	searchIssueUrls?: string[];
+	searchPrItems?: unknown[];
+	searchPrNoItems?: boolean;
+};
+
+const makeRunner = (behavior: RunnerBehavior = {}): Runner =>
 	vi.fn((file: string, args: string[]) => {
-		if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
+		if (file === "gh" && args[0] === "--version") {
 			return Promise.resolve("");
+		}
+		if (file === "gh" && args[0] === "auth") {
+			return behavior.failAuth === true
+				? Promise.reject(new Error("not logged in"))
+				: Promise.resolve("");
 		}
 		if (file === "gh" && args[0] === "api") {
 			if (args.includes("user")) {
-				return Promise.resolve("alice");
+				if (behavior.failUserLookup === true) {
+					return Promise.reject(new Error("no user"));
+				}
+				return Promise.resolve(`${behavior.ghUser ?? "alice"}\n`);
+			}
+			const reactionEndpoint = findEndpoint(args);
+			if (
+				behavior.reactionResponse !== undefined &&
+				reactionEndpoint !== undefined &&
+				REACTION_PATTERN.test(endpointPath(reactionEndpoint))
+			) {
+				return behavior.reactionResponse instanceof Error
+					? Promise.reject(behavior.reactionResponse)
+					: Promise.resolve(behavior.reactionResponse);
 			}
 			const reaction = resolveReaction(args);
 			if (reaction !== undefined) return Promise.resolve(reaction);
 			const searchArg = args.find((arg) => arg.startsWith("search/issues?q="));
 			if (searchArg !== undefined) {
 				if (searchArg.includes("is%3Apr")) {
-					return JSON.stringify([{ items: [{ html_url: prUrl }] }]);
+					if (behavior.searchFailsPr !== undefined) return Promise.reject(behavior.searchFailsPr);
+					if (behavior.searchPrNoItems === true) return Promise.resolve(JSON.stringify([{}]));
+					if (behavior.searchPrItems !== undefined) {
+						return Promise.resolve(JSON.stringify([{ items: behavior.searchPrItems }]));
+					}
+					const urls =
+						behavior.searchPrUrls ?? (behavior.prUrl === undefined ? [] : [behavior.prUrl]);
+					return Promise.resolve(
+						JSON.stringify([{ items: urls.map((html_url) => ({ html_url })) }]),
+					);
 				}
-				if (searchArg.includes("is%3Aissue") && issueUrl) {
-					return JSON.stringify([{ items: [{ html_url: issueUrl }] }]);
+				if (behavior.searchFailsIssue !== undefined) {
+					return Promise.reject(behavior.searchFailsIssue);
 				}
-				return JSON.stringify([{ items: [] }]);
+				const urls =
+					behavior.searchIssueUrls ?? (behavior.issueUrl === undefined ? [] : [behavior.issueUrl]);
+				return Promise.resolve(JSON.stringify([{ items: urls.map((html_url) => ({ html_url })) }]));
 			}
 			if (args.includes("Accept: application/vnd.github.raw")) {
-				return Promise.resolve(rawContent);
+				const content = behavior.rawContent ?? "file content";
+				return content instanceof Error ? Promise.reject(content) : Promise.resolve(content);
 			}
-			if (args.includes("POST")) {
+			if (args.includes("POST") || args.includes("DELETE")) {
 				return Promise.resolve("");
 			}
 			const endpoint = findEndpoint(args);
 			if (endpoint === undefined) return Promise.resolve("");
-			const endpointPathValue = endpointPath(endpoint);
-			if (PULLS_COMMENTS_PATTERN.test(endpointPathValue)) {
+			const pathValue = endpointPath(endpoint);
+			if (PULLS_COMMENTS_PATTERN.test(pathValue)) {
+				return Promise.resolve(reviewCommentsPage(behavior.comments ?? [{}]));
+			}
+			const issueMatch = ISSUE_BODY_PATTERN.exec(pathValue);
+			if (issueMatch) {
 				return Promise.resolve(
-					JSON.stringify([
-						[
-							{
-								body,
-								id: FIRST_ID,
-								in_reply_to_id: null,
-								line: FIRST_LINE,
-								path: filePath,
-								user: { login: user },
-							},
-						],
-					]),
+					JSON.stringify({
+						body: behavior.issueBody ?? "",
+						number: behavior.issueNumber ?? Number(issueMatch[1]),
+						user: { login: behavior.conversationUser ?? "alice" },
+					}),
 				);
 			}
-			const issueMatch = ISSUE_BODY_PATTERN.exec(endpointPathValue);
-			if (issueMatch) {
-				const number = Number(issueMatch[1]);
-				return Promise.resolve(issueBodyResponse(issueBody, number, user));
+			if (ISSUE_COMMENTS_PATTERN.test(pathValue)) {
+				const body = behavior.conversationBody;
+				return Promise.resolve(
+					body === undefined || body === ""
+						? "[]"
+						: JSON.stringify([
+								[
+									{
+										body,
+										created_at: "2026-09-03T00:00:00.000Z",
+										id: 3,
+										user: { login: behavior.conversationUser ?? "alice" },
+									},
+								],
+							]),
+				);
 			}
-			if (ISSUE_COMMENTS_PATTERN.test(endpointPathValue)) {
-				return Promise.resolve(conversationComments(conversationBody, user));
-			}
-		}
-		if (file === "claude") {
-			return Promise.resolve("It does something.");
-		}
-		if (file === "git") {
-			return resolveGit(args);
-		}
-		return Promise.resolve("");
-	}) as unknown as Runner;
-
-const resolveExplain = (
-	file: string,
-	args: string[],
-	request: {
-		answer?: string;
-		body?: string;
-		conversationBody?: string;
-		issueBody?: string;
-		path?: string;
-		provider?: string;
-		user?: string;
-	} = {},
-): Promise<string> => {
-	if (file === (request.provider || "claude")) {
-		return Promise.resolve(request.answer ?? "");
-	}
-	if (file === "git") {
-		return resolveGit(args);
-	}
-	if (file === "gh") {
-		return resolveGhExplain(args, request);
-	}
-	return Promise.resolve("");
-};
-
-const makeExplainRunner = (
-	request: {
-		answer?: string;
-		body?: string;
-		conversationBody?: string;
-		issueBody?: string;
-		path?: string;
-		provider?: string;
-		user?: string;
-	} = {},
-): Runner =>
-	vi.fn((file: string, args: string[]) => resolveExplain(file, args, request)) as unknown as Runner;
-
-const makeMultiMentionRunner = (
-	options: {
-		conversationBody?: string;
-		failOn?: string;
-		issueBody?: string;
-		provider?: string;
-		user?: string;
-	} = {},
-): Runner =>
-	vi.fn((file: string, args: string[]) => {
-		if (options.failOn && willFail(file, args, options.failOn)) {
-			return Promise.reject(new Error(`${options.failOn} failed`));
-		}
-		const [command] = args;
-		if (file === (options.provider || "claude")) {
-			return Promise.resolve("It does something.");
-		}
-		if (file === "git") {
-			return resolveGit(args);
-		}
-		if (file === "gh") {
-			if (command === "pr") {
-				return Promise.resolve("");
-			}
-			if (command === "--version" || command === "auth") {
-				return Promise.resolve("");
-			}
-			if (command === "api" && args.includes("user")) {
-				return Promise.resolve("alice");
-			}
-			if (command === "api" && args.some((arg) => startsWithRepos(arg))) {
-				const reaction = resolveReaction(args);
-				if (reaction !== undefined) return Promise.resolve(reaction);
-				const endpoint = findEndpoint(args);
-				if (endpoint === undefined) return Promise.resolve("");
-				if (args.includes("POST") || args.includes("DELETE")) {
-					return Promise.resolve("");
-				}
-				const endpointPathValue = endpointPath(endpoint);
-				if (PULLS_COMMENTS_PATTERN.test(endpointPathValue)) {
-					return Promise.resolve(
-						JSON.stringify([
-							[
-								{
-									body: "@crewmate hello",
-									id: FIRST_ID,
-									in_reply_to_id: null,
-									line: EXPLANATION_LINE,
-									path: "src/index.ts",
-									user: { login: options.user ?? "alice" },
-								},
-								{
-									body: "@crewmate hi",
-									id: SECOND_ID,
-									in_reply_to_id: null,
-									line: EXPLANATION_LINE,
-									path: "src/index.ts",
-									user: { login: options.user ?? "alice" },
-								},
-							],
-						]),
-					);
-				}
-				const issueMatch = ISSUE_BODY_PATTERN.exec(endpointPathValue);
-				if (issueMatch) {
-					const number = Number(issueMatch[1]);
-					return Promise.resolve(issueBodyResponse(options.issueBody ?? "", number, options.user));
-				}
-				if (ISSUE_COMMENTS_PATTERN.test(endpointPathValue)) {
-					return Promise.resolve(conversationComments(options.conversationBody, options.user));
-				}
-			}
-		}
-		return Promise.resolve("");
-	}) as unknown as Runner;
-
-const resolveGhFix = (
-	args: string[],
-	request: {
-		body?: string;
-		conversationBody?: string;
-		issueBody?: string;
-		targetPath: string;
-		user?: string;
-	} = {
-		targetPath: "",
-	},
-): Promise<string> => {
-	const [command] = args;
-	if (command === "api" && args.includes("user")) {
-		return Promise.resolve("alice");
-	}
-	if (command === "api" && args.some((arg) => startsWithRepos(arg))) {
-		const reaction = resolveReaction(args);
-		if (reaction !== undefined) return Promise.resolve(reaction);
-		const endpoint = findEndpoint(args);
-		if (endpoint === undefined) return Promise.resolve("");
-		if (args.includes("POST") || args.includes("DELETE")) {
 			return Promise.resolve("");
 		}
-		const endpointPathValue = endpointPath(endpoint);
-		if (PULLS_COMMENTS_PATTERN.test(endpointPathValue)) {
-			return Promise.resolve(
-				JSON.stringify([
+		if (file === (behavior.providerName ?? "claude")) {
+			if (args.includes("-p")) {
+				const answer = behavior.answer ?? "It does something.";
+				return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+			}
+			return Promise.resolve("");
+		}
+		if (file === "git") {
+			if (args[0] === "remote" && args[1] === "get-url") {
+				const remote = behavior.remoteUrl ?? "https://github.com/owner/repo.git";
+				return remote instanceof Error ? Promise.reject(remote) : Promise.resolve(remote);
+			}
+			return Promise.resolve("");
+		}
+		return Promise.resolve("");
+	}) as unknown as Runner;
+
+const callsOf = (runner: Runner): [string, string[]][] =>
+	(runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.map(([f, a]) => [
+		f,
+		a,
+	]);
+
+const silentLogger = (): Logger => () => Promise.resolve();
+
+const collectLogger = (): {
+	logger: Logger;
+	events: { event: string; fields?: Record<string, unknown> }[];
+} => {
+	const events: { event: string; fields?: Record<string, unknown> }[] = [];
+	return {
+		events,
+		logger: async (event, fields) => {
+			events.push({ event, fields });
+		},
+	};
+};
+
+const mockStdoutWrite = ({ error }: { error?: Error } = {}) =>
+	vi.spyOn(process.stdout, "write").mockImplementation(((
+		line: unknown,
+		encodingOrCallback?: unknown,
+		callback?: unknown,
+	) => {
+		const cb =
+			typeof callback === "function"
+				? callback
+				: typeof encodingOrCallback === "function"
+					? encodingOrCallback
+					: undefined;
+		if (cb) {
+			cb(error);
+		}
+		return true;
+	}) as (chunk: string | Uint8Array, ...rest: unknown[]) => boolean);
+
+describe("index", () => {
+	let tempDir = "";
+	let stateFile = "";
+
+	beforeEach(async () => {
+		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-index-"));
+		stateFile = path.join(tempDir, "state.json");
+		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
+	});
+
+	afterEach(async () => {
+		await rm(tempDir, { force: true, recursive: true });
+		vi.unstubAllEnvs();
+		vi.restoreAllMocks();
+		process.exitCode = undefined;
+	});
+
+	describe("parseTarget", () => {
+		it("parses PR URLs, shorthand, ports, and GHES hosts", () => {
+			expect(run.parseTarget(PR_URL)).toEqual({
+				host: "github.com",
+				kind: "pr",
+				number: "4",
+				owner: "owner",
+				repo: "repo",
+			});
+			expect(run.parseTarget("owner/repo/pull/4")).toEqual({
+				host: "github.com",
+				kind: "pr",
+				number: "4",
+				owner: "owner",
+				repo: "repo",
+			});
+			expect(run.parseTarget("https://ghe.example.com:8443/owner/repo/pull/4")).toEqual({
+				host: "ghe.example.com",
+				kind: "pr",
+				number: "4",
+				owner: "owner",
+				port: "8443",
+				repo: "repo",
+			});
+		});
+
+		it("parses issue URLs and shorthand", () => {
+			expect(run.parseTarget(ISSUE_URL)).toEqual({
+				host: "github.com",
+				kind: "issue",
+				number: "4",
+				owner: "owner",
+				repo: "repo",
+			});
+			expect(run.parseTarget("owner/repo/issues/4")).toEqual({
+				host: "github.com",
+				kind: "issue",
+				number: "4",
+				owner: "owner",
+				repo: "repo",
+			});
+		});
+
+		it("parses repo URLs and shorthand", () => {
+			expect(run.parseTarget("https://github.com/owner/repo")).toEqual({
+				host: "github.com",
+				kind: "repo",
+				owner: "owner",
+				repo: "repo",
+			});
+			expect(run.parseTarget("owner/repo")).toEqual({
+				host: "github.com",
+				kind: "repo",
+				owner: "owner",
+				repo: "repo",
+			});
+			expect(run.parseTarget("owner/repo/")).toEqual({
+				host: "github.com",
+				kind: "repo",
+				owner: "owner",
+				repo: "repo",
+			});
+		});
+
+		it("rejects invalid targets", () => {
+			expect(() => run.parseTarget("org:myorg")).toThrow("Invalid target");
+			expect(() => run.parseTarget("https://github.com/orgs/myorg")).toThrow("Invalid target");
+			expect(() => run.parseTarget("https://github.com/owner")).toThrow("Invalid target");
+			expect(() => run.parseTarget("https://github.com/owner/repo/pull/abc")).toThrow(
+				"Invalid target",
+			);
+			expect(() => run.parseTarget("https://github.com/../repo")).toThrow("Invalid target");
+			expect(() => run.parseTarget("https://github.com/owner/repo/pull/")).toThrow(
+				"Invalid target",
+			);
+			expect(() => run.parseTarget("nope")).toThrow("Invalid target");
+			expect(() => run.parseTarget("https://")).toThrow("Invalid target");
+			expect(() => run.parseTarget("owner/repo/pull/x")).toThrow("Invalid target");
+			expect(() => run.parseTarget("owner/repo/issues/x")).toThrow("Invalid target");
+		});
+	});
+
+	describe("parsePrUrl", () => {
+		it("parses a PR URL and rejects others", () => {
+			expect(run.parsePrUrl(PR_URL)).toEqual({
+				host: "github.com",
+				number: "4",
+				owner: "owner",
+				repo: "repo",
+			});
+			expect(run.parsePrUrl("https://ghe.example.com:8443/o/r/pull/1").port).toBe("8443");
+			expect(() => run.parsePrUrl("owner/repo")).toThrow("Invalid PR reference");
+		});
+	});
+
+	describe("parseGitRemoteUrl", () => {
+		it("parses https and ssh remotes", () => {
+			expect(run.parseGitRemoteUrl("https://github.com/owner/repo.git")).toEqual({
+				host: "github.com",
+				owner: "owner",
+				repo: "repo",
+			});
+			expect(run.parseGitRemoteUrl("git@github.com:owner/repo.git")).toEqual({
+				host: "github.com",
+				owner: "owner",
+				repo: "repo",
+			});
+			expect(run.parseGitRemoteUrl("https://ghe.example.com:8443/owner/repo.git")).toEqual({
+				host: "ghe.example.com",
+				owner: "owner",
+				port: "8443",
+				repo: "repo",
+			});
+			expect(run.parseGitRemoteUrl("git@github.com:owner/repo")).toEqual({
+				host: "github.com",
+				owner: "owner",
+				repo: "repo",
+			});
+		});
+
+		it("returns undefined for unparsable remotes", () => {
+			expect(run.parseGitRemoteUrl("https://github.com/owner/repo/extra")).toBeUndefined();
+			expect(run.parseGitRemoteUrl("https://github.com/../repo")).toBeUndefined();
+			expect(run.parseGitRemoteUrl(":::")).toBeUndefined();
+		});
+	});
+
+	describe("parseInterval / parseTimeout / findFlag / parseSince", () => {
+		it("parses intervals", () => {
+			expect(run.parseInterval("30")).toBe(30);
+			expect(run.parseInterval("nope")).toBe(60);
+			expect(run.parseInterval("0")).toBe(60);
+			expect(run.parseInterval(undefined)).toBe(60);
+			expect(run.parseInterval(undefined, { fallback: undefined })).toBeUndefined();
+			expect(run.parseInterval(["--interval", "45"])).toBe(45);
+		});
+
+		it("parses timeouts", () => {
+			expect(run.parseTimeout(undefined)).toBeUndefined();
+			expect(run.parseTimeout("120")).toBe(120);
+			expect(() => run.parseTimeout("nope")).toThrow("Invalid --timeout");
+			expect(() => run.parseTimeout("0")).toThrow("Invalid --timeout");
+		});
+
+		it("finds flags", () => {
+			expect(run.findFlag(["--user", "alice"], "--user")).toBe("alice");
+			expect(run.findFlag(["--user=alice"], "--user")).toBe("alice");
+			expect(run.findFlag(["--user"], "--user")).toBeUndefined();
+			expect(run.findFlag(["--other"], "--user")).toBeUndefined();
+		});
+
+		it("parses ISO-8601 since timestamps", () => {
+			expect(run.parseSince(undefined)).toBeUndefined();
+			expect(run.parseSince("2026-09-01")?.toISOString()).toBe("2026-09-01T00:00:00.000Z");
+			expect(run.parseSince("2026-09-01T10:30:00Z")?.toISOString()).toBe(
+				"2026-09-01T10:30:00.000Z",
+			);
+			expect(run.parseSince("2026-09-01T10:30:00.5+02:00")?.toISOString()).toBe(
+				"2026-09-01T08:30:00.500Z",
+			);
+			expect(run.parseSince("2026-09-01T10:30-0230")?.toISOString()).toBe(
+				"2026-09-01T13:00:00.000Z",
+			);
+		});
+
+		it("rejects invalid since timestamps", () => {
+			for (const value of [
+				"nope",
+				"2026-13-01",
+				"2026-02-30",
+				"2026-09-01T25:00:00Z",
+				"2026-09-01T10:61:00Z",
+				"2026-09-01T10:30:61Z",
+				"2026-09-01T10:30:00+25:00",
+				"2026-09-01T10:30:00+00:61",
+				"2026-09-01T10:30:00.12.3Z",
+				"2026-09-01T10:30:00.abZ",
+				"2026-09-01T1:30:00Z",
+				"2026-09-01T10:30:00:00Z",
+				"2026-09-01T10:30:00ZT10:00",
+			]) {
+				expect(() => run.parseSince(value)).toThrow("Invalid --since");
+			}
+		});
+	});
+
+	describe("fetchMentions", () => {
+		it("fetches review and conversation comments for a PR", async () => {
+			const runner = makeRunner({ conversationBody: "@crewmate hi" });
+			const mentions = await run.fetchMentions(PR_URL, runner);
+			expect(mentions.map((m) => m.kind).toSorted()).toEqual(["conversation", "review"]);
+		});
+
+		it("fetches the body and comments for an issue", async () => {
+			const runner = makeRunner({ conversationBody: "@crewmate hi", issueBody: "@crewmate body" });
+			const mentions = await run.fetchMentions(ISSUE_URL, runner);
+			expect(mentions.map((m) => m.kind)).toEqual(["issue", "conversation"]);
+		});
+
+		it("omits a malformed issue body", async () => {
+			const runner = vi.fn((file: string, args: string[]) => {
+				if (file === "gh" && args[0] === "api") {
+					if (ISSUE_COMMENTS_PATTERN.test(findEndpoint(args) ?? "")) return Promise.resolve("[]");
+					return Promise.resolve(JSON.stringify({ number: "x" }));
+				}
+				return Promise.resolve("");
+			}) as unknown as Runner;
+			const mentions = await run.fetchMentions(ISSUE_URL, runner);
+			expect(mentions).toEqual([]);
+		});
+
+		it("skips malformed comments", async () => {
+			const runner = vi.fn((file: string, args: string[]) => {
+				if (file === "gh" && args[0] === "api") {
+					const endpoint = findEndpoint(args) ?? "";
+					if (PULLS_COMMENTS_PATTERN.test(endpointPath(endpoint))) {
+						return Promise.resolve(
+							JSON.stringify([
+								[
+									{ id: "x" },
+									{ body: "@crewmate hi", id: 1 },
+									{ body: "x", id: 2, path: "a", line: 1 },
+								],
+							]),
+						);
+					}
+					return Promise.resolve("[]");
+				}
+				return Promise.resolve("");
+			}) as unknown as Runner;
+			const mentions = await run.fetchMentions(PR_URL, runner);
+			expect(mentions).toEqual([expect.objectContaining({ id: 2, kind: "review" })]);
+		});
+
+		it("rejects non-item targets", async () => {
+			await expect(run.fetchMentions("owner/repo", makeRunner())).rejects.toThrow(
+				"Invalid item reference",
+			);
+		});
+	});
+
+	describe("fetchOpenItems", () => {
+		it("rejects single-item scopes", async () => {
+			await expect(
+				run.fetchOpenItems(run.parseTarget(PR_URL), makeRunner(), () => Promise.resolve()),
+			).rejects.toThrow("single item");
+		});
+
+		it("discovers open PRs and issues through search", async () => {
+			const runner = makeRunner({ prUrl: PR_URL, issueUrl: ISSUE_URL });
+			const warn = vi.fn();
+			const items = await run.fetchOpenItems(run.parseTarget("owner/repo"), runner, warn);
+			expect(items).toEqual([PR_URL, ISSUE_URL]);
+		});
+
+		it("searches without the open-state filter when includeClosed is set", async () => {
+			const runner = makeRunner({ prUrl: PR_URL, issueUrl: ISSUE_URL });
+			const items = await run.fetchOpenItems(
+				run.parseTarget("owner/repo"),
+				runner,
+				() => Promise.resolve(),
+				true,
+			);
+			expect(items).toEqual([PR_URL, ISSUE_URL]);
+			const queries = callsOf(runner)
+				.flatMap(([, args]) => args)
+				.filter((arg) => arg.startsWith("search/issues?q="));
+			expect(queries).toHaveLength(2);
+			expect(queries.some((query) => query.includes("is%3Aopen"))).toBe(false);
+		});
+
+		it("uses state=all in the repo fallback when includeClosed is set", async () => {
+			const notFound = new Error("HTTP 404: Not Found");
+			const runner = vi.fn((file: string, args: string[]) => {
+				if (file === "gh" && args[0] === "api") {
+					const searchArg = args.find((arg) => arg.startsWith("search/issues?q="));
+					if (searchArg !== undefined) return Promise.reject(notFound);
+					return Promise.resolve(JSON.stringify([[{ html_url: PR_URL }]]));
+				}
+				return Promise.resolve("");
+			}) as unknown as Runner;
+			const items = await run.fetchOpenItems(
+				run.parseTarget("owner/repo"),
+				runner,
+				() => Promise.resolve(),
+				true,
+			);
+			expect(items).toEqual([PR_URL]);
+			expect(
+				callsOf(runner)
+					.flatMap(([, args]) => args)
+					.some((arg) => arg.includes("issues?state=all")),
+			).toBe(true);
+		});
+
+		it("dedupes and warns about invalid search URLs", async () => {
+			const runner = makeRunner({ searchPrUrls: [PR_URL, PR_URL, "not a url"] });
+			const warn = vi.fn();
+			const items = await run.fetchOpenItems(run.parseTarget("owner/repo"), runner, warn);
+			expect(items).toEqual([PR_URL]);
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining("invalid item URL from search"),
+				expect.objectContaining({ reason: "search-invalid-url" }),
+			);
+		});
+
+		it("warns about token scope on 403 and 422", async () => {
+			for (const status of [403, 422]) {
+				const runner = makeRunner({
+					prUrl: PR_URL,
+					searchFailsIssue: new Error(`HTTP ${status}`),
+				});
+				const warn = vi.fn();
+				await run.fetchOpenItems(run.parseTarget("owner/repo"), runner, warn);
+				expect(warn).toHaveBeenCalledWith(
+					"Search failed; verify the token can read private repos on this host",
+					expect.objectContaining({ reason: "search-token-scope" }),
+				);
+			}
+		});
+
+		it("warns about generic search failures", async () => {
+			const runner = makeRunner({ searchFailsPr: new Error("HTTP 500: boom") });
+			const warn = vi.fn();
+			await run.fetchOpenItems(run.parseTarget("owner/repo"), runner, warn);
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining("search failed"),
+				expect.objectContaining({ reason: "search-failed" }),
+			);
+		});
+
+		it("falls back to the issues endpoint when search is unavailable", async () => {
+			const notFound = new Error("HTTP 404: Not Found");
+			const runner = vi.fn((file: string, args: string[]) => {
+				if (file === "gh" && args[0] === "api") {
+					const searchArg = args.find((arg) => arg.startsWith("search/issues?q="));
+					if (searchArg !== undefined) return Promise.reject(notFound);
+					return Promise.resolve(
+						JSON.stringify([[{ html_url: PR_URL }, { html_url: "not a url" }, {}]]),
+					);
+				}
+				return Promise.resolve("");
+			}) as unknown as Runner;
+			const warn = vi.fn();
+			const items = await run.fetchOpenItems(run.parseTarget("owner/repo"), runner, warn);
+			expect(items).toEqual([PR_URL]);
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining("invalid item URL from repo fallback"),
+				expect.objectContaining({ reason: "fallback-invalid-url" }),
+			);
+		});
+
+		it("warns when the repo fallback itself fails", async () => {
+			const notFound = new Error("HTTP 404: Not Found");
+			const runner = vi.fn((file: string, args: string[]) => {
+				if (file === "gh" && args[0] === "api") {
+					return Promise.reject(
+						args.some((arg) => arg.startsWith("search/issues?q="))
+							? notFound
+							: new Error("HTTP 500: boom"),
+					);
+				}
+				return Promise.resolve("");
+			}) as unknown as Runner;
+			const warn = vi.fn();
+			const items = await run.fetchOpenItems(run.parseTarget("owner/repo"), runner, warn);
+			expect(items).toEqual([]);
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining("repo fallback failed"),
+				expect.objectContaining({ reason: "repo-fallback-failed" }),
+			);
+		});
+
+		it("returns an empty list when nothing is open", async () => {
+			const runner = makeRunner();
+			const items = await run.fetchOpenItems(run.parseTarget("owner/repo"), runner, () =>
+				Promise.resolve(),
+			);
+			expect(items).toEqual([]);
+		});
+	});
+
+	describe("findNewMentions", () => {
+		it("filters closed, replied, foreign, and prefix comments", () => {
+			const comments = [
+				mention({ id: 1 }),
+				mention({ id: 2, body: "no mention" }),
+				mention({ id: 3, body: `${CREWMATE_PREFIX} answer` }),
+				mention({ id: 4, inReplyToId: 1 }),
+				mention({ id: 5, user: { login: "mallory" } }),
+			];
+			expect(run.findNewMentions(comments, [], "alice").map((m) => m.id)).toEqual([1]);
+			expect(run.findNewMentions(comments, ["review:1"], "alice")).toEqual([]);
+			expect(run.findNewMentions(comments, [], undefined).map((m) => m.id)).toEqual([5, 1]);
+		});
+
+		it("applies the since filter and sorts newest first", () => {
+			const comments = [
+				mention({ id: 1, createdAt: "2026-09-01T00:00:00Z" }),
+				mention({ id: 2, createdAt: "2026-09-03T00:00:00Z" }),
+				mention({ id: 3, createdAt: "not a date" }),
+				mention({ id: 4 }),
+			];
+			const since = new Date("2026-09-02T00:00:00Z");
+			expect(run.findNewMentions(comments, [], "alice", false, since).map((m) => m.id)).toEqual([
+				4, 2,
+			]);
+		});
+
+		it("findNewMention returns the newest", () => {
+			const comments = [mention({ id: 1 }), mention({ id: 2 })];
+			expect(run.findNewMention(comments, [], "alice")?.id).toBe(2);
+		});
+
+		it("treats crewmate-replied review comments as handled on fresh state", () => {
+			const comments = [
+				mention({ id: 1 }),
+				mention({ id: 2, body: `${CREWMATE_PREFIX} done`, inReplyToId: 1 }),
+			];
+			expect(run.findNewMentions(comments, [], "alice", true)).toEqual([]);
+			expect(run.findNewMentions(comments, [], "alice", false).map((m) => m.id)).toEqual([1]);
+		});
+	});
+
+	describe("watch", () => {
+		it("passes --closed through to repo-scope queries from the CLI", async () => {
+			const runner = makeRunner({ prUrl: PR_URL });
+			await run(["watch", "owner/repo", "--closed"], {
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			const queries = callsOf(runner)
+				.flatMap(([, args]) => args)
+				.filter((arg) => arg.startsWith("search/issues?q="));
+			expect(queries).toHaveLength(2);
+			expect(queries.some((query) => query.includes("is%3Aopen"))).toBe(false);
+		});
+
+		it("answers a new mention and records the job as succeeded", async () => {
+			const runner = makeRunner();
+			await run.watch(PR_URL, {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			const calls = callsOf(runner);
+			expect(calls.find(([, a]) => a.includes("content=eyes"))).toBeDefined();
+			expect(
+				calls.find(([, a]) =>
+					a.some((x) => typeof x === "string" && x.startsWith(`body=${CREWMATE_PREFIX}`)),
+				),
+			).toBeDefined();
+			const state = await run.loadState(stateFile);
+			expect(state.get(PR_URL)?.get("review:1")?.status).toBe("succeeded");
+			expect(state.get(PR_URL)?.get("review:1")?.attempts).toBe(1);
+		});
+
+		it("skips closed jobs on the next run", async () => {
+			const runner = makeRunner();
+			const options = {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			};
+			await run.watch(PR_URL, options);
+			const before = callsOf(runner).length;
+			await run.watch(PR_URL, options);
+			const after = callsOf(runner).slice(before);
+			expect(
+				after.find(([, a]) => a.some((x) => typeof x === "string" && x.startsWith("body="))),
+			).toBeUndefined();
+		});
+
+		it("marks failures for retry and retries them when due", async () => {
+			const runner = makeRunner({ answer: new Error("provider down") });
+			const options = {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			};
+			await run.watch(PR_URL, options);
+			let state = await run.loadState(stateFile);
+			const failed = state.get(PR_URL)?.get("review:1");
+			expect(failed?.status).toBe("failed");
+			expect(failed?.attempts).toBe(1);
+			expect(typeof failed?.nextAttemptAt).toBe("string");
+
+			await run.watch(PR_URL, options);
+			state = await run.loadState(stateFile);
+			expect(state.get(PR_URL)?.get("review:1")?.attempts).toBe(1);
+
+			const due = state.get(PR_URL)!;
+			due.set("review:1", { ...failed!, nextAttemptAt: "2000-01-01T00:00:00.000Z" });
+			await run.saveState(state, stateFile);
+			const recovering = makeRunner({ answer: "fixed" });
+			await run.watch(PR_URL, { ...options, runner: recovering });
+			state = await run.loadState(stateFile);
+			expect(state.get(PR_URL)?.get("review:1")?.status).toBe("succeeded");
+			expect(state.get(PR_URL)?.get("review:1")?.attempts).toBe(2);
+		});
+
+		it("posts a failure reply after the final attempt", async () => {
+			const runner = makeRunner({ answer: new Error("provider down") });
+			const options = {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			};
+			for (let attempt = 0; attempt < 3; attempt += 1) {
+				const state = await run.loadState(stateFile);
+				const job = state.get(PR_URL)?.get("review:1");
+				if (job !== undefined) {
+					state.get(PR_URL)!.set("review:1", { ...job, nextAttemptAt: "2000-01-01T00:00:00.000Z" });
+					await run.saveState(state, stateFile);
+				}
+				await run.watch(PR_URL, options);
+			}
+			const state = await run.loadState(stateFile);
+			const failed = state.get(PR_URL)?.get("review:1");
+			expect(failed?.status).toBe("failed");
+			expect(failed?.attempts).toBe(3);
+			expect(failed?.nextAttemptAt).toBeUndefined();
+			const calls = callsOf(runner);
+			expect(
+				calls.find(([, a]) =>
+					a.some((x) => typeof x === "string" && x.includes("Failed to respond after 3 attempts")),
+				),
+			).toBeDefined();
+
+			const before = callsOf(runner).length;
+			await run.watch(PR_URL, options);
+			expect(
+				callsOf(runner)
+					.slice(before)
+					.find(([f, a]) => f === "claude" && a.includes("-p")),
+			).toBeUndefined();
+		});
+
+		it("warns when the failure reply itself fails", async () => {
+			const { logger, events } = collectLogger();
+			const base = makeRunner({ answer: new Error("provider down") });
+			const runner = vi.fn((file: string, args: string[]) => {
+				if (
+					args.includes("POST") &&
+					args.some((a) => typeof a === "string" && a.startsWith("body="))
+				) {
+					return Promise.reject(new Error("cannot comment"));
+				}
+				return (base as unknown as (...a: unknown[]) => Promise<string>)(file, args);
+			}) as unknown as Runner;
+			const state = run.loadState ? await run.loadState(stateFile) : new Map();
+			state.set(
+				PR_URL,
+				new Map([
 					[
+						"review:1",
 						{
-							body: request.body ?? "@crewmate #fix",
-							id: FIRST_ID,
-							in_reply_to_id: null,
-							line: FIRST_LINE,
-							path: request.targetPath,
-							user: { login: request.user ?? "alice" },
+							attempts: 2,
+							nextAttemptAt: "2000-01-01T00:00:00.000Z",
+							status: "failed",
+							updatedAt: "2026-09-01T00:00:00.000Z",
 						},
 					],
 				]),
 			);
-		}
-		if (PULLS_FILES_PATTERN.test(endpointPathValue)) {
-			return Promise.resolve(
-				JSON.stringify([{ filename: request.targetPath, status: "modified" }]),
+			await run.saveState(state, stateFile);
+			await run.watch(PR_URL, { config: {}, iterations: 1, logger, runner, stateFile });
+			expect(events).toContainEqual({
+				event: "warning",
+				fields: expect.objectContaining({ reason: "failure-reply-failed" }),
+			});
+		});
+
+		it("previews without side effects in dry-run mode", async () => {
+			const stdout = mockStdoutWrite();
+			const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const runner = makeRunner();
+			await run.watch(PR_URL, {
+				config: {},
+				dryRun: true,
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			expect(stdout).toHaveBeenCalledWith(
+				expect.stringContaining("[dry-run] would reply to comment 1"),
 			);
-		}
-		const issueMatch = ISSUE_BODY_PATTERN.exec(endpointPathValue);
-		if (issueMatch) {
-			const number = Number(issueMatch[1]);
-			return Promise.resolve(
-				issueBodyResponse(
-					request.issueBody ?? request.body ?? request.conversationBody ?? "@crewmate #fix",
-					number,
-					request.user,
-				),
-			);
-		}
-		if (ISSUE_COMMENTS_PATTERN.test(endpointPathValue)) {
-			return Promise.resolve(conversationComments(request.conversationBody, request.user));
-		}
-	}
-	if (command === "pr") {
-		return Promise.resolve("");
-	}
-	return Promise.resolve("");
-};
-
-const willFail = (file: string, args: string[], failOn: string | undefined): boolean => {
-	if (!failOn) {
-		return false;
-	}
-	const [command, ...rest] = failOn.split(" ");
-	return file === command && JSON.stringify(args).includes(rest.join(" "));
-};
-
-const resolveFix = (
-	file: string,
-	args: string[],
-	request: {
-		body?: string;
-		conversationBody?: string;
-		failOn?: string;
-		fixed?: string;
-		issueBody?: string;
-		targetPath: string;
-		provider?: string;
-		user?: string;
-	},
-): Promise<string> => {
-	if (willFail(file, args, request.failOn)) {
-		return Promise.reject(new Error(`${request.failOn} failed`));
-	}
-	if (file === "gh") {
-		return resolveGhFix(args, request);
-	}
-	if (file === (request.provider || "claude")) {
-		return Promise.resolve(request.fixed ?? "```\nnew\n```");
-	}
-	if (file === "git") {
-		return resolveGit(args);
-	}
-	return Promise.resolve("");
-};
-
-const makeFixRunner = (
-	targetPath: string,
-	options: {
-		body?: string;
-		conversationBody?: string;
-		failOn?: string;
-		fixed?: string;
-		issueBody?: string;
-		provider?: string;
-		user?: string;
-	} = {},
-): Runner =>
-	vi.fn((file: string, args: string[]) =>
-		resolveFix(file, args, { targetPath, ...options }),
-	) as unknown as Runner;
-
-describe("run dispatch", () => {
-	it("prints the version for --version", async () => {
-		const write = mockStdoutWrite();
-		await run(["--version"]);
-		expect(write).toHaveBeenCalledWith("crewmate/0.6.0\n");
-		write.mockRestore();
-	});
-
-	it("prints the version for -v", async () => {
-		const write = mockStdoutWrite();
-		await run(["-v"]);
-		expect(write).toHaveBeenCalledWith("crewmate/0.6.0\n");
-		write.mockRestore();
-	});
-
-	it("shows help when no subcommand is given", async () => {
-		const write = mockStdoutWrite();
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		await run([]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
-		expect(process.exitCode).toBe(NO_EXIT_CODE);
-		process.exitCode = previousExitCode;
-		write.mockRestore();
-	});
-
-	it("shows an error for an unknown subcommand", async () => {
-		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		try {
-			await run(["unknown"]);
-		} finally {
-			expect(write).toHaveBeenCalledWith(
-				"Error: Unknown command 'unknown'. Run 'crewmate --help' for usage.\n",
-			);
-			expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-			process.exitCode = previousExitCode;
-			write.mockRestore();
-		}
-	});
-
-	it("runs the CLI entry point", async () => {
-		const previousArgv = process.argv;
-		const previousExitCode = process.exitCode;
-		process.argv = ["node", "crewmate", "--version"];
-		process.exitCode = NO_EXIT_CODE;
-		const write = mockStdoutWrite();
-		vi.resetModules();
-		await import("./bin.js");
-		expect(write).toHaveBeenCalledWith("crewmate/0.6.0\n");
-		process.argv = previousArgv;
-		process.exitCode = previousExitCode;
-		write.mockRestore();
-	});
-});
-
-describe("run init", () => {
-	it("dispatches to init and exits when not in a TTY", async () => {
-		const previousExitCode = process.exitCode;
-		const previousIsTTY = process.stdin.isTTY;
-		process.exitCode = NO_EXIT_CODE;
-		process.stdin.isTTY = false;
-		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		await run(["init"]);
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		expect(write).toHaveBeenCalledWith("init requires an interactive terminal\n");
-		process.exitCode = previousExitCode;
-		process.stdin.isTTY = previousIsTTY;
-		write.mockRestore();
-	});
-});
-
-describe("run watch missing", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("watches the current repo when no target is provided", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeScopeRunner();
-		await run(["watch"], { iterations: FIRST_ITERATION, runner, logger });
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-	});
-
-	it("exits with an error when watch rejects a non-Error", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = vi.fn(() => Promise.reject("string error")) as unknown as Runner;
-		await run(["watch", PR_URL], { iterations: FIRST_ITERATION, runner });
-
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		expect(write).toHaveBeenCalledWith("Error: string error\n");
-		write.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-
-	it("watches the current repo when an empty target is provided", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeScopeRunner();
-		await run(["watch", ""], { iterations: FIRST_ITERATION, runner, logger });
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-	});
-
-	it("exits with an error when no target is provided and the origin remote is missing", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "git" && args[0] === "remote") {
-				return Promise.reject(new Error("No such remote 'origin'"));
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run(["watch"], { runner });
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		expect(stderr).toHaveBeenCalledWith("Error: Target is required: No such remote 'origin'\n");
-		stderr.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-
-	it("exits with an error when the origin remote lookup rejects a non-Error", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "git" && args[0] === "remote") {
-				return Promise.reject("not an error");
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run(["watch"], { runner });
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		expect(stderr).toHaveBeenCalledWith("Error: Target is required: not an error\n");
-		stderr.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-
-	it("exits with an error when no target is provided and the origin remote is empty", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "git" && args[0] === "remote") {
-				return Promise.resolve("");
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run(["watch"], { runner });
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		expect(stderr).toHaveBeenCalledWith("Error: Target is required\n");
-		stderr.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-
-	it("exits with an error when watch is not in a git working tree", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
-				return Promise.resolve("");
-			}
-			if (
-				file === "git" &&
-				args[0] === "rev-parse" &&
-				args.at(SECOND_INDEX) === "--show-toplevel"
-			) {
-				return Promise.reject(new Error("not a git repo"));
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		await run(["watch", PR_URL], { runner });
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		expect(stderr).toHaveBeenCalledWith("Error: watch requires a git working tree\n");
-		stderr.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-});
-
-describe("run watch flags", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("handles watch command with flags", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL, "--interval", "5", "--user", "alice"], {
-			iterations: FIRST_ITERATION,
-			runner,
+			expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Dry-run mode"));
+			expect(await run.loadState(stateFile)).toEqual(new Map());
 		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-	});
 
-	it("uses default interval when the flag has no value", async () => {
-		const runner = makeExplainRunner();
-		await run(["watch", PR_URL, "--interval"], { iterations: FIRST_ITERATION, runner });
-		expect(run.parseInterval(["--interval"])).toBe(60);
-	});
-
-	it("ignores an invalid CLI interval so config can apply", async () => {
-		const runner = makeExplainRunner();
-		await run(["watch", PR_URL, "--interval", "bad"], { iterations: FIRST_ITERATION, runner });
-		expect(run.parseInterval(["--interval", "bad"], { fallback: undefined })).toBeUndefined();
-	});
-
-	it("uses default watch options", async () => {
-		const runner = vi.fn(() => Promise.reject(new Error("fail"))) as unknown as Runner;
-		await expect(run.watch(PR_URL, { runner })).rejects.toThrow("fail");
-	});
-
-	it("uses Infinity iterations by default and runs the loop", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args[0] === "api") {
-				const reaction = resolveReaction(args);
-				if (reaction !== undefined) return Promise.resolve(reaction);
-				return Promise.reject(new Error("api fail"));
-			}
-			if (file === "gh" && (args[0] === "--version" || args[0] === "auth" || args[0] === "pr")) {
-				return Promise.resolve("");
-			}
-			if (file === "claude") {
-				return Promise.resolve("");
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await expect(run.watch(PR_URL, { allowedUser: "alice", runner })).rejects.toThrow("api fail");
-		expect(countCalls(runner, "gh", (args) => args[0] === "api")).toBe(THREE_CALLS);
-	});
-
-	it("uses the default runner when none is provided", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		await expect(run(["watch", PR_URL], { iterations: NO_ITERATIONS })).resolves.toBeUndefined();
-		process.exitCode = previousExitCode;
-	});
-
-	it("passes a custom prompt to claude", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL, "--prompt", "BE_TERSE"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(getPrompt(runner)?.startsWith("BE_TERSE\n\n")).toBe(true);
-	});
-
-	it("uses the default prompt when --prompt is missing", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL], { iterations: FIRST_ITERATION, runner });
-		expect(getPrompt(runner)).toMatch(/Review comment:/);
-	});
-
-	it("ignores --prompt when the value is another flag", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL, "--prompt", "--fix"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const prompt = getPrompt(runner);
-		expect(prompt).toMatch(/Review comment:/);
-		expect(prompt).not.toMatch(/^BE_TERSE\n\n/);
-	});
-
-	it("does not let an extra word after --dry-run disable dry-run", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL, "--dry-run", "extra"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
-	});
-
-	it("does not let an extra word after --log disable stderr mirroring", async () => {
-		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL, "--log", "/tmp/x.log"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(write).toHaveBeenCalledWith(expect.stringContaining('"event":"poll"'));
-		write.mockRestore();
-	});
-
-	it("passes a model to claude", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, {
-			iterations: FIRST_ITERATION,
-			model: "claude-sonnet-4-20250514",
-			runner,
-		});
-		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-			([file, args]) => file === "claude" && args.includes("-p"),
-		);
-		expect(call?.[1]).toEqual(["--model", "claude-sonnet-4-20250514", "-p", expect.any(String)]);
-	});
-
-	it("passes a model via the CLI", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL, "--model", "claude-sonnet-4-20250514"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-			([file, args]) => file === "claude" && args.includes("-p"),
-		);
-		expect(call?.[1]).toEqual(["--model", "claude-sonnet-4-20250514", "-p", expect.any(String)]);
-	});
-
-	it("ignores --model when the value is another flag", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL, "--model", "--fix"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-			([file, args]) => file === "claude" && args.includes("-p"),
-		);
-		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
-	});
-
-	it("calls claude without a model when the model option is missing", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, { iterations: FIRST_ITERATION, runner });
-		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-			([file, args]) => file === "claude" && args.includes("-p"),
-		);
-		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
-	});
-
-	it("uses a custom provider for explanation", async () => {
-		const runner = makeExplainRunner({ answer: "It does something.", provider: "my-llm" });
-		await run.watch(PR_URL, {
-			iterations: FIRST_ITERATION,
-			provider: "my-llm",
-			runner,
-		});
-		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-			([file, args]) => file === "my-llm" && args.includes("-p"),
-		);
-		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
-	});
-
-	it("passes a provider via the CLI", async () => {
-		const runner = makeExplainRunner({ answer: "It does something.", provider: "my-llm" });
-		await run(["watch", PR_URL, "--provider", "my-llm"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-			([file, args]) => file === "my-llm" && args.includes("-p"),
-		);
-		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
-	});
-
-	it("ignores --provider when the value is another flag", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL, "--provider", "--fix"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-			([file, args]) => file === "claude" && args.includes("-p"),
-		);
-		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
-	});
-
-	it("calls the provider for --version during watch initialization", async () => {
-		const runner = makeExplainRunner({ answer: "", provider: "my-llm" });
-		await run.watch(PR_URL, { iterations: FIRST_ITERATION, provider: "my-llm", runner });
-		expect(countCalls(runner, "my-llm", (args) => args.at(FIRST_INDEX) === "--version")).toBe(
-			FIRST_CALL,
-		);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "--version")).toBe(
-			NO_CALLS,
-		);
-	});
-
-	it("passes a model to a custom provider", async () => {
-		const runner = makeExplainRunner({ answer: "It does something.", provider: "my-llm" });
-		await run.watch(PR_URL, {
-			iterations: FIRST_ITERATION,
-			model: "claude-sonnet-4-20250514",
-			provider: "my-llm",
-			runner,
-		});
-		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-			([file, args]) => file === "my-llm" && args.includes("-p"),
-		);
-		expect(call?.[1]).toEqual(["--model", "claude-sonnet-4-20250514", "-p", expect.any(String)]);
-	});
-
-	it("warns when a custom provider returns an empty explanation", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({ answer: "", provider: "my-llm" });
-		await run.watch(PR_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			provider: "my-llm",
-			runner,
-		});
-		expect(warn).toHaveBeenCalledWith("Warning: my-llm returned empty explanation\n");
-		warn.mockRestore();
-	});
-
-	it("prints help for watch --help", async () => {
-		const write = mockStdoutWrite();
-		await run(["watch", "--help"]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("crewmate watch"));
-		write.mockRestore();
-	});
-
-	it("prints help for watch PR_URL --help", async () => {
-		const write = mockStdoutWrite();
-		await run(["watch", PR_URL, "--help"]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("crewmate watch"));
-		write.mockRestore();
-	});
-
-	it("allows --unsafe-no-user to disable the user filter", async () => {
-		const runner = makeExplainRunner({ answer: "It does something.", user: "bob" });
-		await run(["watch", PR_URL, "--unsafe-no-user"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-	});
-
-	it("makes --unsafe-no-user override --user", async () => {
-		const runner = makeExplainRunner({ answer: "It does something.", user: "charlie" });
-		await run(["watch", PR_URL, "--user", "bob", "--unsafe-no-user"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-	});
-
-	it("makes --user override a config unsafeNoUser flag", async () => {
-		const runner = makeMultiMentionRunner({ user: "alice" });
-		await run(["watch", PR_URL, "--user", "bob"], {
-			config: { unsafeNoUser: true },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-	});
-
-	it("exits when the gh user cannot be determined and no filter is set", async () => {
-		const previousExitCode = process.exitCode;
-		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args[0] === "api" && args.includes("user")) {
-				return Promise.resolve("");
-			}
-			return resolveExplain(file, args, {});
-		}) as unknown as Runner;
-		process.exitCode = NO_EXIT_CODE;
-		await run(["watch", PR_URL], { iterations: FIRST_ITERATION, runner });
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		expect(stderr).toHaveBeenCalledWith(
-			expect.stringContaining("Could not determine a GitHub user"),
-		);
-		stderr.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-
-	it("proceeds when --unsafe-no-user is set and gh user is missing", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args[0] === "api" && args.includes("user")) {
-				return Promise.resolve("");
-			}
-			return resolveExplain(file, args, { answer: "It does something.", user: "bob" });
-		}) as unknown as Runner;
-		await run(["watch", PR_URL, "--unsafe-no-user"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-	});
-
-	it("warns that --output-file is not supported for watch", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL, "--output-file", "/tmp/out.ndjson"], {
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-		});
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ message: "unsupported flag", flag: "--output-file" }),
-		);
-	});
-});
-
-describe("run stream missing", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("streams the current repo when no target is provided", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeScopeRunner();
-		await run(["stream"], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		expect(calls.some((line) => line.includes('"commentId":1'))).toBe(true);
-		write.mockRestore();
-	});
-
-	it("streams the current repo when an empty target is provided", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeScopeRunner();
-		await run(["stream", ""], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		expect(calls.some((line) => line.includes('"commentId":1'))).toBe(true);
-		write.mockRestore();
-	});
-
-	it("exits with an error when no target is provided and the origin remote is missing", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "git" && args[0] === "remote") {
-				return Promise.reject(new Error("No such remote 'origin'"));
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run(["stream"], { runner });
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		expect(stderr).toHaveBeenCalledWith("Error: Target is required: No such remote 'origin'\n");
-		stderr.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-});
-
-describe("run stream flags", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("emits one NDJSON line per new mention", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		expect(calls.some((line) => line.includes('"commentId":1'))).toBe(true);
-		write.mockRestore();
-	});
-
-	it("does not invoke the provider", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "--version")).toBe(
-			NO_CALLS,
-		);
-	});
-
-	it("does not post replies or run gh pr checkout", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
-	});
-
-	it("saves state after emitting", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toEqual(["review:1"]);
-	});
-
-	it("emits an issue mention with kind issue and commentId equal to the issue number", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeExplainRunner({ issueBody: "@crewmate hello" });
-		await run(["stream", ISSUE_URL], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		const events = calls
-			.filter((line) => line.includes('"event":"mention"'))
-			.map((line) => JSON.parse(line) as Record<string, unknown>);
-		expect(events).toHaveLength(1);
-		expect(events[0]).toMatchObject({
-			commentId: 4,
-			kind: "issue",
-			number: 4,
-			owner: "owner",
-			repo: "repo",
-		});
-		const state = await run.loadState(run.statePath());
-		expect(state.get(ISSUE_URL)).toEqual(["issue:4"]);
-		write.mockRestore();
-	});
-
-	it("saves state for every new mention in a multi-mention poll", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeMultiMentionRunner({ conversationBody: "@crewmate hi" });
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		const events = calls
-			.filter((line) => line.includes('"event":"mention"'))
-			.map((line) => JSON.parse(line) as Record<string, unknown>);
-		expect(events).toHaveLength(3);
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toEqual(["conversation:3", "review:2", "review:1"]);
-		write.mockRestore();
-	});
-
-	it("does not re-emit mentions that are already in state", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeMultiMentionRunner({ conversationBody: "@crewmate hi" });
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		const firstCalls = write.mock.calls.map(([line]) => line as string).length;
-		expect(firstCalls).toBeGreaterThan(0);
-		write.mockClear();
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		const secondCalls = write.mock.calls.map(([line]) => line as string);
-		expect(secondCalls.some((line) => line.includes('"event":"mention"'))).toBe(false);
-		write.mockRestore();
-	});
-
-	it("respects --user", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--user", "bob"], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(false);
-		write.mockRestore();
-	});
-
-	it("warns on unsupported flags", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(
-			[
-				"stream",
-				PR_URL,
-				"--fix",
-				"--model",
-				"best",
-				"--provider",
-				"my-llm",
-				"--prompt",
-				"custom",
-				"--dry-run",
-				"--json",
-			],
-			{
-				iterations: FIRST_ITERATION,
+		it("mirrors the dry-run notice through the logger only when --log is set", async () => {
+			mockStdoutWrite();
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const { logger, events } = collectLogger();
+			const runner = makeRunner();
+			await run.watch(PR_URL, {
+				config: {},
+				dryRun: true,
+				iterations: 1,
 				logger,
 				runner,
-			},
-		);
-		for (const flag of ["--fix", "--model", "--provider", "--prompt", "--dry-run", "--json"]) {
-			expect(logger).toHaveBeenCalledWith(
-				"warning",
-				expect.objectContaining({ message: "unsupported flag", flag }),
-			);
-		}
-	});
+				stateFile,
+				toStderr: true,
+			});
+			expect(events).toContainEqual({
+				event: "info",
+				fields: expect.objectContaining({ message: expect.stringContaining("Dry-run mode") }),
+			});
+		});
 
-	it("writes unsupported flag warnings to stderr and not stdout", async () => {
-		const stdout = mockStdoutWrite();
-		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(
-			[
-				"stream",
-				PR_URL,
-				"--fix",
-				"--model",
-				"best",
-				"--provider",
-				"my-llm",
-				"--prompt",
-				"custom",
-				"--dry-run",
-				"--json",
-			],
-			{
-				iterations: FIRST_ITERATION,
+		it("pre-marks review comments already answered by crewmate on fresh state", async () => {
+			const runner = makeRunner({
+				comments: [{ id: 1 }, { body: `${CREWMATE_PREFIX} done`, id: 2, inReplyToId: 1 }],
+			});
+			await run.watch(PR_URL, {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
 				runner,
-			},
-		);
-		const flags = ["--fix", "--model", "--provider", "--prompt", "--dry-run", "--json"];
-		const stderrCalls = stderr.mock.calls.map(([line]) => line as string);
-		const warningCalls = stderrCalls.filter((line) => line.includes("Warning: unsupported flag"));
-		expect(warningCalls).toHaveLength(flags.length);
-		for (const index of flags.keys()) {
-			expect(warningCalls[index]).toContain("Warning: unsupported flag");
-		}
-		const stdoutCalls = stdout.mock.calls.map(([line]) => line as string);
-		expect(
-			stdoutCalls.some((line) => line.includes("Warning:") || line.includes("unsupported flag")),
-		).toBe(false);
-		stdout.mockRestore();
-		stderr.mockRestore();
-	});
-
-	it("warns on unsupported flags before failing to resolve the default target", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "git" && args[0] === "remote") {
-				return Promise.reject(new Error("No such remote 'origin'"));
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run(
-			[
-				"stream",
-				"--fix",
-				"--model",
-				"best",
-				"--provider",
-				"my-llm",
-				"--prompt",
-				"custom",
-				"--dry-run",
-				"--json",
-			],
-			{ runner },
-		);
-		const calls = stderr.mock.calls.map(([line]) => line as string);
-		const warningCalls = calls.filter((line) => line.includes("Warning: unsupported flag"));
-		expect(warningCalls).toHaveLength(6);
-		expect(calls.at(-1)).toBe("Error: Target is required: No such remote 'origin'\n");
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		stderr.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-
-	it("warns on unsupported flags when passed as booleans", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--model", "--provider", "--prompt"], {
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
+				stateFile,
+			});
+			const calls = callsOf(runner);
+			expect(calls.find(([f, a]) => f === "claude" && a.includes("-p"))).toBeUndefined();
+			const state = await run.loadState(stateFile);
+			expect(state.get(PR_URL)?.get("review:1")?.status).toBe("succeeded");
 		});
-		for (const flag of ["--model", "--provider", "--prompt"]) {
-			expect(logger).toHaveBeenCalledWith(
-				"warning",
-				expect.objectContaining({ message: "unsupported flag", flag }),
-			);
-		}
-	});
 
-	it("exits with an error when --since is used without a value", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--since"], { runner });
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		process.exitCode = previousExitCode;
-	});
-
-	it("exits with an error for an invalid --since timestamp", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--since", "not-a-date"], { runner });
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		process.exitCode = previousExitCode;
-	});
-
-	it("accepts a valid --since timestamp", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--since", "2026-09-02T00:00:00.000Z"], {
-			config: { interval: 0 },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(process.exitCode).toBe(NO_EXIT_CODE);
-		process.exitCode = previousExitCode;
-	});
-
-	it.each([
-		"2026-09-02",
-		"2026-09-02T10:30",
-		"2026-09-02T10:30:00",
-		"2026-09-02T10:30:00+02:00",
-		"2026-09-02T10:30:00+0200",
-		"2026-09-02T10:30:00-0530",
-		"2026-09-02T10:30:00.123456Z",
-	])("accepts the ISO-8601 timestamp %s", async (value) => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--since", value], {
-			config: { interval: 0 },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(process.exitCode).toBe(NO_EXIT_CODE);
-		process.exitCode = previousExitCode;
-	});
-
-	it.each([
-		"2026-13-99T00:00:00Z",
-		"2026-02-30T00:00:00Z",
-		"2026-09-02T10:00:00.1.2Z",
-		"2026-09-02T10:00:00.abZ",
-		"2026-09-02T24:00:00Z",
-		"2026-09-02T10:60:00Z",
-		"2026-09-02T10:00:60Z",
-		"2026-09-02T10",
-		"2026-09-02T1:30",
-		"2026-09-02T10:00:00:00Z",
-		"2026-09-02T10T00Z",
-		"2026-09-02T10:00:00+24:00",
-		"2026-09-02T10:00:00+02:99",
-	])("rejects the invalid --since timestamp %s", async (value) => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--since", value], { runner });
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		process.exitCode = previousExitCode;
-	});
-
-	it("emits mentions at or after --since end to end", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--since", "2026-09-02T00:00:00.000Z"], {
-			config: { interval: 0 },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const stdoutCalls = write.mock.calls.map(([line]) => line as string);
-		expect(stdoutCalls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		write.mockRestore();
-	});
-
-	it("skips mentions older than --since end to end", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--since", "2026-09-04T00:00:00.000Z"], {
-			config: { interval: 0 },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const stdoutCalls = write.mock.calls.map(([line]) => line as string);
-		expect(stdoutCalls.some((line) => line.includes('"event":"mention"'))).toBe(false);
-		write.mockRestore();
-	});
-
-	it("reads a timezone-less --since timestamp as UTC", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--since", "2026-09-03T00:30"], {
-			config: { interval: 0 },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const stdoutCalls = write.mock.calls.map(([line]) => line as string);
-		expect(stdoutCalls.some((line) => line.includes('"event":"mention"'))).toBe(false);
-		write.mockRestore();
-	});
-
-	it("applies the --since offset before comparing", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--since", "2026-09-03T00:30+03:00"], {
-			config: { interval: 0 },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const stdoutCalls = write.mock.calls.map(([line]) => line as string);
-		expect(stdoutCalls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		write.mockRestore();
-	});
-
-	it("passes options.iterations to stream", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL], {
-			config: { interval: 0 },
-			iterations: TWO_ITERATIONS,
-			runner,
-		});
-		expect(
-			countCalls(
-				runner,
-				"gh",
-				(args) =>
-					args.at(FIRST_INDEX) === "api" &&
-					!args.includes("--method") &&
-					args.some((arg) => startsWithRepos(arg)),
-			),
-		).toBe(4);
-	});
-
-	it("defaults to Infinity iterations and runs more than one", async () => {
-		let apiCalls = 0;
-		const runner = vi.fn((file: string, args: string[]) => {
-			const [command] = args;
-			const endpoint = findEndpoint(args);
-			if (file === "gh" && (command === "--version" || command === "auth")) {
-				return Promise.resolve("");
-			}
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
-				apiCalls += 1;
-				if (apiCalls > 2) {
-					return Promise.reject(new Error("second iteration"));
-				}
-				return Promise.resolve(
-					JSON.stringify([
-						[
-							{
-								body: "@crewmate hello",
-								id: FIRST_ID,
-								in_reply_to_id: null,
-								line: FIRST_LINE,
-								path: "src/index.ts",
-								user: { login: "alice" },
-							},
-						],
-					]),
-				);
-			}
-			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
-				return Promise.resolve(JSON.stringify([[]]));
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await expect(
-			run.stream(PR_URL, { allowedUser: "alice", interval: NO_INTERVAL, runner }),
-		).rejects.toThrow("second iteration");
-		expect(apiCalls).toBeGreaterThan(2);
-	});
-
-	it("can run outside a git working tree", async () => {
-		const write = mockStdoutWrite();
-		const resolveProfile = vi.spyOn(config, "resolveProfile").mockResolvedValue({});
-		const runner = vi.fn((file: string, args: string[]) => {
-			const [command] = args;
-			const endpoint = findEndpoint(args);
-			if (file === "gh" && (command === "--version" || command === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "gh" && command === "api" && args.includes("user")) {
-				return Promise.resolve("alice");
-			}
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
-				return Promise.resolve(
-					JSON.stringify([
-						[
-							{
-								body: "@crewmate hello",
-								id: FIRST_ID,
-								in_reply_to_id: null,
-								line: FIRST_LINE,
-								path: "src/index.ts",
-								user: { login: "alice" },
-							},
-						],
-					]),
-				);
-			}
-			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
-				return Promise.resolve(JSON.stringify([[]]));
-			}
-			if (
-				file === "git" &&
-				command === "rev-parse" &&
-				args.at(SECOND_INDEX) === "--show-toplevel"
-			) {
-				return Promise.reject(new Error("not a git repo"));
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "rev-parse")).toBe(
-			FIRST_CALL,
-		);
-		expect(resolveProfile).toHaveBeenCalledWith("owner", "repo", undefined, expect.any(Function));
-		resolveProfile.mockRestore();
-		write.mockRestore();
-	});
-
-	it("prints help for stream --help", async () => {
-		const write = mockStdoutWrite();
-		await run(["stream", "--help"]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("crewmate stream"));
-		write.mockRestore();
-	});
-
-	it("prints help for stream PR_URL --help", async () => {
-		const write = mockStdoutWrite();
-		await run(["stream", PR_URL, "--help"]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("crewmate stream"));
-		write.mockRestore();
-	});
-
-	it("uses the default runner when none is provided", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		await expect(run(["stream", PR_URL], { iterations: NO_ITERATIONS })).resolves.toBeUndefined();
-		process.exitCode = previousExitCode;
-	});
-
-	it("treats an empty git root as outside a working tree", async () => {
-		const write = mockStdoutWrite();
-		const runner = vi.fn((file: string, args: string[]) => {
-			const [command] = args;
-			const endpoint = findEndpoint(args);
-			if (file === "gh" && (command === "--version" || command === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "gh" && command === "api" && args.includes("user")) {
-				return Promise.resolve("alice");
-			}
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
-				return Promise.resolve(
-					JSON.stringify([
-						[
-							{
-								body: "@crewmate hello",
-								id: FIRST_ID,
-								in_reply_to_id: null,
-								line: FIRST_LINE,
-								path: "src/index.ts",
-								user: { login: "alice" },
-							},
-						],
-					]),
-				);
-			}
-			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
-				return Promise.resolve(JSON.stringify([[]]));
-			}
-			if (
-				file === "git" &&
-				command === "rev-parse" &&
-				args.at(SECOND_INDEX) === "--show-toplevel"
-			) {
-				return Promise.resolve("");
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		write.mockRestore();
-	});
-
-	it("emits a conversation mention without path or line", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeExplainRunner({
-			answer: "It does something.",
-			body: "thanks",
-			conversationBody: "@crewmate hello",
-		});
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		const events = calls
-			.filter((line) => line.includes('"event":"mention"'))
-			.map((line) => JSON.parse(line) as Record<string, unknown>);
-		const conversation = events.find((event) => event.kind === "conversation");
-		expect(conversation).toBeDefined();
-		expect(conversation).not.toHaveProperty("path");
-		expect(conversation).not.toHaveProperty("line");
-		write.mockRestore();
-	});
-
-	it("mirrors logs to stderr with --log", async () => {
-		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--log"], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		write.mockRestore();
-	});
-
-	it("does not let an extra word after --log disable stderr mirroring", async () => {
-		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--log", "/tmp/x.log"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		write.mockRestore();
-	});
-
-	it("throws non-Error failures", async () => {
-		const runner = vi.fn(() => Promise.reject("string error")) as unknown as Runner;
-		const logger = vi.fn((event: string) => {
-			if (event === "error") {
-				return Promise.reject(new Error("logger failed"));
-			}
-			return Promise.resolve();
-		}) as unknown as Logger;
-		await expect(
-			run.stream(PR_URL, {
-				interval: NO_INTERVAL,
-				iterations: FIRST_ITERATION,
+		it("emits debug stages when debug is enabled", async () => {
+			const { logger, events } = collectLogger();
+			const runner = makeRunner();
+			await run.watch(PR_URL, {
+				config: {},
+				debug: true,
+				iterations: 1,
 				logger,
 				runner,
-			}),
-		).rejects.toThrow("string error");
-	});
-
-	it("allows --unsafe-no-user to emit mentions from any user", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeExplainRunner({ user: "bob" });
-		await run(["stream", PR_URL, "--unsafe-no-user"], {
-			iterations: FIRST_ITERATION,
-			runner,
+				since: new Date("2026-01-01T00:00:00Z"),
+				stateFile,
+			});
+			const stages = events.filter((e) => e.event === "debug").map((e) => e.fields?.stage);
+			expect(stages).toEqual(["fetched-comments", "mention-filter", "new-mentions"]);
 		});
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		write.mockRestore();
-	});
 
-	it("makes --unsafe-no-user override --user for stream", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeExplainRunner({ user: "charlie" });
-		await run(["stream", PR_URL, "--user", "bob", "--unsafe-no-user"], {
-			iterations: FIRST_ITERATION,
-			runner,
+		it("recovers from a corrupted state file", async () => {
+			const { logger, events } = collectLogger();
+			await writeFile(stateFile, "corrupted{");
+			const runner = makeRunner();
+			await run.watch(PR_URL, { config: {}, iterations: 1, logger, runner, stateFile });
+			expect(events).toContainEqual({
+				event: "warning",
+				fields: expect.objectContaining({ reason: "state-corrupted" }),
+			});
 		});
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		write.mockRestore();
-	});
 
-	it("makes --user override a config unsafeNoUser flag for stream", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeExplainRunner({ user: "alice" });
-		await run(["stream", PR_URL, "--user", "bob"], {
-			config: { unsafeNoUser: true },
-			iterations: FIRST_ITERATION,
-			runner,
+		it("answers issue mentions", async () => {
+			const runner = makeRunner({ issueBody: "@crewmate summarize", conversationBody: "" });
+			await run.watch(ISSUE_URL, {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			const state = await run.loadState(stateFile);
+			expect(state.get(ISSUE_URL)?.get("issue:4")?.status).toBe("succeeded");
 		});
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(false);
-		write.mockRestore();
-	});
 
-	it("exits when the gh user cannot be determined in stream mode", async () => {
-		const previousExitCode = process.exitCode;
-		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args[0] === "api" && args.includes("user")) {
-				return Promise.resolve("");
-			}
-			return resolveExplain(file, args, {});
-		}) as unknown as Runner;
-		process.exitCode = NO_EXIT_CODE;
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		expect(stderr).toHaveBeenCalledWith(
-			expect.stringContaining("Could not determine a GitHub user"),
-		);
-		stderr.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-
-	it("proceeds in stream mode when --unsafe-no-user is set and gh user is missing", async () => {
-		const write = mockStdoutWrite();
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args[0] === "api" && args.includes("user")) {
-				return Promise.resolve("");
-			}
-			return resolveExplain(file, args, { user: "bob" });
-		}) as unknown as Runner;
-		await run(["stream", PR_URL, "--unsafe-no-user"], {
-			iterations: FIRST_ITERATION,
-			runner,
+		it("polls every open item in repo scope", async () => {
+			const runner = makeRunner({ prUrl: PR_URL, issueUrl: ISSUE_URL, issueBody: "@crewmate hi" });
+			await run.watch("owner/repo", {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			const state = await run.loadState(stateFile);
+			expect(state.get(PR_URL)?.get("review:1")?.status).toBe("succeeded");
+			expect(state.get(ISSUE_URL)?.get("issue:4")?.status).toBe("succeeded");
 		});
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		write.mockRestore();
-	});
 
-	it("does not post reactions without --ack", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		expect(countCalls(runner, "gh", isReactionPost)).toBe(NO_CALLS);
-	});
-
-	it("acknowledges review mentions with --ack", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--ack"], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		const events = calls
-			.filter((line) => line.includes('"event":"mention"'))
-			.map((line) => JSON.parse(line) as Record<string, unknown>);
-		expect(events).toHaveLength(1);
-		expect(events[0]).toMatchObject({
-			commentId: FIRST_ID,
-			kind: "review",
-			reactionId: expect.any(Number),
+		it("warns once when no open items are found", async () => {
+			const { logger, events } = collectLogger();
+			const runner = makeRunner();
+			await run.watch("owner/repo", {
+				config: {},
+				iterations: 2,
+				interval: 0,
+				logger,
+				runner,
+				stateFile,
+			});
+			const warnings = events.filter(
+				(e) => e.event === "warning" && e.fields?.reason === "no-open-items",
+			);
+			expect(warnings.length).toBe(1);
 		});
-		expect(countCalls(runner, "gh", isReactionPost)).toBe(1);
-		write.mockRestore();
-	});
 
-	it("acknowledges issue mentions with --ack", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeExplainRunner({ issueBody: "@crewmate hello" });
-		await run(["stream", ISSUE_URL, "--ack"], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		const events = calls
-			.filter((line) => line.includes('"event":"mention"'))
-			.map((line) => JSON.parse(line) as Record<string, unknown>);
-		expect(events).toHaveLength(1);
-		expect(events[0]).toMatchObject({
-			commentId: 4,
-			kind: "issue",
-			reactionId: expect.any(Number),
-		});
-		expect(countCalls(runner, "gh", isReactionPost)).toBe(1);
-		write.mockRestore();
-	});
-
-	it("warns and continues when --ack reaction returns an empty response", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && isReactionPost(args)) {
-				return Promise.resolve("");
-			}
-			return resolveExplain(file, args, { answer: "" });
-		}) as unknown as Runner;
-		await run(["stream", PR_URL, "--ack"], { iterations: FIRST_ITERATION, logger, runner });
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ message: "failed to set ack reaction: empty response" }),
-		);
-	});
-
-	it("warns and continues when --ack reaction response has a non-numeric id", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && isReactionPost(args)) {
-				return Promise.resolve(JSON.stringify({ id: "not-a-number" }));
-			}
-			return resolveExplain(file, args, { answer: "" });
-		}) as unknown as Runner;
-		await run(["stream", PR_URL, "--ack"], { iterations: FIRST_ITERATION, logger, runner });
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({
-				message: "failed to set ack reaction: response did not contain a numeric id",
-			}),
-		);
-	});
-
-	it("warns and continues when --ack reaction response is not valid json", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && isReactionPost(args)) {
-				return Promise.resolve("not json");
-			}
-			return resolveExplain(file, args, { answer: "" });
-		}) as unknown as Runner;
-		await run(["stream", PR_URL, "--ack"], { iterations: FIRST_ITERATION, logger, runner });
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ message: expect.stringContaining("failed to set ack reaction") }),
-		);
-	});
-
-	it("warns and continues when --ack reaction post fails", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && isReactionPost(args)) {
-				return Promise.reject(new Error("reaction failed"));
-			}
-			return resolveExplain(file, args, { answer: "" });
-		}) as unknown as Runner;
-		await run(["stream", PR_URL, "--ack"], { iterations: FIRST_ITERATION, logger, runner });
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ message: expect.stringContaining("failed to set ack reaction") }),
-		);
-	});
-
-	it("writes mentions to --output-file", async () => {
-		const write = mockStdoutWrite();
-		const outputFile = path.join(tempDir, "events.ndjson");
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--output-file", outputFile], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const stdoutCalls = write.mock.calls.map(([line]) => line as string);
-		expect(stdoutCalls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		const fileContent = await readFile(outputFile, "utf8");
-		expect(fileContent).toContain('"event":"mention"');
-		expect(fileContent).toContain('"commentId":1');
-		write.mockRestore();
-	});
-
-	it("creates the output file directory when it does not exist", async () => {
-		const write = mockStdoutWrite();
-		const outputFile = path.join(tempDir, "nested", "events.ndjson");
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--output-file", outputFile], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const fileContent = await readFile(outputFile, "utf8");
-		expect(fileContent).toContain('"event":"mention"');
-		write.mockRestore();
-	});
-
-	it("exits with an error when stdout write fails", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const write = mockStdoutWrite({ error: new Error("write failed") });
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		write.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-
-	it("exits cleanly when the stdout consumer closes the pipe", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const epipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-		const write = mockStdoutWrite({ error: epipeError });
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		expect(process.exitCode).toBe(NO_EXIT_CODE);
-		write.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-
-	it("delivers each line after the stdout drain when backpressure is applied", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const write = mockStdoutWrite({ returnFalse: true });
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		expect(process.exitCode).toBe(NO_EXIT_CODE);
-		write.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-
-	it("does not save state when the output file cannot be written", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const write = mockStdoutWrite();
-		const outputFile = path.join(tempDir, "isdir");
-		await mkdir(outputFile);
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--output-file", outputFile], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toBeUndefined();
-		write.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-
-	it("exits with an error when --output-file write fails with EPIPE", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const write = mockStdoutWrite();
-		const epipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-		const appendSpy = vi.spyOn(fs, "appendFile").mockRejectedValueOnce(epipeError);
-		const outputFile = path.join(tempDir, "events.ndjson");
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--output-file", outputFile], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		appendSpy.mockRestore();
-		write.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-
-	it("exits with an error when --output-file is passed without a value", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--output-file"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		process.exitCode = previousExitCode;
-	});
-
-	it("exits with an error when --output-file is given an empty path", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--output-file="], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		process.exitCode = previousExitCode;
-	});
-
-	it("stops repo scope streaming when --output-file cannot be written", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const write = mockStdoutWrite();
-		const outputFile = path.join(tempDir, "isdir");
-		await mkdir(outputFile);
-		const runner = makeScopeRunner();
-		await run(["stream", "owner/repo", "--output-file", outputFile], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		write.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-
-	it("stops repo scope streaming on non-EPIPE stdout write failure", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const write = mockStdoutWrite({ error: new Error("write failed") });
-		const runner = makeScopeRunner();
-		await run(["stream", "owner/repo"], { iterations: FIRST_ITERATION, runner });
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		write.mockRestore();
-		process.exitCode = previousExitCode;
-	});
-});
-
-describe("stdout error handling", () => {
-	it("treats EPIPE on stdout as a clean stop", () => {
-		const epipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		expect(() => process.stdout.emit("error", epipeError)).not.toThrow();
-		expect(process.exitCode).toBe(0);
-		process.exitCode = previousExitCode;
-	});
-
-	it("records a non-zero exit code for non-EPIPE stdout errors", () => {
-		const otherError = new Error("stdout exploded");
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		expect(() => process.stdout.emit("error", otherError)).not.toThrow();
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		process.exitCode = previousExitCode;
-	});
-});
-
-describe("parsePrUrl", () => {
-	it("parses a GitHub PR URL", () => {
-		expect(run.parsePrUrl(PR_URL)).toEqual({
-			host: "github.com",
-			number: "123",
-			owner: "owner",
-			repo: "repo",
-		});
-	});
-
-	it("parses a PR shorthand", () => {
-		expect(run.parsePrUrl("owner/repo/pull/123")).toEqual({
-			host: "github.com",
-			number: "123",
-			owner: "owner",
-			repo: "repo",
-		});
-	});
-
-	it("parses an uppercase HTTPS URL", () => {
-		expect(run.parsePrUrl("HTTPS://github.com/owner/repo/pull/123")).toEqual({
-			host: "github.com",
-			number: "123",
-			owner: "owner",
-			repo: "repo",
-		});
-	});
-
-	it("preserves a non-default port in a GHES PR URL", () => {
-		expect(run.parsePrUrl("https://ghe.example.com:8443/owner/repo/pull/1")).toEqual({
-			host: "ghe.example.com",
-			number: "1",
-			owner: "owner",
-			port: "8443",
-			repo: "repo",
-		});
-	});
-
-	it("parses a shorthand whose owner starts with 'http'", () => {
-		expect(run.parsePrUrl("httpie/cli/pull/123")).toEqual({
-			host: "github.com",
-			number: "123",
-			owner: "httpie",
-			repo: "cli",
-		});
-	});
-
-	it("parses an HTTP URL returned by an API", () => {
-		expect(run.parsePrUrl("http://ghe.example.com/owner/repo/pull/1")).toEqual({
-			host: "ghe.example.com",
-			number: "1",
-			owner: "owner",
-			repo: "repo",
-		});
-	});
-
-	it("throws for a non-pull URL", () => {
-		expect(() => run.parsePrUrl("https://github.com/owner/repo/issues/123")).toThrow(TypeError);
-	});
-
-	it("throws when the path is too short", () => {
-		expect(() => run.parsePrUrl("https://github.com/owner/repo/pull/")).toThrow(TypeError);
-	});
-
-	it("throws when the path is too long", () => {
-		expect(() => run.parsePrUrl("https://github.com/owner/repo/pull/123/extra")).toThrow(TypeError);
-	});
-
-	it("throws for an invalid shorthand", () => {
-		expect(() => run.parsePrUrl("owner/repo/123")).toThrow(TypeError);
-	});
-
-	it("throws for a shorthand with unsafe owner characters", () => {
-		expect(() => run.parsePrUrl("../repo/pull/123")).toThrow(TypeError);
-	});
-
-	it("throws when the PR number is not numeric", () => {
-		expect(() => run.parsePrUrl("https://github.com/owner/repo/pull/abc")).toThrow(TypeError);
-	});
-});
-
-describe("exec", () => {
-	it("runs a command and returns untrimmed stdout", async () => {
-		const out = await run.exec("node", ["-e", "console.log('hi')"]);
-		expect(out).toBe("hi\n");
-	});
-
-	it("throws when a command fails", async () => {
-		await expect(run.exec("node", ["-e", "process.exit(1)"])).rejects.toThrow();
-	});
-});
-
-describe("findFlag", () => {
-	it("returns the value of a flag", () => {
-		expect(run.findFlag(["--fix", "--user", "alice"], "--user")).toBe("alice");
-	});
-
-	it("returns undefined when the flag is missing", () => {
-		expect(run.findFlag(["--fix"], "--user")).toBeUndefined();
-	});
-
-	it("returns undefined when the flag has no value", () => {
-		expect(run.findFlag(["--fix", "--user"], "--user")).toBeUndefined();
-	});
-
-	it("returns undefined when the flag value is another flag", () => {
-		expect(run.findFlag(["--user", "--fix"], "--user")).toBeUndefined();
-	});
-
-	it("returns an empty quoted value as-is", () => {
-		expect(run.findFlag(["--user", ""], "--user")).toBe("");
-	});
-
-	it("returns a value passed with --flag=value", () => {
-		expect(run.findFlag(["--user=alice"], "--user")).toBe("alice");
-	});
-
-	it("ignores non-flag tokens", () => {
-		expect(run.findFlag(["foo", "--user", "alice"], "--user")).toBe("alice");
-	});
-});
-
-describe("parseInterval", () => {
-	it("parses a valid interval", () => {
-		expect(run.parseInterval(["--interval", "5"])).toBe(5);
-	});
-
-	it("parses a string value", () => {
-		expect(run.parseInterval("5")).toBe(5);
-	});
-
-	it("defaults when the flag is missing", () => {
-		expect(run.parseInterval([])).toBe(60);
-	});
-
-	it("defaults when the input is undefined", () => {
-		expect(run.parseInterval(undefined)).toBe(60);
-	});
-
-	it("defaults when the flag value is invalid", () => {
-		expect(run.parseInterval(["--interval", "bad"])).toBe(60);
-	});
-
-	it("defaults when the flag value is not positive", () => {
-		expect(run.parseInterval(["--interval", "0"])).toBe(60);
-	});
-
-	it("truncates a float interval", () => {
-		expect(run.parseInterval(["--interval", "5.5"])).toBe(5);
-	});
-
-	it("returns undefined for invalid input when no fallback", () => {
-		expect(run.parseInterval(["--interval", "bad"], { fallback: undefined })).toBeUndefined();
-	});
-
-	it("returns undefined for non-positive input when no fallback", () => {
-		expect(run.parseInterval(["--interval", "0"], { fallback: undefined })).toBeUndefined();
-	});
-});
-
-describe("parseGitRemoteUrl", () => {
-	it("parses an HTTPS GitHub remote", () => {
-		expect(run.parseGitRemoteUrl("https://github.com/owner/repo.git")).toEqual({
-			host: "github.com",
-			owner: "owner",
-			repo: "repo",
-		});
-	});
-
-	it("parses an HTTPS remote without the .git suffix", () => {
-		expect(run.parseGitRemoteUrl("https://github.com/owner/repo")).toEqual({
-			host: "github.com",
-			owner: "owner",
-			repo: "repo",
-		});
-	});
-
-	it("parses an SSH remote", () => {
-		expect(run.parseGitRemoteUrl("git@github.com:owner/repo.git")).toEqual({
-			host: "github.com",
-			owner: "owner",
-			repo: "repo",
-		});
-	});
-
-	it("preserves a non-default port", () => {
-		expect(run.parseGitRemoteUrl("https://ghe.example.com:8443/owner/repo.git")).toEqual({
-			host: "ghe.example.com",
-			port: "8443",
-			owner: "owner",
-			repo: "repo",
-		});
-	});
-
-	it("returns undefined for an unparseable remote", () => {
-		expect(run.parseGitRemoteUrl("not-a-url")).toBeUndefined();
-	});
-
-	it("returns undefined for a remote with only an owner", () => {
-		expect(run.parseGitRemoteUrl("https://github.com/owner")).toBeUndefined();
-	});
-
-	it("returns undefined for a remote that resolves to an invalid name", () => {
-		expect(run.parseGitRemoteUrl("https://github.com/owner/.git")).toBeUndefined();
-	});
-
-	it("returns undefined for a remote with extra path segments", () => {
-		expect(run.parseGitRemoteUrl("https://github.com/owner/repo/extra")).toBeUndefined();
-	});
-
-	it("ignores the port for an SSH remote", () => {
-		expect(run.parseGitRemoteUrl("ssh://git@ghe.example.com:122/owner/repo.git")).toEqual({
-			host: "ghe.example.com",
-			owner: "owner",
-			repo: "repo",
-		});
-	});
-
-	it("returns undefined for an SCP-style remote without a colon", () => {
-		expect(run.parseGitRemoteUrl("git@github.com/owner/repo.git")).toBeUndefined();
-	});
-});
-
-describe("state errors", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("throws when the state path is not a readable file", async () => {
-		const dir = path.join(tempDir, "isdir");
-		await mkdir(dir, { recursive: true });
-		await expect(run.loadState(dir)).rejects.toThrow();
-	});
-
-	it("falls back to the home directory when XDG_CONFIG_HOME is empty", async () => {
-		vi.stubEnv("XDG_CONFIG_HOME", "");
-		vi.stubEnv("HOME", tempDir);
-		const state = await run.loadState();
-		expect(state).toBeDefined();
-		expect(run.statePath()).toBe(path.join(tempDir, ".config", "crewmate", "state.json"));
-	});
-
-	it("falls back to os.homedir() when HOME is also empty", async () => {
-		vi.stubEnv("XDG_CONFIG_HOME", "");
-		vi.stubEnv("HOME", "");
-		const state = await run.loadState();
-		expect(state).toBeDefined();
-		expect(run.statePath()).toBe(path.join(homedir(), ".config", "crewmate", "state.json"));
-	});
-
-	it("warns and resets when the state file is corrupted", async () => {
-		const stateFile = path.join(tempDir, "state.json");
-		await writeFile(stateFile, "not json");
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const state = await run.loadState(stateFile);
-		expect(state.size).toBe(NO_CALLS);
-		expect(warn).toHaveBeenCalled();
-		warn.mockRestore();
-	});
-});
-
-describe("findNewMention", () => {
-	it("returns the newest unseen mention", () => {
-		const comments: Mention[] = [
-			{
-				body: "@crewmate hello",
-				id: FIRST_ID,
-				kind: "review",
-				line: FIRST_LINE,
-				path: "src/index.ts",
-				user: { login: "alice" },
-			},
-			{
-				body: "@crewmate fix",
-				id: SECOND_ID,
-				kind: "review",
-				line: FIRST_LINE,
-				path: "src/index.ts",
-				user: { login: "alice" },
-			},
-		];
-		const mention = run.findNewMention(comments, []);
-		expect(mention).toBeDefined();
-		if (mention) {
-			expect(mention.id).toBe(SECOND_ID);
-		}
-	});
-
-	it("ignores already seen mentions", () => {
-		expect(
-			run.findNewMention(
-				[
-					{
-						body: "@crewmate hello",
-						id: FIRST_ID,
-						inReplyToId: undefined,
-						kind: "review",
-						line: FIRST_LINE,
-						path: "src/index.ts",
-						user: { login: "alice" },
-					},
-				],
-				["review:1"],
-			),
-		).toBeUndefined();
-	});
-
-	it("ignores comments without @crewmate", () => {
-		expect(
-			run.findNewMention(
-				[
-					{
-						body: "hello",
-						id: FIRST_ID,
-						kind: "review",
-						line: FIRST_LINE,
-						path: "src/index.ts",
-						user: { login: "alice" },
-					},
-				],
-				[],
-			),
-		).toBeUndefined();
-	});
-
-	it("ignores comments without a body", () => {
-		expect(
-			run.findNewMention(
-				[
-					{
-						body: "",
-						id: FIRST_ID,
-						kind: "review",
-						line: FIRST_LINE,
-						path: "src/index.ts",
-						user: { login: "alice" },
-					},
-				],
-				[],
-			),
-		).toBeUndefined();
-	});
-
-	it("returns the newest mention when comments are out of order", () => {
-		const comments: Mention[] = [
-			{
-				body: "@crewmate hello",
-				id: FIRST_ID,
-				kind: "review",
-				line: FIRST_LINE,
-				path: "src/index.ts",
-				user: { login: "alice" },
-			},
-			{
-				body: "@crewmate fix",
-				id: THIRD_ID,
-				kind: "review",
-				line: FIRST_LINE,
-				path: "src/index.ts",
-				user: { login: "alice" },
-			},
-			{
-				body: "@crewmate hi",
-				id: SECOND_ID,
-				kind: "review",
-				line: FIRST_LINE,
-				path: "src/index.ts",
-				user: { login: "alice" },
-			},
-		];
-		const mention = run.findNewMention(comments, []);
-		expect(mention).toBeDefined();
-		if (mention) {
-			expect(mention.id).toBe(THIRD_ID);
-		}
-	});
-
-	it("ignores @crewmate as a substring", () => {
-		expect(
-			run.findNewMention(
-				[
-					{
-						body: "foo@crewmate hello",
-						id: FIRST_ID,
-						kind: "review",
-						line: FIRST_LINE,
-						path: "src/index.ts",
-						user: { login: "alice" },
-					},
-				],
-				[],
-			),
-		).toBeUndefined();
-	});
-
-	it("matches @crewmate inside parentheses", () => {
-		const mention = run.findNewMention(
-			[
-				{
-					body: "(@crewmate)",
-					id: FIRST_ID,
-					kind: "review",
-					line: FIRST_LINE,
-					path: "src/index.ts",
-					user: { login: "alice" },
-				},
-			],
-			[],
-		);
-		expect(mention).toBeDefined();
-		expect(mention?.id).toBe(FIRST_ID);
-	});
-
-	it("ignores reply comments", () => {
-		expect(
-			run.findNewMention(
-				[
-					{
-						body: "@crewmate hello",
-						id: FIRST_ID,
-						inReplyToId: SECOND_ID,
-						kind: "review",
-						line: FIRST_LINE,
-						path: "src/index.ts",
-						user: { login: "alice" },
-					},
-				],
-				[],
-			),
-		).toBeUndefined();
-	});
-
-	it("matches top-level comments that have inReplyToId: undefined", () => {
-		const mention = run.findNewMention(
-			[
-				{
-					body: "@crewmate hello",
-					id: FIRST_ID,
-					inReplyToId: undefined,
-					kind: "review",
-					line: FIRST_LINE,
-					path: "src/index.ts",
-					user: { login: "alice" },
-				},
-			],
-			[],
-		);
-		expect(mention).toBeDefined();
-		expect(mention?.id).toBe(FIRST_ID);
-	});
-
-	it("skips a fresh install mention that already has a crewmate reply (sync)", () => {
-		const mention = run.findNewMention(
-			[
-				{
-					body: "@crewmate hello",
-					id: FIRST_ID,
-					inReplyToId: undefined,
-					kind: "review",
-					line: FIRST_LINE,
-					path: "src/index.ts",
-					user: { login: "alice" },
-				},
-				{
-					body: `${CREWMATE_PREFIX} done`,
-					id: SECOND_ID,
-					inReplyToId: FIRST_ID,
-					kind: "review",
-					line: FIRST_LINE,
-					path: "src/index.ts",
-					user: { login: "crewmate" },
-				},
-			],
-			[],
-			undefined,
-			true,
-		);
-		expect(mention).toBeUndefined();
-	});
-
-	it("does not skip a fresh install mention with a non-crewmate reply", () => {
-		const mention = run.findNewMention(
-			[
-				{
-					body: "@crewmate hello",
-					id: FIRST_ID,
-					inReplyToId: undefined,
-					kind: "review",
-					line: FIRST_LINE,
-					path: "src/index.ts",
-					user: { login: "alice" },
-				},
-				{
-					body: "thanks",
-					id: SECOND_ID,
-					inReplyToId: FIRST_ID,
-					kind: "review",
-					line: FIRST_LINE,
-					path: "src/index.ts",
-					user: { login: "alice" },
-				},
-			],
-			[],
-			undefined,
-			true,
-		);
-		expect(mention).toBeDefined();
-		expect(mention?.id).toBe(FIRST_ID);
-	});
-
-	it("does not use the crewmate reply fallback when not fresh", () => {
-		const mention = run.findNewMention(
-			[
-				{
-					body: "@crewmate hello",
-					id: FIRST_ID,
-					inReplyToId: undefined,
-					kind: "review",
-					line: FIRST_LINE,
-					path: "src/index.ts",
-					user: { login: "alice" },
-				},
-				{
-					body: `${CREWMATE_PREFIX} done`,
-					id: SECOND_ID,
-					inReplyToId: FIRST_ID,
-					kind: "review",
-					line: FIRST_LINE,
-					path: "src/index.ts",
-					user: { login: "crewmate" },
-				},
-			],
-			[],
-			undefined,
-			false,
-		);
-		expect(mention).toBeDefined();
-		expect(mention?.id).toBe(FIRST_ID);
-	});
-});
-
-describe("findNewMentions", () => {
-	it("returns all new mentions sorted by id descending", () => {
-		const comments: Mention[] = [
-			{
-				body: "@crewmate hello",
-				id: FIRST_ID,
-				inReplyToId: undefined,
-				kind: "review",
-				line: FIRST_LINE,
-				path: "src/index.ts",
-				user: { login: "alice" },
-			},
-			{
-				body: "@crewmate fix",
-				id: SECOND_ID,
-				inReplyToId: undefined,
-				kind: "review",
-				line: FIRST_LINE,
-				path: "src/index.ts",
-				user: { login: "alice" },
-			},
-		];
-		const mentions = run.findNewMentions(comments, []);
-		expect(mentions).toHaveLength(TWO_CALLS);
-		expect(mentions[0].id).toBe(SECOND_ID);
-		expect(mentions[1].id).toBe(FIRST_ID);
-	});
-
-	it("filters mentions older than the since timestamp", () => {
-		const comments: Mention[] = [
-			{
-				body: "@crewmate old",
-				createdAt: "2026-09-01T00:00:00.000Z",
-				id: FIRST_ID,
-				inReplyToId: undefined,
-				kind: "review",
-				line: FIRST_LINE,
-				path: "src/index.ts",
-				user: { login: "alice" },
-			},
-			{
-				body: "@crewmate new",
-				createdAt: "2026-09-03T00:00:00.000Z",
-				id: SECOND_ID,
-				inReplyToId: undefined,
-				kind: "review",
-				line: FIRST_LINE,
-				path: "src/index.ts",
-				user: { login: "alice" },
-			},
-			{
-				body: "@crewmate no timestamp",
-				id: THIRD_ID,
-				inReplyToId: undefined,
-				kind: "review",
-				line: FIRST_LINE,
-				path: "src/index.ts",
-				user: { login: "alice" },
-			},
-		];
-		const mentions = run.findNewMentions(
-			comments,
-			[],
-			undefined,
-			false,
-			new Date("2026-09-02T00:00:00.000Z"),
-		);
-		expect(mentions).toHaveLength(TWO_CALLS);
-		expect(mentions[0].id).toBe(THIRD_ID);
-		expect(mentions[1].id).toBe(SECOND_ID);
-	});
-
-	it("rejects a non-ISO-8601 --since timestamp", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["stream", PR_URL, "--since", "September 2, 2026"], { runner });
-		expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-		process.exitCode = previousExitCode;
-	});
-});
-
-describe("stripFences", () => {
-	it("returns the content unchanged when no fences are present", () => {
-		expect(run.stripFences("plain text")).toBe("plain text");
-	});
-
-	it("strips a fenced code block", () => {
-		expect(run.stripFences("```\ncode\n```")).toBe("code");
-	});
-
-	it("returns the content when the fences are on one line", () => {
-		expect(run.stripFences("```\n```")).toBe("```\n```");
-	});
-});
-
-describe("watch explain", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("polls once and replies to a mention", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-
-		const reactionPosts = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.filter(([file, args]) => file === "gh" && isReactionPost(args));
-		expect(reactionPosts).toHaveLength(2);
-		expect(getReactionEmoji(reactionPosts[0][1])).toBe("eyes");
-		expect(getReactionEmoji(reactionPosts[1][1])).toBe("+1");
-
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toEqual(["review:1"]);
-	});
-
-	it("warns and continues when the reaction delete fails", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args.includes("DELETE")) {
-				return Promise.reject(new Error("delete failed"));
-			}
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			return resolveExplain(file, args, { answer: "It does something." });
-		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-
-		const mockRunner = runner as unknown as {
-			mock: {
-				calls: [string, string[]][];
-				results: { value: Promise<string> }[];
-			};
-		};
-
-		const eyesIndex = mockRunner.mock.calls.findIndex(
-			([file, args]) =>
-				file === "gh" &&
-				args.includes("POST") &&
-				args.some((arg) => typeof arg === "string" && arg.includes("/reactions")),
-		);
-		expect(eyesIndex).toBeGreaterThanOrEqual(0);
-		const eyesResult = await mockRunner.mock.results[eyesIndex].value;
-		const eyes = JSON.parse(eyesResult) as { id: number };
-		expect(typeof eyes.id).toBe("number");
-
-		const eyesId = eyes.id;
-		expect(
-			mockRunner.mock.calls.some(
-				([file, args]) =>
+		it("rethrows poll failures for single items", async () => {
+			const base = makeRunner();
+			const runner = vi.fn((file: string, args: string[]) => {
+				if (
 					file === "gh" &&
-					args.includes("DELETE") &&
-					args.some((arg) => typeof arg === "string" && arg.endsWith(`/reactions/${eyesId}`)),
-			),
-		).toBe(true);
-
-		const reactionCalls = mockRunner.mock.calls.filter(
-			([file, args]) =>
-				file === "gh" && args.some((arg) => typeof arg === "string" && arg.includes("/reactions")),
-		);
-		const lastReaction = reactionCalls.at(-1);
-		expect(lastReaction?.[1].some((arg) => typeof arg === "string" && arg === "content=+1")).toBe(
-			true,
-		);
-
-		expect(countCalls(runner, "gh", isReplyPost)).toBe(FIRST_CALL);
-		expect(warn).toHaveBeenCalledWith(expect.stringContaining("failed to remove reaction"));
-		warn.mockRestore();
-	});
-
-	it("emits debug log events when debug mode is enabled", async () => {
-		const logger = vi.fn() as unknown as Logger & {
-			mock: { calls: [string, Record<string, unknown>][] };
-		};
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-			debug: true,
-			logger,
-		});
-		const calls = logger.mock.calls.filter(([level]) => level === "debug");
-		expect(calls).toHaveLength(3);
-		expect(calls[0][1]).toMatchObject({ stage: "fetched-comments" });
-		expect(calls[1][1]).toMatchObject({ stage: "mention-filter" });
-		expect(calls[2][1]).toMatchObject({ stage: "new-mentions" });
-	});
-
-	it("logs sincePass in debug mention-filter details when since is set", async () => {
-		const logger = vi.fn() as unknown as Logger & {
-			mock: { calls: [string, Record<string, unknown>][] };
-		};
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, {
-			debug: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-			since: new Date("2026-09-04T00:00:00.000Z"),
-		});
-		const calls = logger.mock.calls.filter(([level]) => level === "debug");
-		const filterCall = calls.find(
-			([, fields]) => (fields as { stage: string }).stage === "mention-filter",
-		);
-		if (filterCall === undefined) throw new Error("mention-filter debug event not logged");
-		const details = (filterCall[1] as { details: Record<string, unknown>[] }).details;
-		expect(details[0]).toMatchObject({
-			createdAt: "2026-09-03T00:00:00.000Z",
-			sincePass: false,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-	});
-
-	it("skips mentions from other users", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, {
-			allowedUser: "bob",
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toBeUndefined();
-	});
-
-	it("defaults allowedUser to the authenticated gh user when --user is not set", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args[0] === "api" && args.includes("user")) {
-				return Promise.resolve("alice\n");
-			}
-			return resolveExplain(file, args, { answer: "It does something." });
-		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-	});
-
-	it("skips mentions from other users when the authenticated gh user differs", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args[0] === "api" && args.includes("user")) {
-				return Promise.resolve("bob\n");
-			}
-			return resolveExplain(file, args, { answer: "It does something." });
-		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-	});
-
-	it("warns when the authenticated gh user cannot be determined", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args[0] === "api" && args.includes("user")) {
-				return Promise.reject(new Error("not logged in"));
-			}
-			return resolveExplain(file, args, { answer: "It does something." });
-		}) as unknown as Runner;
-		await expect(
-			run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner }),
-		).rejects.toThrow("Could not determine a GitHub user");
-		expect(warn).toHaveBeenCalledWith(
-			expect.stringContaining("could not determine the authenticated gh user"),
-		);
-		warn.mockRestore();
-	});
-
-	it("warns when the provider returns an empty explanation", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({ answer: "" });
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-		expect(warn).toHaveBeenCalled();
-		expect(
-			countCalls(
-				runner,
-				"gh",
-				(args) =>
-					args.includes("DELETE") &&
-					args.some((arg) => typeof arg === "string" && arg.includes("/reactions")),
-			),
-		).toBe(FIRST_CALL);
-		warn.mockRestore();
-	});
-
-	it("warns when removing the initial reaction fails", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args.includes("DELETE")) {
-				return Promise.reject(new Error("delete failed"));
-			}
-			return resolveExplain(file, args, { answer: "" });
-		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-		expect(warn).toHaveBeenCalledWith(
-			expect.stringContaining("failed to remove reaction: delete failed"),
-		);
-		warn.mockRestore();
-	});
-
-	it("treats a PR as fresh even when state has other PRs", async () => {
-		const otherPr = "https://github.com/other/repo/pull/1";
-		await run.saveState(new Map([[otherPr, ["review:1"]]]), run.statePath());
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			if (file === "gh" && args.at(0) === "api") {
-				const reaction = resolveReaction(args);
-				if (reaction !== undefined) return Promise.resolve(reaction);
-				if (args.some((arg) => arg.includes("/pulls/"))) {
-					return Promise.resolve(
-						JSON.stringify([
-							[
-								{
-									body: "@crewmate hello",
-									id: FIRST_ID,
-									in_reply_to_id: null,
-									line: FIRST_LINE,
-									path: "src/index.ts",
-									user: { login: "alice" },
-								},
-								{
-									body: `${CREWMATE_PREFIX} done`,
-									id: SECOND_ID,
-									in_reply_to_id: FIRST_ID,
-									line: FIRST_LINE,
-									path: "src/index.ts",
-									user: { login: "crewmate" },
-								},
-							],
-						]),
-					);
+					args[0] === "api" &&
+					PULLS_COMMENTS_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))
+				) {
+					return Promise.reject(new Error("HTTP 500: boom"));
 				}
-				if (args.some((arg) => arg.includes("/issues/"))) {
-					return Promise.resolve("[]");
-				}
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(PR_URL, {
-			allowedUser: "alice",
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-	});
-
-	it("keeps suppressed crewmate replies out of the next poll", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			if (file === "gh" && args.at(0) === "api") {
-				const reaction = resolveReaction(args);
-				if (reaction !== undefined) return Promise.resolve(reaction);
-				const endpoint = findEndpoint(args);
-				if (endpoint?.includes("/pulls/")) {
-					return Promise.resolve(
-						JSON.stringify([
-							[
-								{
-									body: "@crewmate hello",
-									id: FIRST_ID,
-									in_reply_to_id: null,
-									line: FIRST_LINE,
-									path: "src/index.ts",
-									user: { login: "alice" },
-								},
-								{
-									body: `${CREWMATE_PREFIX} done`,
-									id: SECOND_ID,
-									in_reply_to_id: FIRST_ID,
-									line: FIRST_LINE,
-									path: "src/index.ts",
-									user: { login: "crewmate" },
-								},
-							],
-						]),
-					);
-				}
-				if (endpoint?.includes("/issues/")) {
-					return Promise.resolve(
-						JSON.stringify([
-							[
-								{
-									body: "@crewmate hi",
-									id: THIRD_ID,
-									user: { login: "alice" },
-								},
-							],
-						]),
-					);
-				}
-			}
-			if (file === "gh" && (args.at(0) === "--version" || args.at(0) === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-
-		await run.watch(PR_URL, {
-			allowedUser: "alice",
-			interval: NO_INTERVAL,
-			iterations: TWO_ITERATIONS,
-			runner,
+				return (base as unknown as (...a: unknown[]) => Promise<string>)(file, args);
+			}) as unknown as Runner;
+			const { logger, events } = collectLogger();
+			await expect(
+				run.watch(PR_URL, { config: {}, iterations: 1, logger, runner, stateFile }),
+			).rejects.toThrow("HTTP 500: boom");
+			expect(events).toContainEqual({
+				event: "warning",
+				fields: expect.objectContaining({ reason: "poll-failed" }),
+			});
+			expect(events.some((e) => e.event === "error")).toBe(true);
 		});
 
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toEqual(expect.arrayContaining(["conversation:3", "review:1"]));
-	});
-
-	it("reports when the file to explain is missing", async () => {
-		const runner = makeExplainRunner({ path: "missing.ts" });
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-	});
-	it("polls once and replies to all new mentions", async () => {
-		const runner = makeMultiMentionRunner();
-		await run.watch(PR_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toEqual(["review:2", "review:1"]);
-	});
-	it("saves state for the handled mentions when one fails", async () => {
-		const runner = makeMultiMentionRunner({ failOn: "claude @crewmate hello" });
-		await expect(
-			run.watch(PR_URL, {
-				interval: NO_INTERVAL,
-				iterations: FIRST_ITERATION,
-				runner,
-			}),
-		).rejects.toThrow();
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toEqual(["review:2", "review:1"]);
-	});
-
-	it("preserves a non-default port in a GHES PR URL", async () => {
-		const runner = makeMultiMentionRunner();
-		const ghesUrl = "https://ghe.example.com:8443/owner/repo/pull/1";
-		await run.watch(ghesUrl, { iterations: 1, runner });
-		expect(
-			countCalls(runner, "gh", (args, options) => options?.env?.GH_HOST === "ghe.example.com:8443"),
-		).toBeGreaterThanOrEqual(1);
-		expect(countCalls(runner, "gh", (args) => args.includes("--hostname"))).toBeGreaterThanOrEqual(
-			1,
-		);
-	});
-
-	it("falls back to host without port when gh auth status --hostname with port fails", async () => {
-		const runner = makeMultiMentionRunner({ failOn: "gh ghe.example.com:8443" });
-		const ghesUrl = "https://ghe.example.com:8443/owner/repo/pull/1";
-		await run.watch(ghesUrl, { iterations: 1, runner });
-		expect(
-			countCalls(runner, "gh", (args, options) => options?.env?.GH_HOST === "ghe.example.com:8443"),
-		).toBeGreaterThanOrEqual(1);
-		expect(countCalls(runner, "gh", (args) => args.includes("--hostname"))).toBe(2);
-	});
-
-	it("throws when gh auth status --hostname fails without a port", async () => {
-		const runner = makeMultiMentionRunner({ failOn: "gh --hostname" });
-		await expect(run.watch(PR_URL, { iterations: 1, runner })).rejects.toThrow();
-	});
-
-	it("warns when the initial reaction post returns an empty response", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			if (file === "gh") {
-				const endpoint = findEndpoint(args);
-				if (endpoint?.includes("/reactions") && args.includes("POST")) {
-					return Promise.resolve("");
-				}
-				return resolveGhExplain(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-		expect(countCalls(runner, "gh", isReplyPost)).toBe(FIRST_CALL);
-		expect(warn).toHaveBeenCalledWith(
-			expect.stringContaining("failed to set reaction: empty response"),
-		);
-		warn.mockRestore();
-	});
-
-	it("warns when the initial reaction post returns a non-numeric id", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			if (file === "gh") {
-				const endpoint = findEndpoint(args);
-				if (endpoint?.includes("/reactions") && args.includes("POST")) {
-					return Promise.resolve(JSON.stringify({ id: "abc" }));
-				}
-				return resolveGhExplain(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-		expect(countCalls(runner, "gh", isReplyPost)).toBe(FIRST_CALL);
-		expect(warn).toHaveBeenCalledWith(
-			expect.stringContaining("failed to set reaction: response did not contain a numeric id"),
-		);
-		warn.mockRestore();
-	});
-
-	it("warns when the initial reaction post returns invalid json", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			if (file === "gh") {
-				const endpoint = findEndpoint(args);
-				if (endpoint?.includes("/reactions") && args.includes("POST")) {
-					return Promise.resolve("not json");
-				}
-				return resolveGhExplain(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-		expect(countCalls(runner, "gh", isReplyPost)).toBe(FIRST_CALL);
-		expect(warn).toHaveBeenCalledWith(expect.stringContaining("failed to set reaction:"));
-		warn.mockRestore();
-	});
-
-	it("warns when the initial reaction post fails", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			if (file === "gh") {
-				const endpoint = findEndpoint(args);
-				if (endpoint?.includes("/reactions") && args.includes("POST")) {
-					return Promise.reject(new Error("reaction post failed"));
-				}
-				return resolveGhExplain(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-		expect(countCalls(runner, "gh", isReplyPost)).toBe(FIRST_CALL);
-		expect(warn).toHaveBeenCalledWith(
-			expect.stringContaining("failed to set reaction: reaction post failed"),
-		);
-		warn.mockRestore();
-	});
-
-	it("warns when the swap reaction post fails after a successful eyes reaction", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			if (file === "gh") {
-				const endpoint = findEndpoint(args);
-				const emoji = getReactionEmoji(args);
-				if (endpoint?.includes("/reactions") && args.includes("POST")) {
-					if (emoji === "+1") {
-						return Promise.reject(new Error("+1 reaction post failed"));
+		it("continues after an item failure in repo scope", async () => {
+			const base = makeRunner({ prUrl: PR_URL, issueUrl: ISSUE_URL, issueBody: "@crewmate hi" });
+			let callCount = 0;
+			const runner = vi.fn((file: string, args: string[]) => {
+				if (file === "gh" && args[0] === "api") {
+					const endpoint = findEndpoint(args) ?? "";
+					if (PULLS_COMMENTS_PATTERN.test(endpointPath(endpoint))) {
+						callCount += 1;
+						return Promise.reject(new Error("HTTP 500: boom"));
 					}
-					return Promise.resolve(JSON.stringify({ id: takeNextReactionId() }));
 				}
-				return resolveGhExplain(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-		expect(countCalls(runner, "gh", isReplyPost)).toBe(FIRST_CALL);
-		expect(warn).toHaveBeenCalledWith(
-			expect.stringContaining("failed to set reaction: +1 reaction post failed"),
-		);
-		expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("failed to remove reaction"));
-		expect(
-			countCalls(runner, "gh", (args) => {
-				const endpoint = findEndpoint(args);
-				return args.includes("DELETE") && !!endpoint?.includes("/reactions");
-			}),
-		).toBe(FIRST_CALL);
-		warn.mockRestore();
-	});
-});
-
-describe("getLogin", () => {
-	it("returns the login for a valid user", () => {
-		expect(run.getLogin({ login: "alice" })).toBe("alice");
-	});
-
-	it("returns empty for a missing user", () => {
-		expect(run.getLogin(undefined)).toBe("");
-	});
-
-	it("returns empty for a null user", () => {
-		expect(run.getLogin(null)).toBe("");
-	});
-
-	it("returns empty for an invalid login", () => {
-		expect(run.getLogin({ login: INVALID_LOGIN })).toBe("");
-	});
-});
-
-describe("watch users missing", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("handles comments without a user object", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			const [command] = args;
-			const endpoint = findEndpoint(args);
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
-				return Promise.resolve(
-					JSON.stringify([
-						[
-							{
-								body: "@crewmate hello",
-								id: FIRST_ID,
-								in_reply_to_id: null,
-								line: FIRST_LINE,
-								path: "src/index.ts",
-							},
-						],
-					]),
-				);
-			}
-			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
-				return Promise.resolve(JSON.stringify([[]]));
-			}
-			if (file === "gh" && (command === "--version" || command === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(PR_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-			unsafeNoUser: true,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-	});
-});
-
-describe("watch users invalid", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("handles comments with an invalid login", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			const [command] = args;
-			const endpoint = findEndpoint(args);
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
-				return Promise.resolve(
-					JSON.stringify([
-						[
-							{
-								body: "@crewmate hello",
-								id: FIRST_ID,
-								line: FIRST_LINE,
-								path: "src/index.ts",
-								user: { login: INVALID_LOGIN },
-							},
-						],
-					]),
-				);
-			}
-			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
-				return Promise.resolve(JSON.stringify([[]]));
-			}
-			if (file === "gh" && (command === "--version" || command === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(PR_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-			unsafeNoUser: true,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-	});
-});
-
-describe("watch users null", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("handles comments with a null user", async () => {
-		const nullUser = JSON.parse('{"user":null}');
-		const base = { body: "@crewmate hello", id: FIRST_ID, line: FIRST_LINE, path: "src/index.ts" };
-		const runner = vi.fn((file: string, args: string[]) => {
-			const [command] = args;
-			const endpoint = findEndpoint(args);
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
-				return Promise.resolve(JSON.stringify([[Object.assign(base, nullUser)]]));
-			}
-			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
-				return Promise.resolve(JSON.stringify([[]]));
-			}
-			if (file === "gh" && (command === "--version" || command === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(PR_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-			unsafeNoUser: true,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-	});
-});
-
-describe("watch iterations", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("sleeps between iterations", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: TWO_ITERATIONS, runner });
-		expect(
-			countCalls(
+				return (base as unknown as (...a: unknown[]) => Promise<string>)(file, args);
+			}) as unknown as Runner;
+			await run.watch("owner/repo", {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
 				runner,
-				"gh",
-				(args) =>
-					args.at(FIRST_INDEX) === "api" &&
-					!args.includes("--method") &&
-					args.some((arg) => startsWithRepos(arg)),
-			),
-		).toBe(4);
-	});
-
-	it("does not reprocess a mention in the second iteration", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: TWO_ITERATIONS, runner });
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-	});
-
-	it("skips a fresh install mention that already has a crewmate reply (async)", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			const [command] = args;
-			const endpoint = findEndpoint(args);
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
-				return Promise.resolve(
-					JSON.stringify([
-						[
-							{
-								body: "@crewmate hello",
-								id: FIRST_ID,
-								in_reply_to_id: null,
-								line: FIRST_LINE,
-								path: "src/index.ts",
-								user: { login: "alice" },
-							},
-							{
-								body: `${CREWMATE_PREFIX} done`,
-								id: SECOND_ID,
-								in_reply_to_id: FIRST_ID,
-								line: FIRST_LINE,
-								path: "src/index.ts",
-								user: { login: "crewmate" },
-							},
-						],
-					]),
-				);
-			}
-			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
-				return Promise.resolve(JSON.stringify([[]]));
-			}
-			if (file === "gh" && (command === "--version" || command === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(PR_URL, {
-			allowedUser: "alice",
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
-	});
-});
-
-describe("watch fix success", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-		process.chdir(tempDir);
-	});
-
-	afterEach(async () => {
-		process.chdir(ORIGINAL_CWD);
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("can fix a file when requested", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath);
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
+				stateFile,
+			});
+			expect(callCount).toBe(1);
+			const state = await run.loadState(stateFile);
+			expect(state.get(ISSUE_URL)?.get("issue:4")?.status).toBe("succeeded");
 		});
 
-		const content = await readFile(path.resolve(targetPath), "utf8");
-		expect(content).toBe("new");
-		expect(
-			countCalls(
-				runner,
-				"gh",
-				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
-			),
-		).toBe(FIRST_CALL);
-
-		const reactionPosts = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.filter(([file, args]) => file === "gh" && isReactionPost(args));
-		expect(reactionPosts).toHaveLength(2);
-		expect(getReactionEmoji(reactionPosts[0][1])).toBe("eyes");
-		expect(getReactionEmoji(reactionPosts[1][1])).toBe("rocket");
-
-		const lines = await parseLogFile(tempDir);
-		expect(lines.some((line) => line.event === "fix" && line.dryRun === false)).toBe(true);
-	});
-
-	it("continues when the short hash cannot be read", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "git" && args.at(0) === "rev-parse" && args.at(1) === "--short") {
-				return Promise.reject(new Error("rev-parse failed"));
-			}
-			return resolveFix(file, args, { targetPath, fixed: "```\nnew\n```" });
-		}) as unknown as Runner;
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
+		it("refuses to start when the lock is held", async () => {
+			const { acquireLock } = await import("./state.js");
+			const release = await acquireLock({ dir: tempDir });
+			await expect(
+				run.watch(PR_URL, {
+					config: {},
+					iterations: 1,
+					logger: silentLogger(),
+					runner: makeRunner(),
+					stateFile,
+				}),
+			).rejects.toThrow("already running");
+			await release();
+			await run.watch(PR_URL, {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				runner: makeRunner(),
+				stateFile,
+			});
 		});
 
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-		const postCall = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([file, args]) => file === "gh" && isReplyPost(args));
-		expect(JSON.stringify(postCall?.[1])).toContain("Fixed.");
-		const lines = await parseLogFile(tempDir);
-		const fixLine = lines.find((line) => line.event === "fix" && line.dryRun === false);
-		expect(fixLine?.sha).toBeNull();
-	});
-
-	it("explains instead of fixing when the comment body does not contain the #fix tag", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath, { body: "@crewmate fix", fixed: "new" });
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
+		it("requires a resolvable user filter", async () => {
+			const runner = makeRunner({ failUserLookup: true });
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			await expect(
+				run.watch(PR_URL, { config: {}, iterations: 1, logger: silentLogger(), runner, stateFile }),
+			).rejects.toThrow("Could not determine a GitHub user");
 		});
 
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
-	});
-
-	it("does not treat #fixme as a fix request in review comments", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath, { body: "@crewmate #fixme", fixed: "new" });
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
-	});
-
-	it("skips the fix when the generated content is unchanged", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath, { fixed: "old" });
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-
-		const reactionPosts = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.filter(([file, args]) => file === "gh" && isReactionPost(args));
-		expect(reactionPosts).toHaveLength(2);
-		expect(getReactionEmoji(reactionPosts[0][1])).toBe("eyes");
-		expect(getReactionEmoji(reactionPosts[1][1])).toBe("+1");
-	});
-
-	it("passes a custom prompt when fixing", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath);
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			prompt: "FIX_STYLE",
-			runner,
-		});
-
-		expect(getPrompt(runner)?.startsWith("FIX_STYLE\n\n")).toBe(true);
-	});
-
-	it("passes a model when fixing", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath);
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			model: "claude-sonnet-4-20250514",
-			runner,
-		});
-
-		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-			([file, args]) => file === "claude" && args.includes("-p"),
-		);
-		expect(call?.[1]).toEqual(["--model", "claude-sonnet-4-20250514", "-p", expect.any(String)]);
-	});
-
-	it("passes a model via the CLI when fixing", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath);
-		await run(["watch", PR_URL, "--fix", "--model", "claude-sonnet-4-20250514"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-
-		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-			([file, args]) => file === "claude" && args.includes("-p"),
-		);
-		expect(call?.[1]).toEqual(["--model", "claude-sonnet-4-20250514", "-p", expect.any(String)]);
-	});
-
-	it("passes a provider when fixing", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath, { provider: "my-llm" });
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			provider: "my-llm",
-			runner,
-		});
-
-		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-			([file, args]) => file === "my-llm" && args.includes("-p"),
-		);
-		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
-	});
-
-	it("passes a provider via the CLI when fixing", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath, { provider: "my-llm" });
-		await run(["watch", PR_URL, "--fix", "--provider", "my-llm"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-
-		const call = (runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.find(
-			([file, args]) => file === "my-llm" && args.includes("-p"),
-		);
-		expect(call?.[1]).toEqual(["-p", expect.any(String)]);
-	});
-});
-
-describe("watch dry-run", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-		process.chdir(tempDir);
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "example");
-	});
-
-	afterEach(async () => {
-		process.chdir(ORIGINAL_CWD);
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("dry-run polls for two iterations", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, {
-			dryRun: true,
-			interval: NO_INTERVAL,
-			iterations: TWO_ITERATIONS,
-			runner,
-		});
-
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
-		expect(write).toHaveBeenCalled();
-		write.mockRestore();
-	});
-
-	it("logs dry-run info without plain stderr when --log is set", async () => {
-		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL, "--dry-run", "--log"], { iterations: FIRST_ITERATION, runner });
-
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"info"'))).toBe(true);
-		expect(calls.some((line) => line.startsWith("Dry-run mode:"))).toBe(false);
-		write.mockRestore();
-	});
-
-	it("explain dry-run produces human-readable preview", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, {
-			dryRun: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
-		expect(
-			countCalls(
-				runner,
-				"gh",
-				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
-			),
-		).toBe(FIRST_CALL);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-
-		const output = write.mock.calls.map(([line]) => line as string).join("");
-		const changeLines = output
-			.split("\n")
-			.filter((line) => line.startsWith("[dry-run] would change reaction"));
-		expect(changeLines).toHaveLength(2);
-		expect(changeLines[0]).toContain(":none: to :eyes:");
-		expect(changeLines[1]).toContain(":eyes: to :+1:");
-
-		const replyIndex = output.indexOf("would reply to comment");
-		const secondChangeIndex = output.indexOf(changeLines[1]);
-		expect(replyIndex).toBeGreaterThan(secondChangeIndex);
-
-		write.mockRestore();
-
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toBeUndefined();
-	});
-
-	it("removes the eyes reaction in dry-run when the provider returns empty", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({ answer: "" });
-		await run.watch(PR_URL, {
-			dryRun: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-
-		const output = write.mock.calls.map(([line]) => line as string).join("");
-		expect(output).toContain("[dry-run] would change reaction on comment 1 from :none: to :eyes:");
-		expect(output).toContain("[dry-run] would remove reaction :eyes: from comment 1");
-		expect(output).not.toContain("would reply to comment");
-		write.mockRestore();
-	});
-
-	it("fix dry-run produces human-readable preview", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
-		const targetPath = path.join("src", "index.ts");
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath);
-		await run.watch(PR_URL, {
-			allowFix: true,
-			dryRun: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "commit")).toBe(NO_CALLS);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "push")).toBe(NO_CALLS);
-		expect(
-			countCalls(
-				runner,
-				"gh",
-				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
-			),
-		).toBe(FIRST_CALL);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-
-		const content = await readFile(path.resolve(targetPath), "utf8");
-		expect(content).toBe("old");
-
-		const output = write.mock.calls.map(([line]) => line as string).join("");
-		expect(output).toContain("would write fix to");
-		expect(output).toContain(targetPath);
-		expect(output).toContain("new");
-		expect(output).toContain("[dry-run] would change reaction on comment 1 from :none: to :eyes:");
-		expect(output).toContain(
-			"[dry-run] would change reaction on comment 1 from :eyes: to :rocket:",
-		);
-		expect(output).toContain("[dry-run] would reply to comment 1:");
-		write.mockRestore();
-	});
-
-	it("conversation dry-run produces human-readable preview", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({
-			answer: "It does something.",
-			conversationBody: "@crewmate hello",
-		});
-		await run.watch(PR_URL, {
-			dryRun: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-
-		const output = write.mock.calls.map(([line]) => line as string).join("");
-		expect(output).toContain("[dry-run] would change reaction on comment 3 from :none: to :eyes:");
-		expect(output).toContain("[dry-run] would change reaction on comment 3 from :eyes: to :+1:");
-		expect(output).toContain("would post a comment on pull request 123:");
-		write.mockRestore();
-
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toBeUndefined();
-	});
-
-	it("issue dry-run produces human-readable preview", async () => {
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({
-			answer: "It does something.",
-			issueBody: "@crewmate hello",
-		});
-		await run.watch(ISSUE_URL, {
-			dryRun: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-
-		const output = write.mock.calls.map(([line]) => line as string).join("");
-		expect(output).toContain("[dry-run] would change reaction on issue 4 from :none: to :eyes:");
-		expect(output).toContain("[dry-run] would change reaction on issue 4 from :eyes: to :+1:");
-		expect(output).toContain("would post a comment on issue 4:");
-		write.mockRestore();
-
-		const state = await run.loadState(run.statePath());
-		expect(state.get(ISSUE_URL)).toBeUndefined();
-	});
-});
-
-describe("watch fix missing", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-		process.chdir(tempDir);
-	});
-
-	afterEach(async () => {
-		process.chdir(ORIGINAL_CWD);
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("reports when the file to fix is missing", async () => {
-		const runner = makeFixRunner("missing.ts");
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-	});
-});
-
-describe("watch fix empty", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-		process.chdir(tempDir);
-	});
-
-	afterEach(async () => {
-		process.chdir(ORIGINAL_CWD);
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("reports when claude returns an empty fix", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath, { fixed: "```\n\n```" });
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-	});
-});
-
-describe("watch fix errors", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-		process.chdir(tempDir);
-	});
-
-	afterEach(async () => {
-		process.chdir(ORIGINAL_CWD);
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("rejects paths outside the repository", async () => {
-		const runner = makeFixRunner("/etc/passwd");
-		await expect(
-			run.watch(PR_URL, {
-				allowFix: true,
-				interval: NO_INTERVAL,
-				iterations: FIRST_ITERATION,
-				runner,
-			}),
-		).rejects.toThrow("Invalid target path");
-	});
-
-	it("throws when the file cannot be read", async () => {
-		await mkdir("src", { recursive: true });
-		const runner = makeFixRunner("src");
-		await expect(
-			run.watch(PR_URL, {
-				allowFix: true,
-				interval: NO_INTERVAL,
-				iterations: FIRST_ITERATION,
-				runner,
-			}),
-		).rejects.toThrow();
-	});
-
-	it("rejects paths that form a symlink loop", async () => {
-		await symlink("loop", "loop");
-		const runner = makeFixRunner("loop/file");
-		await expect(
-			run.watch(PR_URL, {
-				allowFix: true,
-				interval: NO_INTERVAL,
-				iterations: FIRST_ITERATION,
-				runner,
-			}),
-		).rejects.toThrow("Invalid target path");
-	});
-
-	it("rejects paths that resolve outside the repository through a symlink", async () => {
-		await symlink("/etc", "link");
-		const runner = makeFixRunner("link/nonexistent");
-		await expect(
-			run.watch(PR_URL, {
-				allowFix: true,
-				interval: NO_INTERVAL,
-				iterations: FIRST_ITERATION,
-				runner,
-			}),
-		).rejects.toThrow("Invalid target path");
-	});
-
-	it("rejects a final path component that is a symlink outside the repository", async () => {
-		await symlink("/etc/passwd", "link");
-		const runner = makeFixRunner("link");
-		await expect(
-			run.watch(PR_URL, {
-				allowFix: true,
-				interval: NO_INTERVAL,
-				iterations: FIRST_ITERATION,
-				runner,
-			}),
-		).rejects.toThrow("Invalid target path");
-	});
-
-	it("reports when the target file is missing", async () => {
-		const runner = makeFixRunner("missing/file.ts");
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-	});
-
-	it("reports when the target file is missing in an existing directory", async () => {
-		await mkdir("src", { recursive: true });
-		const runner = makeFixRunner("src/missing.ts");
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-	});
-
-	it("reports when the fix cannot be pushed", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath, { failOn: "git push", fixed: "```\nnew\n```" });
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-	});
-
-	it("reports when the fix cannot be pushed and the short hash is missing", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "git" && args.at(0) === "rev-parse" && args.at(1) === "--short") {
-				return Promise.reject("rev-parse failed");
-			}
-			if (file === "git" && args.at(0) === "push") {
-				return Promise.reject("git push failed");
-			}
-			return resolveFix(file, args, { targetPath, fixed: "```\nnew\n```" });
-		}) as unknown as Runner;
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-	});
-
-	it("reports when the fix cannot be committed", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath, { failOn: "git commit", fixed: "```\nnew\n```" });
-		await expect(
-			run.watch(PR_URL, {
-				allowFix: true,
-				interval: NO_INTERVAL,
-				iterations: FIRST_ITERATION,
-				runner,
-			}),
-		).rejects.toThrow();
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-	});
-});
-
-describe("watch issue", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("replies to the issue body and a conversation comment", async () => {
-		const runner = makeExplainRunner({
-			answer: "It does something.",
-			conversationBody: "@crewmate hi",
-			issueBody: "@crewmate hello",
-		});
-		await run.watch(ISSUE_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
-		const state = await run.loadState(run.statePath());
-		expect(state.get(ISSUE_URL)).toEqual(["issue:4", "conversation:3"]);
-	});
-
-	it("disables #fix on the issue body", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeFixRunner("src/index.ts", {
-			issueBody: "@crewmate #fix",
-			fixed: "No problem.",
-		});
-		await run.watch(ISSUE_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-			toStderr: true,
-		});
-
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-		expect(
-			countCalls(
-				runner,
-				"gh",
-				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
-			),
-		).toBe(NO_CALLS);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "scope-fix-disabled" }),
-		);
-	});
-});
-
-describe("conversation comments", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-		process.chdir(tempDir);
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "example");
-	});
-
-	afterEach(async () => {
-		process.chdir(ORIGINAL_CWD);
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("replies to a PR conversation comment through the issues endpoint", async () => {
-		const runner = makeExplainRunner({
-			answer: "It does something.",
-			body: "hello",
-			conversationBody: "@crewmate hello",
-		});
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-
-		const postCall = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([file, args]) => file === "gh" && isReplyPost(args));
-		expect(postCall?.[1].some((arg) => /\/issues\/\d+\/comments/.test(arg))).toBe(true);
-		expect(postCall?.[1].some((arg) => /\/pulls\/.*\/comments\/.*\/replies/.test(arg))).toBe(false);
-
-		const reactionPosts = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.filter(([file, args]) => file === "gh" && isReactionPost(args));
-		expect(reactionPosts).toHaveLength(2);
-		expect(
-			reactionPosts.every(([_, args]) => findEndpoint(args)?.includes("/issues/comments/")),
-		).toBe(true);
-		expect(
-			reactionPosts.some(([_, args]) => findEndpoint(args)?.includes("/pulls/comments/")),
-		).toBe(false);
-		expect(getReactionEmoji(reactionPosts[0][1])).toBe("eyes");
-		expect(getReactionEmoji(reactionPosts[1][1])).toBe("+1");
-
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toEqual(["conversation:3"]);
-	});
-
-	it("applies a fix from a conversation #fix with --fix", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const targetDir = path.resolve("src");
-		await mkdir(targetDir, { recursive: true });
-		await writeFile(path.resolve(targetPath), "old");
-
-		const runner = makeFixRunner(targetPath, {
-			body: "hello",
-			conversationBody: "@crewmate #fix",
-		});
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-
-		const content = await readFile(path.resolve(targetPath), "utf8");
-		expect(content).toBe("new");
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-		expect(
-			countCalls(
-				runner,
-				"gh",
-				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
-			),
-		).toBe(FIRST_CALL);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(FIRST_CALL);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "commit")).toBe(FIRST_CALL);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "push")).toBe(FIRST_CALL);
-
-		const reactionPosts = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.filter(([file, args]) => file === "gh" && isReactionPost(args));
-		expect(reactionPosts).toHaveLength(2);
-		expect(
-			reactionPosts.every(([_, args]) => findEndpoint(args)?.includes("/issues/comments/")),
-		).toBe(true);
-		expect(getReactionEmoji(reactionPosts[0][1])).toBe("eyes");
-		expect(getReactionEmoji(reactionPosts[1][1])).toBe("rocket");
-	});
-
-	it("does not treat #fixme as a fix request in conversation comments", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeFixRunner("src/index.ts", {
-			body: "hello",
-			conversationBody: "@crewmate #fixme",
-			fixed: "No problem.",
-		});
-		await run.watch(PR_URL, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-			toStderr: true,
-		});
-
-		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
-		expect(logger).not.toHaveBeenCalledWith("warning", expect.anything());
-		expect(getPrompt(runner)).toMatch(/#fixme/);
-	});
-
-	it("keeps #fix in conversation comments when --fix is not set", async () => {
-		const runner = makeFixRunner("src/index.ts", {
-			body: "hello",
-			conversationBody: "@crewmate #fix",
-			fixed: "No problem.",
-		});
-		await run.watch(PR_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-
-		expect(getPrompt(runner)).toMatch(/#fix\b/);
-	});
-
-	it("processes a mixed poll of review and conversation mentions", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			const [command] = args;
-			const endpoint = findEndpoint(args);
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
-				return Promise.resolve(
-					JSON.stringify([
-						[
-							{
-								body: "@crewmate hello",
-								id: FIRST_ID,
-								in_reply_to_id: null,
-								line: FIRST_LINE,
-								path: "src/index.ts",
-								user: { login: "alice" },
-							},
-						],
-					]),
-				);
-			}
-			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
-				return Promise.resolve(
-					JSON.stringify([
-						[
-							{
-								body: "@crewmate hi",
-								id: SECOND_ID,
-								user: { login: "alice" },
-							},
-						],
-					]),
-				);
-			}
-			if (file === "gh" && (command === "--version" || command === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-
-		await run.watch(PR_URL, {
-			allowedUser: "alice",
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
-
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toEqual(["conversation:2", "review:1"]);
-	});
-
-	it("posts review replies to the pulls comments replies endpoint", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-
-		const postCall = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([file, args]) => file === "gh" && isReplyPost(args));
-		expect(postCall?.[1].some((arg) => /\/pulls\/\d+\/comments\/\d+\/replies/.test(arg))).toBe(
-			true,
-		);
-	});
-
-	it("passes a custom prompt to a conversation mention", async () => {
-		const runner = makeExplainRunner({
-			answer: "It does something.",
-			body: "",
-			conversationBody: "@crewmate hello",
-		});
-		await run.watch(PR_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			prompt: "CUSTOM",
-			runner,
-		});
-		expect(getPrompt(runner)?.startsWith("CUSTOM\n\n")).toBe(true);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-	});
-
-	it("warns when the provider returns an empty conversation response", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({
-			answer: "",
-			body: "",
-			conversationBody: "@crewmate hello",
-		});
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-		expect(warn).toHaveBeenCalledWith("Warning: claude returned empty conversation response\n");
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
-		warn.mockRestore();
-	});
-
-	it("warns when a custom provider returns an empty conversation response", async () => {
-		const warn = vi.spyOn(process.stderr, "write").mockImplementation(vi.fn());
-		const runner = makeExplainRunner({
-			answer: "",
-			body: "",
-			conversationBody: "@crewmate hello",
-			provider: "my-llm",
-		});
-		await run.watch(PR_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			provider: "my-llm",
-			runner,
-		});
-		expect(warn).toHaveBeenCalledWith("Warning: my-llm returned empty conversation response\n");
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
-		warn.mockRestore();
-	});
-
-	it("filters malformed conversation comments", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			const [command] = args;
-			const endpoint = findEndpoint(args);
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
-				return Promise.resolve(JSON.stringify([[]]));
-			}
-			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
-				return Promise.resolve(
-					JSON.stringify([[[{ body: "@crewmate hello", id: "3", user: { login: "alice" } }]]]),
-				);
-			}
-			if (file === "gh" && (command === "--version" || command === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "claude" && command === "--version") {
-				return Promise.resolve("");
-			}
-			if (file === "git" && command === "rev-parse") {
-				return resolveGit(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-
-		await run.watch(PR_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-			unsafeNoUser: true,
-		});
-
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toBeUndefined();
-	});
-
-	it("filters malformed review comments", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			const [command] = args;
-			const endpoint = findEndpoint(args);
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && command === "api" && endpoint?.includes("/pulls/")) {
-				return Promise.resolve(
-					JSON.stringify([
-						[
-							{
-								body: "@crewmate hello",
-								id: FIRST_ID,
-								in_reply_to_id: null,
-								line: FIRST_LINE,
-								path: 123,
-								user: { login: "alice" },
-							},
-						],
-					]),
-				);
-			}
-			if (file === "gh" && command === "api" && endpoint?.includes("/issues/")) {
-				return Promise.resolve(JSON.stringify([[]]));
-			}
-			if (file === "gh" && (command === "--version" || command === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "claude" && command === "--version") {
-				return Promise.resolve("");
-			}
-			if (file === "git" && command === "rev-parse") {
-				return resolveGit(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-
-		await run.watch(PR_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-			unsafeNoUser: true,
-		});
-
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
-		const state = await run.loadState(run.statePath());
-		expect(state.get(PR_URL)).toBeUndefined();
-	});
-});
-
-describe("run help", () => {
-	it("prints help when --help is requested", async () => {
-		const write = mockStdoutWrite();
-		await run(["--help"]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
-		write.mockRestore();
-	});
-
-	it("prints help when -h is requested", async () => {
-		const write = mockStdoutWrite();
-		await run(["-h"]);
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
-		write.mockRestore();
-	});
-
-	it("prints help when -h is passed after a target", async () => {
-		const write = mockStdoutWrite();
-		const runner = vi.fn(() => Promise.resolve("")) as unknown as Runner;
-		await run(["watch", PR_URL, "-h"], { runner });
-		expect(write).toHaveBeenCalledWith(expect.stringContaining("Commands"));
-		expect(countCalls(runner, "gh")).toBe(0);
-		write.mockRestore();
-	});
-
-	it("renders help as ANSI-styled text in a TTY", async () => {
-		const previousIsTTY = process.stdout.isTTY;
-		const write = mockStdoutWrite();
-		process.stdout.isTTY = true;
-		await run(["--help"]);
-		const output = String(write.mock.calls[0][0]);
-		expect(output).toContain("Commands");
-		expect(output).not.toContain("## Commands");
-		expect(output).toContain("\x1b[1m");
-		expect(output).toContain("\x1b[36m");
-		expect(output).toContain("  • ");
-		process.stdout.isTTY = previousIsTTY;
-		write.mockRestore();
-	});
-
-	it("renders help without ANSI when output is not a TTY", async () => {
-		const previousIsTTY = process.stdout.isTTY;
-		const write = mockStdoutWrite();
-		process.stdout.isTTY = false;
-		await run(["--help"]);
-		const output = String(write.mock.calls[0][0]);
-		expect(output).toContain("Commands");
-		expect(output).not.toContain("## Commands");
-		expect(output).not.toContain("\x1b[");
-		process.stdout.isTTY = previousIsTTY;
-		write.mockRestore();
-	});
-
-	it("renders help without ANSI when NO_COLOR is set", async () => {
-		const previousIsTTY = process.stdout.isTTY;
-		const previousNoColor = process.env.NO_COLOR;
-		const write = mockStdoutWrite();
-		process.stdout.isTTY = true;
-		process.env.NO_COLOR = "1";
-		await run(["--help"]);
-		const output = String(write.mock.calls[0][0]);
-		expect(output).toContain("Commands");
-		expect(output).not.toContain("## Commands");
-		expect(output).not.toContain("\x1b[");
-		process.stdout.isTTY = previousIsTTY;
-		process.env.NO_COLOR = previousNoColor;
-		write.mockRestore();
-	});
-});
-
-const logFilePath = (tempDir: string): string => path.join(tempDir, "crewmate", "crewmate.log");
-
-const parseNdjson = (raw: string): Record<string, unknown>[] =>
-	raw
-		.trim()
-		.split("\n")
-		.filter(Boolean)
-		.map((line) => JSON.parse(line) as Record<string, unknown>);
-
-const parseLogFile = async (tempDir: string): Promise<Record<string, unknown>[]> =>
-	parseNdjson(await readFile(logFilePath(tempDir), "utf8"));
-
-describe("logs", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-logs-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("writes structured logs to file", async () => {
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL], { iterations: FIRST_ITERATION, runner });
-
-		const lines = await parseLogFile(tempDir);
-		expect(lines.some((line) => line.event === "poll")).toBe(true);
-		expect(lines.some((line) => line.event === "mention" && line.commentId === FIRST_ID)).toBe(
-			true,
-		);
-		expect(lines.some((line) => line.event === "reply" && line.kind === "explain")).toBe(true);
-	});
-
-	it("mirrors logs to stderr with --log", async () => {
-		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run(["watch", PR_URL, "--log"], { iterations: FIRST_ITERATION, runner });
-
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"poll"'))).toBe(true);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		expect(calls.some((line) => line.includes('"event":"reply"'))).toBe(true);
-		write.mockRestore();
-	});
-
-	it("logs a warning when the provider returns an empty explanation", async () => {
-		const runner = makeExplainRunner({ answer: "" });
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-
-		const lines = await parseLogFile(tempDir);
-		expect(lines.some((line) => line.event === "warning" && line.reason === "empty")).toBe(true);
-	});
-
-	it("mirrors warnings to stderr with --log", async () => {
-		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = makeExplainRunner({ answer: "" });
-		await run(["watch", PR_URL, "--log"], { iterations: FIRST_ITERATION, runner });
-
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"warning"'))).toBe(true);
-		write.mockRestore();
-	});
-
-	it("logs a warning when the state file is corrupted", async () => {
-		await mkdir(path.join(tempDir, "crewmate"), { recursive: true });
-		await writeFile(path.join(tempDir, "crewmate", "state.json"), "not json");
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner });
-
-		const lines = await parseLogFile(tempDir);
-		expect(
-			lines.some((line) => line.event === "warning" && line.reason === "state-corrupted"),
-		).toBe(true);
-	});
-
-	it("logs errors when the watch loop fails", async () => {
-		const runner = vi.fn(() => Promise.reject(new Error("boom"))) as unknown as Runner;
-		await expect(
-			run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner }),
-		).rejects.toThrow("boom");
-
-		const lines = await parseLogFile(tempDir);
-		expect(
-			lines.some(
-				(line) => line.event === "error" && line.message === "boom" && line.errorType === "Error",
-			),
-		).toBe(true);
-	});
-
-	it("does not mask the original error when the error logger throws", async () => {
-		const runner = vi.fn(() => Promise.reject(new Error("boom"))) as unknown as Runner;
-		const logger = vi.fn(async (event: string) => {
-			if (event === "error") {
-				throw new Error("logger failed");
-			}
-			return undefined;
-		}) as unknown as Logger;
-		await expect(
-			run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, logger, runner }),
-		).rejects.toThrow("boom");
-	});
-
-	it("logs non-Error watch failures", async () => {
-		const runner = vi.fn(() => Promise.reject("string boom")) as unknown as Runner;
-		await expect(
-			run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner }),
-		).rejects.toBe("string boom");
-
-		const lines = await parseLogFile(tempDir);
-		expect(
-			lines.some(
-				(line) =>
-					line.event === "error" && line.message === "string boom" && line.errorType === "unknown",
-			),
-		).toBe(true);
-	});
-
-	it("uses the default logger with toStderr", async () => {
-		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			toStderr: true,
-			runner,
-		});
-
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"poll"'))).toBe(true);
-		write.mockRestore();
-	});
-
-	it("uses a provided logger", async () => {
-		const customFile = path.join(tempDir, "custom.log");
-		const logger = createLogger({ filePath: customFile });
-		const runner = makeExplainRunner({ answer: "It does something." });
-		await run.watch(PR_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-		});
-
-		const raw = await readFile(customFile, "utf8");
-		const lines = parseNdjson(raw);
-		expect(lines.some((line) => line.event === "poll")).toBe(true);
-	});
-
-	it("logs invalid PR reference errors", async () => {
-		const previousExitCode = process.exitCode;
-		process.exitCode = NO_EXIT_CODE;
-		const runner = vi.fn(() => Promise.reject(new Error("should not run"))) as unknown as Runner;
-
-		try {
-			await run(["watch", "not-a-pr"], { iterations: NO_ITERATIONS, runner });
-
-			const lines = await parseLogFile(tempDir);
-			expect(lines.some((line) => line.event === "error" && line.url === "not-a-pr")).toBe(true);
-			expect(process.exitCode).toBe(ERROR_EXIT_CODE);
-			expect(runner).not.toHaveBeenCalled();
-		} finally {
-			process.exitCode = previousExitCode;
-		}
-	});
-
-	it("logs failed reply attempts", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			if (file === "gh" && isReplyPost(args)) {
-				return Promise.reject(new Error("post failed"));
-			}
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			return resolveGhExplain(args);
-		}) as unknown as Runner;
-
-		await expect(
-			run.watch(PR_URL, { interval: NO_INTERVAL, iterations: FIRST_ITERATION, runner }),
-		).rejects.toThrow("post failed");
-
-		const lines = await parseLogFile(tempDir);
-		expect(lines.some((line) => line.event === "reply" && line.failed === true)).toBe(true);
-		expect(countCalls(runner, "gh", isReactionPost)).toBe(TWO_CALLS);
-		expect(countCalls(runner, "gh", isReactionDelete)).toBe(TWO_CALLS);
-	});
-});
-
-describe("watch config", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-config-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-		process.chdir(tempDir);
-		await mkdir(path.join(tempDir, "src"), { recursive: true });
-		await writeFile(path.join(tempDir, "src", "index.ts"), "old", "utf8");
-	});
-
-	afterEach(async () => {
-		process.chdir(ORIGINAL_CWD);
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	it("uses a config provider", async () => {
-		const runner = makeMultiMentionRunner();
-		await run(["watch", PR_URL], {
-			config: { provider: "my-llm" },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "my-llm", (args) => args[0] === "--version")).toBe(FIRST_CALL);
-		expect(countCalls(runner, "claude", (args) => args[0] === "--version")).toBe(NO_CALLS);
-	});
-
-	it("loads config from repo and global config files", async () => {
-		await writeFile(
-			path.join(tempDir, ".crewmate.json"),
-			JSON.stringify({ prompt: "repo prompt", provider: "my-llm" }),
-			"utf8",
-		);
-		await mkdir(path.join(tempDir, "crewmate"), { recursive: true });
-		await writeFile(
-			path.join(tempDir, "crewmate", "config.json"),
-			JSON.stringify({ defaults: { interval: 30 } }),
-			"utf8",
-		);
-		const runner = makeMultiMentionRunner();
-		await run(["watch", PR_URL], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(getPrompt(runner, "my-llm")).toMatch(/^repo prompt/);
-	});
-
-	it("warns on malformed repo config and keeps valid fields", async () => {
-		const runner = makeMultiMentionRunner();
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		await writeFile(
-			path.join(tempDir, ".crewmate.json"),
-			JSON.stringify({ prompt: "repo prompt", interval: "fast" }),
-			"utf8",
-		);
-		await run(["watch", PR_URL], { iterations: FIRST_ITERATION, logger, runner });
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ message: "invalid type for interval" }),
-		);
-		expect(getPrompt(runner, "claude")).toMatch(/^repo prompt/);
-	});
-
-	it("uses a config prompt", async () => {
-		const runner = makeMultiMentionRunner();
-		await run.watch(PR_URL, {
-			config: { prompt: "be terse", provider: "my-llm" },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(getPrompt(runner, "my-llm")).toMatch(/^be terse/);
-	});
-
-	it("uses a config user filter", async () => {
-		const runner = makeMultiMentionRunner();
-		await run.watch(PR_URL, {
-			config: { user: "bob" },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
-	});
-
-	it("warns when the config user does not match the authenticated gh user", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeMultiMentionRunner({ user: "alice" });
-		await run.watch(PR_URL, {
-			config: { user: "bob" },
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-		});
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({
-				message: "filtering for user bob who is not the authenticated gh user alice",
+		it("warns when filtering for a different user than the gh login", async () => {
+			const { logger, events } = collectLogger();
+			const runner = makeRunner({ ghUser: "alice" });
+			await run.watch(PR_URL, {
 				allowedUser: "bob",
-				ghUser: "alice",
-			}),
-		);
-	});
-
-	it("uses a config fix flag", async () => {
-		const targetPath = path.join("src", "index.ts");
-		const runner = makeFixRunner(targetPath, { provider: "my-llm" });
-		await run.watch(PR_URL, {
-			config: { fix: true, provider: "my-llm" },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => args[0] === "pr" && args[1] === "checkout")).toBe(
-			FIRST_CALL,
-		);
-		expect(
-			(runner as unknown as { mock: { calls: [string, string[]][] } }).mock.calls.some(
-				([, args]) =>
-					args[0] === "pr" &&
-					args[1] === "checkout" &&
-					args[2] === "-R" &&
-					args[3] === "owner/repo",
-			),
-		).toBe(true);
-	});
-
-	it("lets CLI flags override config", async () => {
-		const runner = makeMultiMentionRunner();
-		await run(["watch", PR_URL, "--prompt", "cli prompt", "--provider", "claude"], {
-			config: { prompt: "config prompt", provider: "my-llm" },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(getPrompt(runner, "claude")).toMatch(/^cli prompt/);
-		expect(countCalls(runner, "my-llm", (args) => args[0] === "--version")).toBe(NO_CALLS);
-	});
-
-	it("uses a config dry-run flag", async () => {
-		const runner = makeMultiMentionRunner();
-		await run.watch(PR_URL, {
-			config: { dryRun: true },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
-	});
-
-	it("uses a config log flag", async () => {
-		const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const runner = makeMultiMentionRunner();
-		await run.watch(PR_URL, {
-			config: { log: true, provider: "my-llm" },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(
-			calls.some(
-				(line) =>
-					line.includes('"event":"poll"') ||
-					line.includes('"event":"mention"') ||
-					line.includes('"event":"reply"'),
-			),
-		).toBe(true);
-		write.mockRestore();
-	});
-
-	it("uses a config unsafeNoUser flag", async () => {
-		const runner = makeMultiMentionRunner({ user: "alice" });
-		await run.watch(PR_URL, {
-			config: { unsafeNoUser: true, user: "bob" },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
-	});
-
-	it("exits when gh user is missing and no filter is configured", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args[0] === "api" && args.includes("user")) {
-				return Promise.resolve("");
-			}
-			return resolveExplain(file, args, { user: "bob" });
-		}) as unknown as Runner;
-		await expect(run.watch(PR_URL, { iterations: FIRST_ITERATION, runner })).rejects.toThrow(
-			"Could not determine a GitHub user",
-		);
-	});
-
-	it("proceeds with config unsafeNoUser when gh user is missing", async () => {
-		const baseRunner = makeMultiMentionRunner({ user: "bob" });
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args[0] === "api" && args.includes("user")) {
-				return Promise.resolve("");
-			}
-			return baseRunner(file, args);
-		}) as unknown as Runner;
-		await run.watch(PR_URL, {
-			config: { unsafeNoUser: true },
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
-	});
-});
-
-describe("scope targets", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-	});
-
-	afterEach(async () => {
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	const REPO_TARGET = "owner/repo";
-	const ORG_TARGET = "org:myorg";
-	const GHES_REPO_URL = "https://ghe.example.com/owner/repo";
-	const SCOPE_PR_URL = "https://github.com/owner/repo/pull/1";
-	const SCOPE_ISSUE_URL = "https://github.com/owner/repo/issues/2";
-
-	it("parses a full GHES repo URL", () => {
-		expect(run.parseTarget(GHES_REPO_URL)).toEqual({
-			kind: "repo",
-			host: "ghe.example.com",
-			owner: "owner",
-			repo: "repo",
-		});
-	});
-
-	it("preserves a non-default port in a GHES repo URL", () => {
-		expect(run.parseTarget("https://ghe.example.com:8443/owner/repo")).toEqual({
-			kind: "repo",
-			host: "ghe.example.com",
-			owner: "owner",
-			port: "8443",
-			repo: "repo",
-		});
-	});
-
-	it("parses an org full URL", () => {
-		expect(run.parseTarget("https://ghe.example.com/orgs/myorg")).toEqual({
-			kind: "org",
-			host: "ghe.example.com",
-			org: "myorg",
-		});
-	});
-
-	it("preserves a non-default port in a GHES org URL", () => {
-		expect(run.parseTarget("https://ghe.example.com:8443/orgs/myorg")).toEqual({
-			kind: "org",
-			host: "ghe.example.com",
-			org: "myorg",
-			port: "8443",
-		});
-	});
-
-	it("parses a repo shorthand", () => {
-		expect(run.parseTarget(REPO_TARGET)).toEqual({
-			kind: "repo",
-			host: "github.com",
-			owner: "owner",
-			repo: "repo",
-		});
-	});
-
-	it("parses an org shorthand", () => {
-		expect(run.parseTarget(ORG_TARGET)).toEqual({
-			kind: "org",
-			host: "github.com",
-			org: "myorg",
-		});
-	});
-
-	it("parses a PR shorthand", () => {
-		expect(run.parseTarget("owner/repo/pull/123")).toEqual({
-			kind: "pr",
-			host: "github.com",
-			owner: "owner",
-			repo: "repo",
-			number: "123",
-		});
-	});
-
-	it("preserves a non-default port in a GHES PR URL", () => {
-		expect(run.parseTarget("https://ghe.example.com:8443/owner/repo/pull/1")).toEqual({
-			kind: "pr",
-			host: "ghe.example.com",
-			owner: "owner",
-			port: "8443",
-			repo: "repo",
-			number: "1",
-		});
-	});
-
-	it("parses an issue shorthand", () => {
-		expect(run.parseTarget("owner/repo/issues/4")).toEqual({
-			kind: "issue",
-			host: "github.com",
-			owner: "owner",
-			repo: "repo",
-			number: "4",
-		});
-	});
-
-	it("parses a full GitHub issue URL", () => {
-		expect(run.parseTarget("https://github.com/owner/repo/issues/4")).toEqual({
-			kind: "issue",
-			host: "github.com",
-			owner: "owner",
-			repo: "repo",
-			number: "4",
-		});
-	});
-
-	it("preserves a non-default port in a GHES issue URL", () => {
-		expect(run.parseTarget("https://ghe.example.com:8443/owner/repo/issues/1")).toEqual({
-			kind: "issue",
-			host: "ghe.example.com",
-			owner: "owner",
-			port: "8443",
-			repo: "repo",
-			number: "1",
-		});
-	});
-
-	it("fetchMentions returns an issue mention plus conversation comments", async () => {
-		const runner = makeExplainRunner({
-			issueBody: "@crewmate hello",
-			conversationBody: "@crewmate hi",
-		});
-		const mentions = await run.fetchMentions("https://github.com/owner/repo/issues/4", runner);
-		expect(mentions).toHaveLength(2);
-		expect(
-			mentions.some(
-				(mention) =>
-					mention.kind === "issue" && mention.id === 4 && mention.body === "@crewmate hello",
-			),
-		).toBe(true);
-		expect(
-			mentions.some(
-				(mention) =>
-					mention.kind === "conversation" &&
-					mention.id === THIRD_ID &&
-					mention.body === "@crewmate hi",
-			),
-		).toBe(true);
-	});
-
-	it("fetchMentions throws for a non-item URL", async () => {
-		const runner = makeExplainRunner();
-		await expect(run.fetchMentions("https://github.com/owner/repo", runner)).rejects.toThrow(
-			"Invalid item reference: https://github.com/owner/repo",
-		);
-	});
-
-	it("respondToMention throws for a non-item URL", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeExplainRunner();
-		const warn = warnFn(logger);
-		await expect(
-			run.respondToMention(
-				{ body: "@crewmate hello", id: FIRST_ID, kind: "review" } as Mention,
-				"https://github.com/owner/repo",
-				{ allowFix: false, checkedOut: new Set(), dryRun: false, logger, runner, warn },
-			),
-		).rejects.toThrow("Invalid item reference: https://github.com/owner/repo");
-	});
-
-	it("fetchMentions falls back to conversation comments when the issue body is malformed", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (
-				file === "gh" &&
-				args.at(FIRST_INDEX) === "api" &&
-				args.some((arg) => startsWithRepos(arg))
-			) {
-				const endpoint = findEndpoint(args);
-				if (endpoint === undefined) return Promise.resolve("");
-				const endpointPathValue = endpointPath(endpoint);
-				if (ISSUE_BODY_PATTERN.test(endpointPathValue)) return Promise.resolve("{}");
-				if (ISSUE_COMMENTS_PATTERN.test(endpointPathValue)) {
-					return Promise.resolve(conversationComments("@crewmate hi"));
-				}
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const mentions = await run.fetchMentions("https://github.com/owner/repo/issues/4", runner);
-		expect(mentions).toHaveLength(1);
-		expect(mentions[0]).toMatchObject({ kind: "conversation", body: "@crewmate hi", id: THIRD_ID });
-	});
-
-	it("throws for an invalid bare word", () => {
-		expect(() => run.parseTarget("not-a-pr")).toThrow("Invalid target: not-a-pr");
-	});
-
-	it("throws for an unsupported URL", () => {
-		expect(() => run.parseTarget("https://github.com/orgs/myorg/projects/1")).toThrow(
-			"Invalid target: https://github.com/orgs/myorg/projects/1",
-		);
-	});
-
-	it("throws for a malformed URL", () => {
-		expect(() => run.parseTarget("https://")).toThrow("Invalid target: https://");
-	});
-
-	it("throws for an invalid org shorthand", () => {
-		expect(() => run.parseTarget("org:")).toThrow("Invalid target: org:");
-		expect(() => run.parseTarget("org:my org")).toThrow("Invalid target: org:my org");
-	});
-
-	it("throws for an owner or repo containing path metacharacters in a URL", () => {
-		expect(() => run.parseTarget("https://github.com/%2e%2e/repo")).toThrow(TypeError);
-		expect(() => run.parseTarget("https://github.com/foo%2fbar/pull/1")).toThrow(TypeError);
-		expect(() => run.parseTarget("https://github.com/../repo")).toThrow(TypeError);
-		expect(() => run.parseTarget("https://github.com/orgs/%2e%2e")).toThrow(TypeError);
-	});
-
-	it("fetchOpenPrs searches for open PRs in a repo", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (
-				file === "gh" &&
-				args[0] === "api" &&
-				args.some((arg) => arg.startsWith("search/issues?q="))
-			) {
-				return Promise.resolve(
-					JSON.stringify([
-						{
-							items: [{ html_url: SCOPE_PR_URL }, { html_url: 123 }, { html_url: "not-a-url" }],
-						},
-					]),
-				);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget(REPO_TARGET);
-		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(prUrls).toEqual([SCOPE_PR_URL]);
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "search-invalid-url" }),
-		);
-	});
-
-	it("fetchOpenPrs searches for open PRs in an org", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && args.some((arg) => arg.startsWith("search/issues?q="))) {
-				const encoded = encodeURIComponent("org:myorg is:pr is:open");
-				if (args.some((arg) => arg === `search/issues?q=${encoded}`)) {
-					return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
-				}
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget(ORG_TARGET);
-		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(prUrls).toEqual([SCOPE_PR_URL]);
-	});
-
-	it("fetchOpenPrs sets GH_HOST for GHES", async () => {
-		const runner = vi.fn(
-			(file: string, args: string[], options?: { env?: Record<string, string | undefined> }) => {
-				if (file === "gh" && args[0] === "api") {
-					const reaction = resolveReaction(args);
-					if (reaction !== undefined) return Promise.resolve(reaction);
-					expect(options?.env?.GH_HOST).toBe("ghe.example.com");
-					expect(args).not.toContain("--hostname");
-					return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
-				}
-				return Promise.resolve("");
-			},
-		) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget(GHES_REPO_URL);
-		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(prUrls).toEqual(["https://ghe.example.com/owner/repo/pull/1"]);
-	});
-
-	it("fetchOpenPrs preserves a non-default GHES port", async () => {
-		const runner = vi.fn(
-			(file: string, args: string[], options?: { env?: Record<string, string | undefined> }) => {
-				if (file === "gh" && args[0] === "api") {
-					const reaction = resolveReaction(args);
-					if (reaction !== undefined) return Promise.resolve(reaction);
-					expect(options?.env?.GH_HOST).toBe("ghe.example.com:8443");
-					expect(args).not.toContain("--hostname");
-					return Promise.resolve(
-						JSON.stringify([
-							{
-								items: [{ html_url: "https://ghe.example.com/owner/repo/pull/1" }],
-							},
-						]),
-					);
-				}
-				return Promise.resolve("");
-			},
-		) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget("https://ghe.example.com:8443/owner/repo");
-		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(prUrls).toEqual(["https://ghe.example.com:8443/owner/repo/pull/1"]);
-	});
-
-	it("fetchOpenPrs warns and returns empty on 403/422", async () => {
-		const runner = vi.fn(() => Promise.reject(new Error("HTTP 403"))) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget(REPO_TARGET);
-		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(prUrls).toEqual([]);
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "search-token-scope" }),
-		);
-	});
-
-	it("fetchOpenPrs falls back to issues endpoint on 404 and returns both PR and issue URLs", async () => {
-		let callCount = 0;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file !== "gh" || args[0] !== "api") return Promise.resolve("");
-			callCount += 1;
-			if (args.some((arg) => arg.startsWith("search/issues?q="))) {
-				return Promise.reject(new Error("HTTP 404: Not Found"));
-			}
-			if (args.some((arg) => arg.startsWith("repos/owner/repo/issues?state=open"))) {
-				return Promise.resolve(
-					JSON.stringify([[{ html_url: SCOPE_PR_URL }, { html_url: SCOPE_ISSUE_URL }]]),
-				);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget(REPO_TARGET);
-		const itemUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(itemUrls).toEqual([SCOPE_PR_URL, SCOPE_ISSUE_URL]);
-		expect(callCount).toBe(THREE_CALLS);
-	});
-
-	it("fetchOpenPrs throws on 404 for org scope", async () => {
-		const runner = vi.fn(() =>
-			Promise.reject(new Error("HTTP 404: Not Found")),
-		) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget(ORG_TARGET);
-		await expect(run.fetchOpenPrs(scope, runner, warn)).rejects.toThrow(
-			"org scope requires GHES 3.x+ search/issues",
-		);
-	});
-
-	it("fetchOpenPrs throws when called for a single PR", async () => {
-		const runner = vi.fn(() => Promise.resolve("")) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget("owner/repo/pull/1");
-		await expect(run.fetchOpenPrs(scope, runner, warn)).rejects.toThrow(
-			"fetchOpenItems should not be called for a single item",
-		);
-	});
-
-	it("fetchOpenItems returns empty when both search queries fail", async () => {
-		const runner = vi.fn(() => Promise.reject(new Error("Boom"))) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget(REPO_TARGET);
-		const itemUrls = await run.fetchOpenItems(scope, runner, warn);
-		expect(itemUrls).toEqual([]);
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "search-failed" }),
-		);
-	});
-
-	it("fetchOpenPrs repo fallback warns on invalid item URLs", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file !== "gh" || args[0] !== "api") return Promise.resolve("");
-			if (args.some((arg) => arg.startsWith("search/issues?q="))) {
-				return Promise.reject(new Error("HTTP 404: Not Found"));
-			}
-			if (args.some((arg) => arg.startsWith("repos/owner/repo/issues?state=open"))) {
-				return Promise.resolve(
-					JSON.stringify([
-						[
-							{ html_url: undefined },
-							{ html_url: "https://github.com/owner/repo" },
-							{ html_url: SCOPE_PR_URL },
-						],
-					]),
-				);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget(REPO_TARGET);
-		const itemUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(itemUrls).toEqual([SCOPE_PR_URL]);
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "fallback-invalid-url" }),
-		);
-	});
-
-	it("fetchOpenPrs repo fallback returns empty on failure", async () => {
-		const runner = vi.fn(() =>
-			Promise.reject(new Error("HTTP 404: Not Found")),
-		) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget(REPO_TARGET);
-		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(prUrls).toEqual([]);
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "repo-fallback-failed" }),
-		);
-	});
-
-	it("fetchOpenPrs repo fallback coerces a non-Error failure", async () => {
-		const runner = vi.fn(() => Promise.reject("HTTP 404: Not Found")) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget(REPO_TARGET);
-		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(prUrls).toEqual([]);
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "repo-fallback-failed" }),
-		);
-	});
-
-	it("fetchOpenPrs returns empty when search has no items", async () => {
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (
-				file === "gh" &&
-				args[0] === "api" &&
-				args.some((arg) => arg.startsWith("search/issues?q="))
-			) {
-				return Promise.resolve(JSON.stringify([{}]));
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget(REPO_TARGET);
-		const prUrls = await run.fetchOpenPrs(scope, runner, warn);
-		expect(prUrls).toEqual([]);
-	});
-
-	it("fetchOpenItems returns both PR and issue URLs from search and deduplicates", async () => {
-		const prQuery = `search/issues?q=${encodeURIComponent("repo:owner/repo is:pr is:open")}`;
-		const issueQuery = `search/issues?q=${encodeURIComponent("repo:owner/repo is:issue is:open")}`;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file !== "gh" || args[0] !== "api") return Promise.resolve("");
-			if (args.some((arg) => arg === prQuery)) {
-				return Promise.resolve(
-					JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }, { html_url: SCOPE_ISSUE_URL }] }]),
-				);
-			}
-			if (args.some((arg) => arg === issueQuery)) {
-				return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_ISSUE_URL }] }]));
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget(REPO_TARGET);
-		const itemUrls = await run.fetchOpenItems(scope, runner, warn);
-		expect(itemUrls).toEqual([SCOPE_PR_URL, SCOPE_ISSUE_URL]);
-	});
-
-	it("fetchOpenItems warns and continues when one search query fails but the other succeeds", async () => {
-		const prQuery = `search/issues?q=${encodeURIComponent("repo:owner/repo is:pr is:open")}`;
-		const issueQuery = `search/issues?q=${encodeURIComponent("repo:owner/repo is:issue is:open")}`;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file !== "gh" || args[0] !== "api") return Promise.resolve("");
-			if (args.some((arg) => arg === prQuery)) {
-				return Promise.reject(new Error("Boom"));
-			}
-			if (args.some((arg) => arg === issueQuery)) {
-				return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_ISSUE_URL }] }]));
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = warnFn(logger);
-		const scope = run.parseTarget(REPO_TARGET);
-		const itemUrls = await run.fetchOpenItems(scope, runner, warn);
-		expect(itemUrls).toEqual([SCOPE_ISSUE_URL]);
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "search-failed" }),
-		);
-	});
-
-	it("watches a repo scope and processes a mixed PR and issue discovery", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeScopeRunner({
-			issueUrl: SCOPE_ISSUE_URL,
-			issueBody: "@crewmate hello",
-		});
-		await run.watch(REPO_TARGET, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
-		expect(
-			countCalls(
+				config: {},
+				iterations: 1,
+				logger,
 				runner,
-				"gh",
-				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
-			),
-		).toBe(NO_CALLS);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
-	});
+				stateFile,
+			});
+			expect(events).toContainEqual({
+				event: "warning",
+				fields: expect.objectContaining({ reason: "user-filter-override" }),
+			});
+		});
 
-	it("watches a repo scope and replies to mentions", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeScopeRunner();
-		await run.watch(REPO_TARGET, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(FIRST_CALL);
-	});
-
-	it("watches with the --debug CLI flag and emits debug log events", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger & {
-			mock: { calls: [string, Record<string, unknown>][] };
-		};
-		const runner = makeScopeRunner();
-		await run(["watch", REPO_TARGET, "--debug"], {
-			iterations: FIRST_ITERATION,
-			runner,
-			logger,
-		});
-		const debugCalls = logger.mock.calls.filter(([level]) => level === "debug");
-		expect(debugCalls.length).toBeGreaterThan(0);
-		expect(
-			debugCalls.some(([, fields]) => (fields as { stage: string }).stage === "new-mentions"),
-		).toBe(true);
-	});
-
-	it("rejects an unsafe review file path outside a git tree", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeScopeRunner({ filePath: "../etc/passwd" });
-		await run.watch(REPO_TARGET, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-		});
-		expect(
-			countCalls(runner, "gh", (args) => args.includes("Accept: application/vnd.github.raw")),
-		).toBe(NO_CALLS);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "invalid-file-path" }),
-		);
-	});
-
-	it("watches an org scope and replies to mentions", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeScopeRunner();
-		await run.watch(ORG_TARGET, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
-	});
-
-	it("watches an org scope with both PRs and issues", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeScopeRunner({
-			issueUrl: SCOPE_ISSUE_URL,
-			issueBody: "@crewmate hello",
-		});
-		await run.watch(ORG_TARGET, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
-		expect(
-			countCalls(
+		it("ignores mentions from other users by default and honors unsafeNoUser", async () => {
+			const runner = makeRunner({ comments: [{ user: "mallory" }] });
+			await run.watch(PR_URL, {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
 				runner,
-				"gh",
-				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
-			),
-		).toBe(NO_CALLS);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
+				stateFile,
+			});
+			expect(callsOf(runner).find(([f, a]) => f === "claude" && a.includes("-p"))).toBeUndefined();
+
+			const openRunner = makeRunner({ comments: [{ user: "mallory" }] });
+			await run.watch(PR_URL, {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				runner: openRunner,
+				stateFile: path.join(tempDir, "other-state.json"),
+				unsafeNoUser: true,
+			});
+			expect(
+				callsOf(openRunner).find(([f, a]) => f === "claude" && a.includes("-p")),
+			).toBeDefined();
+		});
+
+		it("uses the configured provider, model, prompt, and timeout", async () => {
+			const runner = makeRunner({ providerName: "my-llm" });
+			await run.watch(PR_URL, {
+				config: { model: "opus", prompt: "Be terse", provider: "my-llm", timeoutSeconds: 5 },
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			const calls = callsOf(runner);
+			const versionCheck = calls.find(([f, a]) => f === "my-llm" && a.includes("--version"));
+			expect(versionCheck).toBeDefined();
+			const promptCall = calls.find(([f, a]) => f === "my-llm" && a.includes("-p"));
+			expect(promptCall?.[1]).toContain("--model");
+			expect(promptCall?.[1].at(-1)).toContain("Be terse");
+		});
+
+		it("rejects an invalid item reference from repo scope results", async () => {
+			const runner = makeRunner({ searchPrUrls: ["https://github.com/owner/repo"] });
+			const { logger } = collectLogger();
+			await run.watch("owner/repo", {
+				config: {},
+				iterations: 1,
+				logger,
+				runner,
+				stateFile,
+			});
+		});
 	});
 
-	it("watches a repo scope with multiple open PRs", async () => {
-		const SCOPE_PR_URL_2 = "https://github.com/owner/repo/pull/2";
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
-				return Promise.resolve("");
+	describe("stream", () => {
+		it("emits NDJSON events for new mentions", async () => {
+			const stdout = mockStdoutWrite();
+			const runner = makeRunner({ conversationBody: "@crewmate hi" });
+			await run.stream(PR_URL, {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			const lines = stdout.mock.calls
+				.map(([line]) => String(line))
+				.filter((line) => line.includes('"event":"mention"'));
+			expect(lines.length).toBe(2);
+			const reviewEvent = JSON.parse(lines.find((l) => l.includes('"kind":"review"'))!);
+			expect(reviewEvent).toMatchObject({
+				commentId: 1,
+				kind: "review",
+				line: 5,
+				number: 4,
+				owner: "owner",
+				path: "src/index.ts",
+				repo: "repo",
+				url: PR_URL,
+				user: "alice",
+			});
+			const state = await run.loadState(stateFile);
+			expect(state.get(PR_URL)?.get("review:1")?.status).toBe("succeeded");
+		});
+
+		it("acks mentions with an eyes reaction and emits the reactionId", async () => {
+			const stdout = mockStdoutWrite();
+			const runner = makeRunner();
+			await run.stream(PR_URL, {
+				ack: true,
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			const lines = stdout.mock.calls
+				.map(([line]) => String(line))
+				.filter((line) => line.includes('"event":"mention"'));
+			expect(JSON.parse(lines[0]).reactionId).toBeTypeOf("number");
+			expect(callsOf(runner).find(([, a]) => a.includes("content=eyes"))).toBeDefined();
+		});
+
+		it("appends events to an output file", async () => {
+			mockStdoutWrite();
+			const outputFile = path.join(tempDir, "out", "events.ndjson");
+			const runner = makeRunner();
+			await run.stream(PR_URL, {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				outputFile,
+				runner,
+				stateFile,
+			});
+			const content = await readFile(outputFile, "utf8");
+			expect(content).toContain('"event":"mention"');
+		});
+
+		it("treats output failures as fatal and leaves the job running for retry", async () => {
+			mockStdoutWrite();
+			const outputFile = path.join(tempDir, "blocked", "events.ndjson");
+			await mkdir(path.dirname(outputFile), { recursive: true });
+			await writeFile(outputFile, "x");
+			await chmod(outputFile, 0o400);
+			const runner = makeRunner();
+			await expect(
+				run.stream(PR_URL, {
+					config: {},
+					iterations: 1,
+					logger: silentLogger(),
+					outputFile,
+					runner,
+					stateFile,
+				}),
+			).rejects.toThrow("output file write failed");
+			const state = await run.loadState(stateFile);
+			expect(state.get(PR_URL)?.get("review:1")?.status).toBe("running");
+			await chmod(outputFile, 0o600);
+
+			await run.stream(PR_URL, {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				outputFile,
+				runner,
+				stateFile,
+			});
+			const after = await run.loadState(stateFile);
+			expect(after.get(PR_URL)?.get("review:1")?.status).toBe("succeeded");
+		});
+
+		it("does not re-emit succeeded mentions", async () => {
+			const stdout = mockStdoutWrite();
+			const options = {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				runner: makeRunner(),
+				stateFile,
+			};
+			await run.stream(PR_URL, options);
+			const count = stdout.mock.calls.filter(([line]) =>
+				String(line).includes('"event":"mention"'),
+			).length;
+			await run.stream(PR_URL, options);
+			const after = stdout.mock.calls.filter(([line]) =>
+				String(line).includes('"event":"mention"'),
+			).length;
+			expect(after).toBe(count);
+		});
+	});
+
+	describe("cli", () => {
+		it("prints the version", async () => {
+			const stdout = mockStdoutWrite();
+			await run(["--version"]);
+			expect(stdout).toHaveBeenCalledWith(expect.stringMatching(/^crewmate\//));
+		});
+
+		it("prints help for no args, --help, and subcommand help", async () => {
+			const stdout = mockStdoutWrite();
+			await run([]);
+			await run(["--help"]);
+			await run(["watch", "--help"]);
+			await run(["stream", "-h"]);
+			expect(stdout.mock.calls.length).toBeGreaterThanOrEqual(4);
+		});
+
+		it("renders help with ANSI styles on a TTY", async () => {
+			const originalIsTTY = process.stdout.isTTY;
+			Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+			const stdout = mockStdoutWrite();
+			await run(["--help"]);
+			expect(stdout).toHaveBeenCalledWith(expect.stringContaining("\x1b[1m"));
+			Object.defineProperty(process.stdout, "isTTY", {
+				value: originalIsTTY,
+				configurable: true,
+			});
+		});
+
+		it("fails on an unknown command", async () => {
+			const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			await run(["init"]);
+			expect(process.exitCode).toBe(1);
+			expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Unknown command 'init'"));
+		});
+
+		it("warns about unsupported watch flags", async () => {
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const { logger, events } = collectLogger();
+			const runner = makeRunner();
+			await run(
+				["watch", PR_URL, "--ack", "--json", "--since", "2026-01-01", "--output-file", "x"],
+				{
+					iterations: 1,
+					logger,
+					runner,
+					stateFile,
+				},
+			);
+			const flagged = events
+				.filter((e) => e.event === "warning" && e.fields?.message === "unsupported flag")
+				.map((e) => e.fields?.flag);
+			expect(flagged).toEqual(["--ack", "--json", "--output-file", "--since"]);
+		});
+
+		it("warns about unsupported stream flags", async () => {
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			mockStdoutWrite();
+			const { logger, events } = collectLogger();
+			const runner = makeRunner();
+			await run(
+				[
+					"stream",
+					PR_URL,
+					"--fix",
+					"--dry-run",
+					"--json",
+					"--model",
+					"x",
+					"--provider",
+					"y",
+					"--prompt",
+					"z",
+					"--timeout",
+					"5",
+				],
+				{ iterations: 1, logger, runner, stateFile },
+			);
+			const flagged = events
+				.filter((e) => e.event === "warning" && e.fields?.message === "unsupported flag")
+				.map((e) => e.fields?.flag);
+			expect(flagged).toEqual([
+				"--fix",
+				"--dry-run",
+				"--json",
+				"--model",
+				"--provider",
+				"--prompt",
+				"--timeout",
+			]);
+		});
+
+		it("rejects a valueless --output-file", async () => {
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			await run(["stream", PR_URL, "--output-file"], { runner: makeRunner(), stateFile });
+			expect(process.exitCode).toBe(1);
+		});
+
+		it("rejects an empty --output-file value", async () => {
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			await run(["stream", PR_URL, "--output-file="], { runner: makeRunner(), stateFile });
+			expect(process.exitCode).toBe(1);
+		});
+
+		it("rejects a valueless --since", async () => {
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			await run(["stream", PR_URL, "--since"], { runner: makeRunner(), stateFile });
+			expect(process.exitCode).toBe(1);
+		});
+
+		it("resolves the default target from the git remote", async () => {
+			mockStdoutWrite();
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const runner = makeRunner({ prUrl: PR_URL });
+			await run(["watch"], {
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			const state = await run.loadState(stateFile);
+			expect(state.get(PR_URL)?.get("review:1")?.status).toBe("succeeded");
+		});
+
+		it("fails when no target can be resolved", async () => {
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const runner = makeRunner({ remoteUrl: new Error("no remote") });
+			await run(["watch"], { iterations: 1, logger: silentLogger(), runner, stateFile });
+			expect(process.exitCode).toBe(1);
+			const runner2 = makeRunner({ remoteUrl: "not-a-url" });
+			await run(["stream"], { iterations: 1, logger: silentLogger(), runner: runner2, stateFile });
+			expect(process.exitCode).toBe(1);
+		});
+
+		it("passes --closed through to repo-scope queries from the CLI", async () => {
+			mockStdoutWrite();
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const runner = makeRunner({ prUrl: PR_URL });
+			await run(["stream", "owner/repo", "--closed"], {
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			const queries = callsOf(runner)
+				.flatMap(([, args]) => args)
+				.filter((arg) => arg.startsWith("search/issues?q="));
+			expect(queries).toHaveLength(2);
+			expect(queries.some((query) => query.includes("is%3Aopen"))).toBe(false);
+		});
+
+		it("runs stream from the CLI", async () => {
+			const stdout = mockStdoutWrite();
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const runner = makeRunner();
+			await run(["stream", PR_URL, "--ack"], {
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			expect(
+				stdout.mock.calls.filter(([line]) => String(line).includes('"event":"mention"')).length,
+			).toBe(1);
+		});
+
+		it("exits cleanly on EPIPE", async () => {
+			const epipe = new Error("write EPIPE") as NodeJS.ErrnoException;
+			epipe.code = "EPIPE";
+			mockStdoutWrite({ error: epipe });
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const runner = makeRunner();
+			await run(["stream", PR_URL], {
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			expect(process.exitCode).toBe(0);
+		});
+
+		it("fails on other stdout errors", async () => {
+			mockStdoutWrite({ error: new Error("disk full") });
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const runner = makeRunner();
+			await run(["stream", PR_URL], {
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			expect(process.exitCode).toBe(1);
+		});
+
+		it("fails when gh authentication is missing", async () => {
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const runner = makeRunner({ failAuth: true });
+			await run(["watch", PR_URL], {
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			expect(process.exitCode).toBe(1);
+		});
+
+		it("retries gh auth against the plain host on GHES ports", async () => {
+			mockStdoutWrite();
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			let authCalls = 0;
+			const base = makeRunner();
+			const runner = vi.fn((file: string, args: string[]) => {
+				if (file === "gh" && args[0] === "auth") {
+					authCalls += 1;
+					return authCalls === 1 ? Promise.reject(new Error("x")) : Promise.resolve("");
+				}
+				return (base as unknown as (...a: unknown[]) => Promise<string>)(file, args);
+			}) as unknown as Runner;
+			await run(["watch", "https://ghe.example.com:8443/owner/repo/pull/4"], {
+				config: {},
+				iterations: 1,
+				logger: silentLogger(),
+				runner,
+				stateFile,
+			});
+			expect(authCalls).toBe(2);
+		});
+
+		it("loads the config file when no config is injected", async () => {
+			mockStdoutWrite();
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			await mkdir(path.join(tempDir, "crewmate"), { recursive: true });
+			await writeFile(
+				path.join(tempDir, "crewmate", "config.json"),
+				JSON.stringify({ debug: true, log: false, unsafeNoUser: true }),
+			);
+			const { logger, events } = collectLogger();
+			const runner = makeRunner();
+			await run(["watch", PR_URL], { iterations: 1, logger, runner, stateFile });
+			expect(events.some((e) => e.event === "debug")).toBe(true);
+		});
+
+		it("imports bin.js without side effects beyond run", async () => {
+			mockStdoutWrite();
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			process.argv = [process.argv[0], "bin.js", "--version"];
+			await import("./bin.js");
+			expect(process.exitCode).toBeUndefined();
+		});
+	});
+
+	describe("hardening coverage", () => {
+		let hardenDir = "";
+		let hardenState = "";
+
+		beforeEach(async () => {
+			hardenDir = await mkdtemp(path.join(tmpdir(), "crewmate-cov-"));
+			hardenState = path.join(hardenDir, "state.json");
+		});
+
+		afterEach(async () => {
+			await rm(hardenDir, { force: true, recursive: true });
+			vi.unstubAllEnvs();
+		});
+
+		it("treats EPIPE on stdout as a clean stop and other stdout errors as failures", () => {
+			const previousExitCode = process.exitCode;
+			process.exitCode = undefined;
+			const epipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+			expect(() => process.stdout.emit("error", epipeError)).not.toThrow();
+			expect(process.exitCode).toBe(0);
+			expect(() => process.stdout.emit("error", new Error("boom"))).not.toThrow();
+			expect(process.exitCode).toBe(1);
+			process.exitCode = previousExitCode;
+		});
+
+		it("runs commands through the system runner", async () => {
+			await expect(run.exec("node", ["-e", "console.log('hi')"])).resolves.toBe("hi\n");
+			await expect(
+				run.exec("node", ["-e", "console.log(process.env.FOO)"], { env: { FOO: "bar" } }),
+			).resolves.toBe("bar\n");
+			await expect(
+				run.exec("node", ["-e", "setTimeout(() => {}, 100000)"], { timeoutMs: 50 }),
+			).rejects.toThrow();
+			await expect(run.exec("node", ["-e", "process.exit(3)"])).rejects.toThrow();
+		});
+
+		it("rejects remote URLs with invalid owner names", () => {
+			expect(run.parseGitRemoteUrl("https://github.com/a%20b/repo")).toBeUndefined();
+		});
+
+		it("parses issue and repo URLs on hosts with a port", () => {
+			expect(run.parseTarget("https://ghe.example.com:8443/owner/repo/issues/4")).toEqual({
+				host: "ghe.example.com",
+				kind: "issue",
+				number: "4",
+				owner: "owner",
+				port: "8443",
+				repo: "repo",
+			});
+			expect(run.parseTarget("https://ghe.example.com:8443/owner/repo")).toEqual({
+				host: "ghe.example.com",
+				kind: "repo",
+				owner: "owner",
+				port: "8443",
+				repo: "repo",
+			});
+		});
+
+		it("fails when the git remote is empty", async () => {
+			const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const previousExitCode = process.exitCode;
+			process.exitCode = undefined;
+			try {
+				await run(["watch"], {
+					iterations: 1,
+					lockDir: hardenDir,
+					logger: silentLogger(),
+					runner: makeRunner({ remoteUrl: "" }),
+					stateFile: hardenState,
+				});
+				expect(process.exitCode).toBe(1);
+				expect(write).toHaveBeenCalledWith(expect.stringContaining("Target is required"));
+			} finally {
+				process.exitCode = previousExitCode;
+				write.mockRestore();
 			}
-			if (file === "gh" && args[0] === "api") {
-				const reaction = resolveReaction(args);
-				if (reaction !== undefined) return Promise.resolve(reaction);
-				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
-					return Promise.resolve(
-						JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }, { html_url: SCOPE_PR_URL_2 }] }]),
-					);
-				}
-				if (args.includes("Accept: application/vnd.github.raw")) {
-					return Promise.resolve("example");
-				}
-				if (args.includes("POST")) {
-					return Promise.resolve("");
-				}
-				const endpoint = args.find((arg) => arg.startsWith("repos/"));
-				if (endpoint?.includes("/pulls/")) {
-					return Promise.resolve(
-						JSON.stringify([
+		});
+
+		it("fails when no user can be determined for filtering", async () => {
+			const runner = makeRunner({ ghUser: "" });
+			await expect(
+				run.watch(PR_URL, {
+					iterations: 1,
+					lockDir: hardenDir,
+					logger: silentLogger(),
+					runner,
+					stateFile: hardenState,
+				}),
+			).rejects.toThrow("Could not determine a GitHub user");
+		});
+
+		it("handles search pages without items", async () => {
+			const runner = makeRunner({ searchPrNoItems: true });
+			await run.watch("https://github.com/owner/repo", {
+				iterations: 1,
+				lockDir: hardenDir,
+				logger: silentLogger(),
+				runner,
+				stateFile: hardenState,
+			});
+			const state = await run.loadState(hardenState);
+			expect(state.size).toBe(0);
+		});
+
+		it("warns about forbidden searches and skips unparseable search failures", async () => {
+			const runner = makeRunner({
+				searchFailsIssue: new Error("network down"),
+				searchFailsPr: new Error("HTTP 403: forbidden"),
+			});
+			await run.watch("https://github.com/owner/repo", {
+				iterations: 1,
+				lockDir: hardenDir,
+				logger: silentLogger(),
+				runner,
+				stateFile: hardenState,
+			});
+			const state = await run.loadState(hardenState);
+			expect(state.size).toBe(0);
+		});
+
+		it("warns about unprocessable searches", async () => {
+			const runner = makeRunner({
+				searchFailsIssue: new Error("HTTP 422: unprocessable"),
+				searchFailsPr: new Error("HTTP 422: unprocessable"),
+			});
+			await run.watch("https://github.com/owner/repo", {
+				iterations: 1,
+				lockDir: hardenDir,
+				logger: silentLogger(),
+				runner,
+				stateFile: hardenState,
+			});
+		});
+
+		it("writes a dry-run notice to stderr and uses default state and log paths", async () => {
+			vi.stubEnv("XDG_CONFIG_HOME", hardenDir);
+			const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			try {
+				await run.watch(PR_URL, { dryRun: true, iterations: 1, runner: makeRunner() });
+				expect(write).toHaveBeenCalledWith(expect.stringContaining("Dry-run mode"));
+			} finally {
+				write.mockRestore();
+			}
+		});
+
+		it("ignores stderr write failures for the dry-run notice", async () => {
+			vi.stubEnv("XDG_CONFIG_HOME", hardenDir);
+			const write = vi.spyOn(process.stderr, "write").mockImplementation(() => {
+				throw new Error("stderr closed");
+			});
+			try {
+				await run.watch(PR_URL, { dryRun: true, iterations: 1, runner: makeRunner() });
+			} finally {
+				write.mockRestore();
+			}
+		});
+
+		it("streams with the default state path", async () => {
+			vi.stubEnv("XDG_CONFIG_HOME", hardenDir);
+			mockStdoutWrite();
+			try {
+				await run.stream(PR_URL, { iterations: 1, logger: silentLogger(), runner: makeRunner() });
+				const state = await run.loadState(path.join(hardenDir, "crewmate", "state.json"));
+				expect(state.get(PR_URL)?.get("review:1")?.status).toBe("succeeded");
+			} finally {
+				vi.unstubAllEnvs();
+			}
+		});
+
+		it("streams issue mentions with the issue number as comment id", async () => {
+			const write = mockStdoutWrite();
+			const runner = makeRunner({ issueBody: "@crewmate hi" });
+			await run.stream(ISSUE_URL, {
+				ack: true,
+				iterations: 1,
+				lockDir: hardenDir,
+				logger: silentLogger(),
+				runner,
+				stateFile: hardenState,
+			});
+			const event = JSON.parse(write.mock.calls[0][0] as string) as Record<string, unknown>;
+			expect(event.kind).toBe("issue");
+			expect(event.commentId).toBe(4);
+			write.mockRestore();
+		});
+
+		it("warns when the ack reaction returns an unusable response", async () => {
+			mockStdoutWrite();
+			const messages: string[] = [];
+			const logger: Logger = (level, fields) => {
+				if (level === "warning") messages.push(String(fields?.message));
+				return Promise.resolve();
+			};
+			for (const reactionResponse of ["", "{}", "not json", new Error("ack refused")]) {
+				messages.length = 0;
+				await run.stream(PR_URL, {
+					ack: true,
+					iterations: 1,
+					lockDir: hardenDir,
+					logger,
+					runner: makeRunner({ reactionResponse }),
+					stateFile: hardenState,
+				});
+				expect(messages.some((m) => m.startsWith("failed to set ack reaction"))).toBe(true);
+				await rm(hardenState, { force: true });
+			}
+		});
+
+		it("honors the log profile setting", async () => {
+			const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			try {
+				await run.watch(PR_URL, {
+					config: { log: true },
+					iterations: 1,
+					lockDir: hardenDir,
+					runner: makeRunner(),
+					stateFile: hardenState,
+				});
+				expect(write).toHaveBeenCalled();
+			} finally {
+				write.mockRestore();
+			}
+		});
+
+		it("passes watch flags through", async () => {
+			const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const previousExitCode = process.exitCode;
+			process.exitCode = undefined;
+			try {
+				await run(
+					[
+						"watch",
+						PR_URL,
+						"--log",
+						"--debug",
+						"--dry-run",
+						"--unsafe-no-user",
+						"--user",
+						"alice",
+						"--prompt",
+						"be terse",
+						"--model",
+						"m",
+						"--provider",
+						"claude",
+						"--timeout",
+						"5",
+						"--interval",
+						"3",
+					],
+					{ iterations: 1, lockDir: hardenDir, runner: makeRunner(), stateFile: hardenState },
+				);
+				expect(process.exitCode).toBeUndefined();
+			} finally {
+				process.exitCode = previousExitCode;
+				write.mockRestore();
+			}
+		});
+
+		it("passes stream flags through", async () => {
+			mockStdoutWrite();
+			const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const previousExitCode = process.exitCode;
+			process.exitCode = undefined;
+			const outputFile = path.join(hardenDir, "events.ndjson");
+			try {
+				await run(
+					[
+						"stream",
+						PR_URL,
+						"--log",
+						"--debug",
+						"--ack",
+						"--unsafe-no-user",
+						"--user",
+						"alice",
+						"--interval",
+						"2",
+						"--since",
+						"2026-09-01T00:00:00.000Z",
+						"--output-file",
+						outputFile,
+					],
+					{ iterations: 1, lockDir: hardenDir, runner: makeRunner(), stateFile: hardenState },
+				);
+				expect(process.exitCode).toBeUndefined();
+				const content = await readFile(outputFile, "utf8");
+				expect(content).toContain('"event":"mention"');
+			} finally {
+				process.exitCode = previousExitCode;
+				stderrWrite.mockRestore();
+			}
+		});
+
+		it("uses the system runner when none is injected", async () => {
+			const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const previousExitCode = process.exitCode;
+			process.exitCode = undefined;
+			try {
+				await run(["watch", "https://ghe.invalid.example/owner/repo/pull/4"], {
+					iterations: 1,
+					lockDir: hardenDir,
+					logger: silentLogger(),
+					stateFile: hardenState,
+				});
+				expect(process.exitCode).toBe(1);
+				await run(["stream", "https://ghe.invalid.example/owner/repo/pull/4"], {
+					iterations: 1,
+					lockDir: hardenDir,
+					logger: silentLogger(),
+					stateFile: hardenState,
+				});
+				expect(process.exitCode).toBe(1);
+			} finally {
+				process.exitCode = previousExitCode;
+				write.mockRestore();
+			}
+		});
+
+		it("stringifies non-Error failures", async () => {
+			const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const previousExitCode = process.exitCode;
+			process.exitCode = undefined;
+			try {
+				await run(["watch", PR_URL], {
+					iterations: 1,
+					lockDir: hardenDir,
+					logger: silentLogger(),
+					runner: (() => Promise.reject("boom")) as unknown as Runner,
+					stateFile: hardenState,
+				});
+				expect(process.exitCode).toBe(1);
+				expect(write).toHaveBeenCalledWith("Error: boom\n");
+			} finally {
+				process.exitCode = previousExitCode;
+				write.mockRestore();
+			}
+		});
+	});
+
+	describe("hardening coverage 2", () => {
+		let cov2Dir = "";
+		let cov2State = "";
+
+		beforeEach(async () => {
+			cov2Dir = await mkdtemp(path.join(tmpdir(), "crewmate-cov2-"));
+			cov2State = path.join(cov2Dir, "state.json");
+		});
+
+		afterEach(async () => {
+			await rm(cov2Dir, { force: true, recursive: true });
+			vi.unstubAllEnvs();
+		});
+
+		it("streams the current repo when no target is provided", async () => {
+			const write = mockStdoutWrite();
+			const runner = makeRunner({ prUrl: PR_URL });
+			await run(["stream"], {
+				iterations: 1,
+				lockDir: cov2Dir,
+				logger: silentLogger(),
+				runner,
+				stateFile: cov2State,
+			});
+			expect(write.mock.calls.map((call) => String(call[0])).join("")).toContain(
+				'"event":"mention"',
+			);
+			write.mockRestore();
+		});
+
+		it("rejects remote URLs without a path separator", () => {
+			expect(run.parseGitRemoteUrl("git@github.com")).toBeUndefined();
+		});
+
+		it("stringifies non-Error git remote failures", async () => {
+			const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const previousExitCode = process.exitCode;
+			process.exitCode = undefined;
+			try {
+				await run(["watch"], {
+					iterations: 1,
+					lockDir: cov2Dir,
+					logger: silentLogger(),
+					runner: (() => Promise.reject("no remote")) as unknown as Runner,
+					stateFile: cov2State,
+				});
+				expect(process.exitCode).toBe(1);
+				expect(write).toHaveBeenCalledWith("Error: Target is required: no remote\n");
+			} finally {
+				process.exitCode = previousExitCode;
+				write.mockRestore();
+			}
+		});
+
+		it("skips search items without a URL", async () => {
+			const runner = makeRunner({ searchPrItems: [{}, { html_url: PR_URL }] });
+			await run.watch("https://github.com/owner/repo", {
+				iterations: 1,
+				lockDir: cov2Dir,
+				logger: silentLogger(),
+				runner,
+				stateFile: cov2State,
+			});
+			const state = await run.loadState(cov2State);
+			expect(state.get(PR_URL)?.get("review:1")?.status).toBe("succeeded");
+		});
+
+		it("does not mirror warnings to stderr when the logger already writes there", async () => {
+			const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			try {
+				await writeFile(cov2State, "corrupted{");
+				await run.watch(PR_URL, {
+					iterations: 1,
+					lockDir: cov2Dir,
+					runner: makeRunner(),
+					stateFile: cov2State,
+					toStderr: true,
+				});
+				const stderr = write.mock.calls.map((call) => String(call[0])).join("");
+				expect(stderr).toContain("state file is corrupted");
+				expect(stderr).not.toContain("Warning:");
+			} finally {
+				write.mockRestore();
+			}
+		});
+
+		it("records terminal failures without a failure handler", async () => {
+			await run.saveState(
+				new Map([
+					[
+						PR_URL,
+						new Map([
 							[
+								"review:1",
 								{
-									body: "@crewmate hello",
-									id: FIRST_ID,
-									in_reply_to_id: null,
-									line: FIRST_LINE,
-									path: "src/index.ts",
-									user: { login: "alice" },
+									attempts: 2,
+									lastError: "earlier",
+									nextAttemptAt: "2000-01-01T00:00:00.000Z",
+									status: "failed",
+									updatedAt: "2026-09-03T00:00:00.000Z",
 								},
 							],
 						]),
-					);
-				}
-				if (endpoint?.includes("/issues/")) {
-					return Promise.resolve("[]");
-				}
-			}
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(REPO_TARGET, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-			unsafeNoUser: true,
+					],
+				]),
+				cov2State,
+			);
+			const warn = vi.fn();
+			await run.pollMentions(PR_URL, {
+				debug: false,
+				dryRun: false,
+				logger: silentLogger(),
+				onMention: async () => {
+					throw new Error("boom");
+				},
+				runner: makeRunner(),
+				stateFile: cov2State,
+				warn,
+			});
+			const state = await run.loadState(cov2State);
+			const job = state.get(PR_URL)?.get("review:1");
+			expect(job?.status).toBe("failed");
+			expect(job?.attempts).toBe(3);
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining("failed permanently"),
+				expect.objectContaining({ reason: "mention-failed-terminal" }),
+			);
 		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
-	});
 
-	it("watches a repo scope with both PRs and issues", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "gh" && args[0] === "api") {
-				const reaction = resolveReaction(args);
-				if (reaction !== undefined) return Promise.resolve(reaction);
-				const searchArg = args.find((arg) => arg.startsWith("search/issues?q="));
-				if (searchArg !== undefined) {
-					if (searchArg.includes("is%3Apr")) {
-						return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
-					}
-					if (searchArg.includes("is%3Aissue")) {
-						return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_ISSUE_URL }] }]));
-					}
-					return Promise.resolve(JSON.stringify([{ items: [] }]));
-				}
-				if (args.includes("Accept: application/vnd.github.raw")) {
-					return Promise.resolve("example");
-				}
-				if (args.includes("POST")) {
-					return Promise.resolve("");
-				}
-				const endpoint = findEndpoint(args);
-				if (endpoint === undefined) return Promise.resolve("");
-				const endpointPathValue = endpointPath(endpoint);
-				if (PULLS_COMMENTS_PATTERN.test(endpointPathValue)) {
-					return Promise.resolve(
-						JSON.stringify([
-							[
-								{
-									body: "@crewmate hello",
-									id: FIRST_ID,
-									in_reply_to_id: null,
-									line: FIRST_LINE,
-									path: "src/index.ts",
-									user: { login: "alice" },
-								},
-							],
-						]),
-					);
-				}
-				const issueMatch = ISSUE_BODY_PATTERN.exec(endpointPathValue);
-				if (issueMatch) {
-					return Promise.resolve(
-						issueBodyResponse("@crewmate hello", Number(issueMatch[1]), "alice"),
-					);
-				}
-				if (ISSUE_COMMENTS_PATTERN.test(endpointPathValue)) {
-					return Promise.resolve("[]");
-				}
-			}
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(REPO_TARGET, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-			unsafeNoUser: true,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(TWO_CALLS);
-		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
-		expect(
-			countCalls(
+		it("keeps existing jobs when pre-marking crewmate replies", async () => {
+			const runner = makeRunner({
+				comments: [
+					{ body: "@crewmate hello", id: 1 },
+					{ body: `${CREWMATE_PREFIX} Done.`, id: 2, inReplyToId: 1 },
+				],
+			});
+			await run.watch(PR_URL, {
+				iterations: 1,
+				lockDir: cov2Dir,
+				logger: silentLogger(),
 				runner,
-				"gh",
-				(args) => args.at(FIRST_INDEX) === "pr" && args.at(SECOND_INDEX) === "checkout",
-			),
-		).toBe(NO_CALLS);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(TWO_CALLS);
-	});
+				stateFile: cov2State,
+			});
+			const state = await run.loadState(cov2State);
+			expect(state.get(PR_URL)?.get("review:1")?.status).toBe("succeeded");
+			expect(state.get(PR_URL)?.get("review:2")).toBeUndefined();
+		});
 
-	it("continues polling when one repo scope PR fails", async () => {
-		const SCOPE_PR_URL_2 = "https://github.com/owner/repo/pull/2";
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
-				return Promise.resolve("");
+		it("works without an iterations cap", async () => {
+			await expect(
+				run.watch(PR_URL, {
+					lockDir: cov2Dir,
+					logger: silentLogger(),
+					runner: makeRunner(),
+					stateFile: cov2Dir,
+				}),
+			).rejects.toThrow();
+		});
+
+		it("parses --since values without a timezone as local time", () => {
+			expect(run.parseSince("2026-09-01T00:00:00")).toBeInstanceOf(Date);
+		});
+
+		it("creates a file logger when neither --log nor a logger is given", async () => {
+			vi.stubEnv("XDG_CONFIG_HOME", cov2Dir);
+			const previousExitCode = process.exitCode;
+			process.exitCode = undefined;
+			try {
+				await run(["watch", PR_URL], {
+					iterations: 1,
+					lockDir: cov2Dir,
+					runner: makeRunner(),
+					stateFile: cov2State,
+				});
+				expect(process.exitCode).toBeUndefined();
+			} finally {
+				process.exitCode = previousExitCode;
 			}
-			if (file === "gh" && args[0] === "api") {
-				const reaction = resolveReaction(args);
-				if (reaction !== undefined) return Promise.resolve(reaction);
-				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
-					return Promise.resolve(
-						JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }, { html_url: SCOPE_PR_URL_2 }] }]),
-					);
-				}
-				if (args.includes("Accept: application/vnd.github.raw")) {
-					return Promise.resolve("example");
-				}
-				if (args.includes("POST")) {
-					return Promise.resolve("");
-				}
-				const endpoint = args.find((arg) => arg.startsWith("repos/"));
-				if (endpoint?.includes("/pulls/1/comments")) {
-					return Promise.reject(new Error("HTTP 404: Not Found"));
-				}
-				if (endpoint?.includes("/pulls/")) {
-					return Promise.resolve(
-						JSON.stringify([
-							[
-								{
-									body: "@crewmate hello",
-									id: FIRST_ID,
-									in_reply_to_id: null,
-									line: FIRST_LINE,
-									path: "src/index.ts",
-									user: { login: "alice" },
-								},
-							],
-						]),
-					);
-				}
-				if (endpoint?.includes("/issues/")) {
-					return Promise.resolve("[]");
-				}
-			}
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(REPO_TARGET, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-			unsafeNoUser: true,
-		});
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "poll-failed" }),
-		);
-	});
-
-	it("watches a repo scope with no open PRs", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
-				return Promise.resolve("");
-			}
-			if (
-				file === "gh" &&
-				args[0] === "api" &&
-				args.some((arg) => arg.startsWith("search/issues?q="))
-			) {
-				return Promise.resolve(JSON.stringify([{ items: [] }]));
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(REPO_TARGET, {
-			interval: NO_INTERVAL,
-			iterations: TWO_CALLS,
-			logger,
-			runner,
-			unsafeNoUser: true,
-		});
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "no-open-items" }),
-		);
-	});
-
-	it("sets GH_HOST for GHES repo scope", async () => {
-		const runner = makeScopeRunner({
-			prUrl: "https://ghe.example.com/owner/repo/pull/1",
-		});
-		await run.watch(GHES_REPO_URL, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		expect(
-			countCalls(
-				runner,
-				"gh",
-				(args, options) => args[0] === "auth" && options?.env?.GH_HOST === "ghe.example.com",
-			),
-		).toBeGreaterThanOrEqual(1);
-		expect(
-			countCalls(
-				runner,
-				"gh",
-				(args, options) => args[0] === "api" && options?.env?.GH_HOST === "ghe.example.com",
-			),
-		).toBeGreaterThanOrEqual(1);
-	});
-
-	it("disables --fix for repo scope and logs a warning", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeScopeRunner({ body: "@crewmate #fix" });
-		await run.watch(REPO_TARGET, {
-			allowFix: true,
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-		});
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "scope-fix-disabled" }),
-		);
-		expect(countCalls(runner, "gh", (args) => args.at(FIRST_INDEX) === "pr")).toBe(NO_CALLS);
-		expect(countCalls(runner, "git", (args) => args.at(FIRST_INDEX) === "add")).toBe(NO_CALLS);
-	});
-
-	it("streams a repo scope and emits one line per discovered PR", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeScopeRunner();
-		await run(["stream", REPO_TARGET], { iterations: FIRST_ITERATION, runner });
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "-p")).toBe(NO_CALLS);
-		expect(countCalls(runner, "claude", (args) => args.at(FIRST_INDEX) === "--version")).toBe(
-			NO_CALLS,
-		);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(NO_CALLS);
-		write.mockRestore();
-	});
-
-	it("streams with --debug and emits debug log events", async () => {
-		const write = mockStdoutWrite();
-		const logger = vi.fn() as unknown as Logger & {
-			mock: { calls: [string, Record<string, unknown>][] };
-		};
-		const runner = makeScopeRunner();
-		await run(["stream", REPO_TARGET, "--debug"], { iterations: FIRST_ITERATION, runner, logger });
-		const debugCalls = logger.mock.calls.filter(([level]) => level === "debug");
-		expect(debugCalls.length).toBeGreaterThan(0);
-		expect(
-			debugCalls.some(([, fields]) => (fields as { stage: string }).stage === "new-mentions"),
-		).toBe(true);
-		write.mockRestore();
-	});
-
-	it("streams an org scope and sets GH_HOST", async () => {
-		const write = mockStdoutWrite();
-		const runner = makeScopeRunner({ prUrl: "https://ghe.example.com/owner/repo/pull/1" });
-		await run(["stream", "https://ghe.example.com/orgs/myorg"], {
-			iterations: FIRST_ITERATION,
-			runner,
-		});
-		const calls = write.mock.calls.map(([line]) => line as string);
-		expect(calls.some((line) => line.includes('"event":"mention"'))).toBe(true);
-		expect(
-			countCalls(
-				runner,
-				"gh",
-				(args, options) => args[0] === "api" && options?.env?.GH_HOST === "ghe.example.com",
-			),
-		).toBeGreaterThanOrEqual(1);
-		write.mockRestore();
-	});
-
-	it("streams a repo scope with no open PRs", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
-				return Promise.resolve("");
-			}
-			if (
-				file === "gh" &&
-				args[0] === "api" &&
-				args.some((arg) => arg.startsWith("search/issues?q="))
-			) {
-				return Promise.resolve(JSON.stringify([{ items: [] }]));
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.stream(REPO_TARGET, {
-			interval: NO_INTERVAL,
-			iterations: TWO_CALLS,
-			logger,
-			runner,
-			unsafeNoUser: true,
-		});
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "no-open-items" }),
-		);
-	});
-
-	it("falls back to missing file reply when the raw content API fails", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "gh" && args[0] === "api") {
-				const reaction = resolveReaction(args);
-				if (reaction !== undefined) return Promise.resolve(reaction);
-				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
-					return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
-				}
-				if (args.includes("Accept: application/vnd.github.raw")) {
-					return Promise.reject(new Error("Not Found"));
-				}
-				if (args.includes("POST")) {
-					return Promise.resolve("");
-				}
-				const endpoint = args.find((arg) => arg.startsWith("repos/"));
-				if (endpoint?.includes("/pulls/")) {
-					return Promise.resolve(
-						JSON.stringify([
-							[
-								{
-									body: "@crewmate hello",
-									id: FIRST_ID,
-									in_reply_to_id: null,
-									line: FIRST_LINE,
-									path: "missing.ts",
-									user: { login: "alice" },
-								},
-							],
-						]),
-					);
-				}
-				if (endpoint?.includes("/issues/")) {
-					return Promise.resolve("[]");
-				}
-			}
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(REPO_TARGET, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-			unsafeNoUser: true,
-		});
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "file-content-api-failed" }),
-		);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(FIRST_CALL);
-	});
-
-	it("warns and continues on non-404 raw content API failures", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && (args[0] === "--version" || args[0] === "auth")) {
-				return Promise.resolve("");
-			}
-			if (file === "gh" && args[0] === "api") {
-				const reaction = resolveReaction(args);
-				if (reaction !== undefined) return Promise.resolve(reaction);
-				if (args.some((arg) => arg.startsWith("search/issues?q="))) {
-					return Promise.resolve(JSON.stringify([{ items: [{ html_url: SCOPE_PR_URL }] }]));
-				}
-				if (args.includes("Accept: application/vnd.github.raw")) {
-					return Promise.reject(new Error("rate limit"));
-				}
-				if (args.includes("POST")) {
-					return Promise.resolve("");
-				}
-				const endpoint = args.find((arg) => arg.startsWith("repos/"));
-				if (endpoint?.includes("/pulls/")) {
-					return Promise.resolve(
-						JSON.stringify([
-							[
-								{
-									body: "@crewmate hello",
-									id: FIRST_ID,
-									in_reply_to_id: null,
-									line: FIRST_LINE,
-									path: "missing.ts",
-									user: { login: "alice" },
-								},
-							],
-						]),
-					);
-				}
-				if (endpoint?.includes("/issues/")) {
-					return Promise.resolve("[]");
-				}
-			}
-			if (file === "claude") {
-				return Promise.resolve("It does something.");
-			}
-			if (file === "git") {
-				return resolveGit(args);
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		await run.watch(REPO_TARGET, {
-			interval: NO_INTERVAL,
-			iterations: FIRST_ITERATION,
-			logger,
-			runner,
-			unsafeNoUser: true,
-		});
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "file-content-api-failed" }),
-		);
-		expect(countCalls(runner, "gh", (args) => isReplyPost(args))).toBe(0);
-		expect(logger).toHaveBeenCalledWith(
-			"warning",
-			expect.objectContaining({ reason: "poll-failed" }),
-		);
-	});
-});
-
-describe("applyFix", () => {
-	it("throws when repoRoot is missing", async () => {
-		await expect(
-			applyFix(
-				{ repoRoot: undefined } as unknown as Parameters<typeof applyFix>[0],
-				"src/index.ts",
-				"fixed",
-			),
-		).rejects.toThrow("repoRoot is required to apply fixes");
-	});
-});
-
-describe("dispatchMention reaction cleanup", () => {
-	it("warns when removing an eyes reaction that has no id", async () => {
-		const warn = vi.fn() as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const logger = vi.fn() as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			if (file === "gh" && isReactionPost(args)) {
-				return Promise.reject(new Error("reaction post failed"));
-			}
-			if (file === "claude") {
-				return Promise.resolve("");
-			}
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const ctx = {
-			checkedOut: new Set<string>(),
-			commentId: FIRST_ID,
-			dryRun: false,
-			ghHost: "github.com",
-			kind: "conversation" as const,
-			logger,
-			number: "123",
-			owner: "owner",
-			prUrl: PR_URL,
-			repo: "repo",
-			reaction: { emoji: "eyes" },
-			runner,
-			warn,
-		};
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate hello", kind: "conversation" }, ctx, {
-			allowFix: false,
-		});
-		expect(warn).toHaveBeenCalledWith(
-			"failed to remove reaction: no reaction id",
-			expect.any(Object),
-		);
-	});
-});
-
-describe("dispatchMention conversation fix", () => {
-	let tempDir = "";
-
-	beforeEach(async () => {
-		tempDir = await mkdtemp(path.join(tmpdir(), "crewmate-"));
-		vi.stubEnv("XDG_CONFIG_HOME", tempDir);
-		process.chdir(tempDir);
-	});
-
-	afterEach(async () => {
-		process.chdir(ORIGINAL_CWD);
-		await rm(tempDir, { force: true, recursive: true });
-		vi.unstubAllEnvs();
-	});
-
-	const makeConversationFixRunner = ({
-		files = ["src/index.ts"],
-		fixed = "```\nnew\n```",
-	}: {
-		files?: string[];
-		fixed?: string;
-	} = {}): Runner =>
-		vi.fn((file: string, args: string[]) => {
-			const [command] = args;
-			const endpoint = findEndpoint(args);
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && command === "pr") return Promise.resolve("");
-			if (file === "gh" && command === "api") {
-				if (endpoint?.includes("/reactions")) return Promise.resolve(JSON.stringify({ id: 1 }));
-				if (PULLS_FILES_PATTERN.test(endpointPath(endpoint))) {
-					return Promise.resolve(
-						JSON.stringify(files.map((filename) => ({ filename, status: "modified" }))),
-					);
-				}
-			}
-			if (file === "claude") return Promise.resolve(fixed);
-			if (file === "git") return resolveGit(args);
-			return Promise.resolve("");
-		}) as unknown as Runner;
-
-	const makeConversationFixCtx = (
-		runner: Runner,
-		warn: (message: string, fields?: Record<string, unknown>) => Promise<void>,
-		logger: Logger,
-		overrides: Record<string, unknown> = {},
-	) => ({
-		checkedOut: new Set<string>(),
-		commentId: FIRST_ID,
-		dryRun: false,
-		ghHost: "github.com",
-		kind: "conversation" as const,
-		logger,
-		number: "123",
-		owner: "owner",
-		prUrl: PR_URL,
-		repo: "repo",
-		repoRoot: tempDir,
-		runner,
-		warn,
-		...overrides,
-	});
-
-	const dispatchConversationFix = async ({
-		fixed,
-		files,
-	}: {
-		fixed: string;
-		files?: string[];
-	}): Promise<Runner> => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const runner = makeConversationFixRunner({ files, fixed });
-		const ctx = makeConversationFixCtx(runner, warn, logger);
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-		return runner;
-	};
-
-	it("reports when the provider returns empty for a conversation #fix", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		const runner = await dispatchConversationFix({ fixed: "" });
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("Could not generate a fix.");
-	});
-
-	it("reports when the provider returns plain text for a multi-file conversation #fix", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		await writeFile(path.resolve("src", "other.ts"), "old");
-		const runner = await dispatchConversationFix({
-			files: ["src/index.ts", "src/other.ts"],
-			fixed: "plain text",
 		});
 
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("Could not generate a fix.");
-	});
-
-	it("rejects an unsafe path returned for a conversation #fix", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		const runner = await dispatchConversationFix({ fixed: "```../outside\nnew\n```" });
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("Could not generate a fix.");
-	});
-
-	it("rejects a path that is not a changed file in this PR", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		const runner = await dispatchConversationFix({
-			files: ["src/index.ts"],
-			fixed: "```src/not-changed.ts\nnew\n```",
+		it("still rethrows when error logging fails", async () => {
+			await expect(
+				run.watch(PR_URL, {
+					iterations: 1,
+					lockDir: cov2Dir,
+					logger: failingLogger,
+					runner: makeRunner({ failAuth: true }),
+					stateFile: cov2State,
+				}),
+			).rejects.toThrow("not logged in");
 		});
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("Could not generate a fix.");
-	});
-
-	it("applies a plain provider response to the only changed file", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		await dispatchConversationFix({ fixed: "new" });
-
-		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
-		expect(content).toBe("new");
-	});
-
-	it("applies a fenced provider response with no language tag", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		await dispatchConversationFix({ fixed: "```\nnew\n```" });
-
-		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
-		expect(content).toBe("new");
-	});
-
-	it("applies a fenced provider response with a language tag when there is one changed file", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		await dispatchConversationFix({ fixed: "```typescript\nnew\n```" });
-
-		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
-		expect(content).toBe("new");
-	});
-
-	it("rejects a fix for an unreadable changed file", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		await writeFile(path.resolve("binary.ts"), Buffer.from([0]));
-		const runner = await dispatchConversationFix({
-			files: ["src/index.ts", "binary.ts"],
-			fixed: "```binary.ts\nnew\n```",
-		});
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("Could not generate a fix.");
-	});
-
-	it("preserves the original file's trailing newline when the provider omits it", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old\n");
-		await dispatchConversationFix({ fixed: "new" });
-
-		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
-		expect(content).toBe("new\n");
-	});
-
-	it("allows the provider to return an empty file", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old\n");
-		await dispatchConversationFix({ fixed: "```src/index.ts\n\n```" });
-
-		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
-		expect(content).toBe("");
-	});
-
-	it("includes unreadable changed files in the conversation prompt", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		await dispatchConversationFix({
-			files: ["src/index.ts", "src/missing.ts"],
-			fixed: "```src/index.ts\nnew\n```",
-		});
-
-		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
-		expect(content).toBe("new");
-	});
-
-	it("applies multiple fenced fixes returned by the provider", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		await writeFile(path.resolve("src", "other.ts"), "old");
-		const runner = await dispatchConversationFix({
-			files: ["src/index.ts", "src/other.ts"],
-			fixed: "```src/index.ts\nnew1\n```\n```src/other.ts\nnew2\n```",
-		});
-
-		const content1 = await readFile(path.resolve("src", "index.ts"), "utf8");
-		const content2 = await readFile(path.resolve("src", "other.ts"), "utf8");
-		expect(content1).toBe("new1");
-		expect(content2).toBe("new2");
-		const commits = countCalls(runner, "git", (args) => args.at(0) === "commit");
-		expect(commits).toBe(FIRST_CALL);
-	});
-
-	it("reports when the changed files cannot be read", async () => {
-		const runner = await dispatchConversationFix({
-			files: ["missing.ts"],
-			fixed: "```\nnew\n```",
-		});
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain(
-			"Could not read any changed files in this PR.",
-		);
-	});
-
-	it("reports when there are no changed files in this PR", async () => {
-		const runner = await dispatchConversationFix({ files: [], fixed: "```\nnew\n```" });
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("No files changed in this PR.");
-	});
-
-	it("handles nested fences when parsing provider responses", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		const outer = "````";
-		const inner = "```foo";
-		const fixed = `${outer}\n${inner}\nnew\n${outer}\n\`\`\``;
-		await dispatchConversationFix({ fixed });
-
-		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
-		expect(content).toBe(`${inner}\nnew`);
-	});
-
-	it("preserves empty-info inner fences that are shorter than the outer fence", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		const fixed = "````\n```\ninner\n```\nnew\n````";
-		await dispatchConversationFix({ fixed });
-
-		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
-		expect(content).toBe("```\ninner\n```\nnew");
-	});
-
-	it("preserves nested code blocks that use more backticks", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		const fixed = "```src/index.ts\nouter\n````inner\ninner\n````\nnew\n```";
-		await dispatchConversationFix({ fixed });
-
-		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
-		expect(content).toBe("outer\n````inner\ninner\n````\nnew");
-	});
-
-	it("reports no changes needed when the provider returns the same fenced content", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		const runner = await dispatchConversationFix({ fixed: "```\nold\n```" });
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("No changes needed.");
-		const reactionCalls = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.filter(
-			([f, a]) => f === "gh" && REACTION_PATTERN.test(endpointPath(findEndpoint(a) ?? "")),
-		);
-		expect(reactionCalls.at(-1)?.[1].join(" ")).toContain("content=+1");
-	});
-
-	it("reports no changes needed when the provider returns the same plain content", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		const runner = await dispatchConversationFix({ fixed: "old" });
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("No changes needed.");
-		const reactionCalls = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.filter(
-			([f, a]) => f === "gh" && REACTION_PATTERN.test(endpointPath(findEndpoint(a) ?? "")),
-		);
-		expect(reactionCalls.at(-1)?.[1].join(" ")).toContain("content=+1");
-	});
-
-	it("reports and throws when applyFix receives a path outside the repo", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const runner = makeConversationFixRunner({});
-		const ctx = makeConversationFixCtx(runner, warn, logger);
-		await expect(applyFix(ctx, "../outside", "new")).rejects.toThrow("Invalid target path");
-		expect(logger).toHaveBeenCalledWith(
-			"fix",
-			expect.objectContaining({ error: "Invalid target path" }),
-		);
-	});
-
-	it("reports when the changed files cannot be read in a missing directory", async () => {
-		const runner = await dispatchConversationFix({
-			files: ["missing/missing.ts"],
-			fixed: "```\nnew\n```",
-		});
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain(
-			"Could not read any changed files in this PR.",
-		);
-	});
-
-	it("silently skips unsafe files when reading changed files without a checkout", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const runner = makeConversationFixRunner({ files: ["../etc/passwd"] });
-		const ctx = makeConversationFixCtx(runner, warn, logger, { repoRoot: undefined });
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain(
-			"Could not read any changed files in this PR.",
-		);
-	});
-
-	it("silently skips missing files when reading changed files without a checkout", async () => {
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const runner = vi.fn((file: string, args: string[]) => {
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && PULLS_FILES_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))) {
-				return Promise.resolve(JSON.stringify([{ filename: "src/index.ts", status: "modified" }]));
-			}
-			if (file === "gh" && args.includes("Accept: application/vnd.github.raw")) {
-				return Promise.reject(new Error("Not Found"));
-			}
-			if (file === "claude") return Promise.resolve("```\nnew\n```");
-			if (file === "git") return resolveGit(args);
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const ctx = makeConversationFixCtx(runner, warn, logger, { repoRoot: undefined });
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain(
-			"Could not read any changed files in this PR.",
-		);
-	});
-
-	it("caps the number of changed files considered for a conversation fix", async () => {
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const files = Array.from({ length: 51 }, (_, i) => `f${i}.ts`);
-		const runner = makeConversationFixRunner({ files, fixed: "" });
-		const ctx = makeConversationFixCtx(runner, warn, logger);
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-
-		expect(warn).toHaveBeenCalledWith(
-			"truncating changed file list for conversation prompt",
-			expect.any(Object),
-		);
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain(
-			"Could not read any changed files in this PR.",
-		);
-	});
-
-	it("skips files that are too large for the conversation prompt", async () => {
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		await writeFile(path.resolve("large.ts"), Buffer.alloc(1_000_000, "a"));
-		const runner = makeConversationFixRunner({ files: ["large.ts"], fixed: "" });
-		const ctx = makeConversationFixCtx(runner, warn, logger);
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-
-		expect(warn).toHaveBeenCalledWith(
-			"skipping file for conversation prompt",
-			expect.objectContaining({ reason: "too-large" }),
-		);
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain(
-			"Could not read any changed files in this PR.",
-		);
-	});
-
-	it("skips binary files when reading changed files", async () => {
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		await writeFile(path.resolve("binary.ts"), Buffer.from([0, 1, 2]));
-		const runner = makeConversationFixRunner({ files: ["binary.ts"], fixed: "" });
-		const ctx = makeConversationFixCtx(runner, warn, logger);
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-
-		expect(warn).toHaveBeenCalledWith(
-			"skipping file for conversation prompt",
-			expect.objectContaining({ reason: "binary" }),
-		);
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain(
-			"Could not read any changed files in this PR.",
-		);
-	});
-
-	it("silently skips directories when reading changed files from a checkout", async () => {
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		await mkdir(path.resolve("src"), { recursive: true });
-		await mkdir(path.resolve("src", "dir"));
-		const runner = makeConversationFixRunner({ files: ["src/dir"], fixed: "" });
-		const ctx = makeConversationFixCtx(runner, warn, logger);
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain(
-			"Could not read any changed files in this PR.",
-		);
-	});
-
-	it("skips files that are too large from the GitHub API", async () => {
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && PULLS_FILES_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))) {
-				return Promise.resolve(JSON.stringify([{ filename: "large.ts", status: "modified" }]));
-			}
-			if (file === "gh" && args.includes("Accept: application/vnd.github.raw")) {
-				return Promise.resolve("a".repeat(200_000));
-			}
-			if (file === "claude") return Promise.resolve("");
-			if (file === "git") return resolveGit(args);
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const ctx = makeConversationFixCtx(runner, warn, logger, { repoRoot: undefined });
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-
-		expect(warn).toHaveBeenCalledWith(
-			"skipping file for conversation prompt",
-			expect.objectContaining({ path: "large.ts", reason: "too-large" }),
-		);
-	});
-
-	it("rejects an unclosed fenced response for a conversation fix", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		const runner = await dispatchConversationFix({ fixed: "```\nnew" });
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("Could not generate a fix.");
-	});
-
-	it("applies a fenced response with leading spaces on the fence lines", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		await dispatchConversationFix({ fixed: "  ```src/index.ts\nnew\n  ```" });
-
-		const content = await readFile(path.resolve("src", "index.ts"), "utf8");
-		expect(content).toBe("new");
-	});
-
-	it("continues when a raw content API call fails for a changed file without a checkout", async () => {
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && PULLS_FILES_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))) {
-				return Promise.resolve(
-					JSON.stringify([
-						{ filename: "src/index.ts", status: "modified" },
-						{ filename: "src/missing.ts", status: "modified" },
-					]),
-				);
-			}
-			if (file === "gh" && args.includes("Accept: application/vnd.github.raw")) {
-				const endpoint = findEndpoint(args) ?? "";
-				if (endpoint.includes("src/index.ts")) return Promise.resolve("old");
-				return Promise.reject(new Error("rate limit"));
-			}
-			if (file === "claude") return Promise.resolve("");
-			if (file === "git") return resolveGit(args);
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const ctx = makeConversationFixCtx(runner, warn, logger, { repoRoot: undefined });
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-
-		expect(warn).toHaveBeenCalledWith(
-			"file content API failed",
-			expect.objectContaining({ path: "src/missing.ts", reason: "file-content-api-failed" }),
-		);
-		const claudeCall = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "claude" && a[0] === "-p");
-		expect(claudeCall).toBeDefined();
-		expect(JSON.stringify(claudeCall?.[1])).toContain("--- src/index.ts ---\\nold");
-		expect(JSON.stringify(claudeCall?.[1])).toContain(
-			"--- src/missing.ts ---\\n<could not read file content>",
-		);
-	});
-
-	it("previews a conversation #fix in dry-run mode", async () => {
-		await mkdir(path.resolve("src"), { recursive: true });
-		await writeFile(path.resolve("src", "index.ts"), "old");
-		const write = vi.spyOn(process.stdout, "write").mockImplementation(vi.fn());
-		const runner = makeConversationFixRunner({
-			fixed: "```src/index.ts\nnew\n```",
-		});
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const ctx = makeConversationFixCtx(runner, warn, logger, { dryRun: true });
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-
-		const output = write.mock.calls.map(([line]) => line as string).join("");
-		expect(output).toContain("would write fix to");
-		expect(output).toContain("new");
-		write.mockRestore();
-	});
-
-	it("rejects a conversation fix for an invalid PR URL", async () => {
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = makeConversationFixRunner({});
-		const ctx = makeConversationFixCtx(runner, warn, logger, {
-			prUrl: "not-a-url",
-			repoRoot: undefined,
-		});
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("I can't apply fixes");
-	});
-
-	it("rejects a fix requested on an issue body", async () => {
-		const warn = vi.fn() as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && args.includes("/reactions"))
-				return Promise.resolve(JSON.stringify({ id: 1 }));
-			if (file === "gh" && args.includes("/issues/4/comments")) return Promise.resolve("[]");
-			if (file === "gh" && args.includes("/issues/"))
-				return Promise.resolve(issueBodyResponse("@crewmate #fix", 4));
-			if (file === "claude") return Promise.resolve("No problem.");
-			if (file === "git") return resolveGit(args);
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const ctx = makeConversationFixCtx(runner, warn, logger, {
-			kind: "issue" as const,
-			number: "4",
-			prUrl: ISSUE_URL,
-			repoRoot: undefined,
-		});
-		await dispatchMention({ id: 4, body: "@crewmate #fix", kind: "issue" }, ctx, {
-			allowFix: true,
-		});
-		expect(warn).toHaveBeenCalledWith(
-			"fix requested on issue body or comment; only PR review and conversation comments support #fix",
-			expect.any(Object),
-		);
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("I can't apply fixes");
-	});
-
-	it("rejects a fix requested on an issue comment", async () => {
-		const warn = vi.fn() as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && args.includes("/reactions"))
-				return Promise.resolve(JSON.stringify({ id: 1 }));
-			if (file === "gh" && args.includes("/issues/4/comments")) return Promise.resolve("[]");
-			if (file === "gh" && args.includes("/issues/"))
-				return Promise.resolve(issueBodyResponse("@crewmate #fix", 4));
-			if (file === "claude") return Promise.resolve("No problem.");
-			if (file === "git") return resolveGit(args);
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const ctx = makeConversationFixCtx(runner, warn, logger, {
-			kind: "conversation" as const,
-			number: "4",
-			prUrl: ISSUE_URL,
-			repoRoot: undefined,
-		});
-		await dispatchMention({ id: 4, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-		expect(warn).toHaveBeenCalledWith(
-			"fix requested on a conversation comment that does not belong to a PR; only PR conversation comments support #fix",
-			expect.any(Object),
-		);
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain("I can't apply fixes");
-	});
-
-	it("rejects a plain conversation fix without a local checkout", async () => {
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && PULLS_FILES_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))) {
-				return Promise.resolve(JSON.stringify([{ filename: "src/index.ts", status: "modified" }]));
-			}
-			if (file === "gh" && args.includes("Accept: application/vnd.github.raw")) {
-				return Promise.resolve("old");
-			}
-			if (file === "claude") return Promise.resolve("new");
-			if (file === "git") return resolveGit(args);
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const ctx = makeConversationFixCtx(runner, warn, logger, { repoRoot: undefined });
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-
-		expect(warn).toHaveBeenCalledWith(
-			"conversation fix requested without a local checkout",
-			expect.any(Object),
-		);
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain(
-			"A local PR checkout is required to apply conversation fixes.",
-		);
-	});
-
-	it("rejects a conversation fix without a local checkout", async () => {
-		const warn = vi.fn(() => Promise.resolve()) as unknown as (
-			message: string,
-			fields?: Record<string, unknown>,
-		) => Promise<void>;
-		const logger = vi.fn(() => Promise.resolve()) as unknown as Logger;
-		const runner = vi.fn((file: string, args: string[]) => {
-			const reaction = resolveReaction(args);
-			if (reaction !== undefined) return Promise.resolve(reaction);
-			if (file === "gh" && PULLS_FILES_PATTERN.test(endpointPath(findEndpoint(args) ?? ""))) {
-				return Promise.resolve(JSON.stringify([{ filename: "src/index.ts", status: "modified" }]));
-			}
-			if (file === "gh" && args.includes("Accept: application/vnd.github.raw")) {
-				return Promise.resolve("old");
-			}
-			if (file === "claude") return Promise.resolve("```src/index.ts\nnew\n```");
-			if (file === "git") return resolveGit(args);
-			return Promise.resolve("");
-		}) as unknown as Runner;
-		const ctx = makeConversationFixCtx(runner, warn, logger, { repoRoot: undefined });
-		await dispatchMention({ id: FIRST_ID, body: "@crewmate #fix", kind: "conversation" }, ctx, {
-			allowFix: true,
-		});
-
-		expect(warn).toHaveBeenCalledWith(
-			"conversation fix requested without a local checkout",
-			expect.any(Object),
-		);
-		const replyPost = (
-			runner as unknown as { mock: { calls: [string, string[]][] } }
-		).mock.calls.find(([f, a]) => f === "gh" && isReplyPost(a));
-		expect(JSON.stringify(replyPost?.[1])).toContain(
-			"A local PR checkout is required to apply conversation fixes.",
-		);
 	});
 });
