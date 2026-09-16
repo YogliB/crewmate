@@ -37,11 +37,12 @@ nub run build
 
 ## Project layout
 
-- `src/index.ts` — CLI and watch loop.
+- `src/index.ts` — CLI, poll loop, and job runner.
 - `src/bin.ts` — executable entry point.
-- `src/fix.ts` — generating replies and applying fixes.
-- `src/log.ts` — structured logging.
-- `src/state.ts` — persisting seen comment IDs.
+- `src/reply.ts` — generating explanation replies.
+- `src/config.ts` — flat user config file loading.
+- `src/log.ts` — structured logging with rotation.
+- `src/state.ts` — durable job state: atomic writes, locking, retries, and pruning.
 - `dist/` — build output.
 - `assets/help.md` — help text shown by `--help`.
 - `assets/SYSTEM_PROMPT.md` — default system prompt for review comment replies.

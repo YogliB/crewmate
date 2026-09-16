@@ -35,7 +35,7 @@ npx --yes crewmate stream <pr-url-or-shorthand>
 crewmate stream <pr-url-or-shorthand> [--user <login>] [--interval <seconds>] [--log] [--ack] [--output-file <path>] [--since <ISO-timestamp>]
 ```
 
-- `<pr-url-or-shorthand>`: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`. Can also be an issue, a repo, an org, or a GHES full URL.
+- `<pr-url-or-shorthand>`: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`. Can also be an issue, a repo, or a GHES full URL.
 - `--user`: only emit mentions from this GitHub login.
 - `--interval`: seconds between polls (default 60).
 - `--log`: also mirror log lines to stderr.

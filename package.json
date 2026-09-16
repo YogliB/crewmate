@@ -1,7 +1,7 @@
 {
 	"name": "crewmate",
-	"version": "0.6.0",
-	"description": "A CLI that watches GitHub PR comments for @crewmate mentions and replies with explanations or generated fixes.",
+	"version": "0.7.0",
+	"description": "Watch GitHub PRs and issues for @crewmate mentions and reply with AI-generated explanations",
 	"keywords": [
 		"cli"
 	],
@@ -44,7 +44,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "24",
-		"@vitest/coverage-v8": "^4.1.10",
+		"@vitest/coverage-v8": "^4.1.11",
 		"eslint-plugin-security": "4.0.1",
 		"husky": "9.1.7",
 		"jscpd": "4.0.9",
@@ -54,7 +54,7 @@
 		"oxlint": "1.76.0",
 		"tsdown": "0.22.14",
 		"typescript": "7.0.2",
-		"vitest": "^4.1.10"
+		"vitest": "^4.1.11"
 	},
 	"lint-staged": {
 		"**/*": "oxfmt --write --no-error-on-unmatched-pattern",

@@ -22,7 +22,7 @@ gh auth login
 
 ## `claude` is not installed
 
-`crewmate` calls the `claude` command by default to generate explanations and fixes. Install the Claude CLI and make sure it is in your PATH, or use a different provider:
+`crewmate` calls the `claude` command by default to generate explanations. Install the Claude CLI and make sure it is in your PATH, or use a different provider:
 
 ```bash
 crewmate watch owner/repo/pull/4 --provider my-llm
@@ -30,29 +30,25 @@ crewmate watch owner/repo/pull/4 --provider my-llm
 
 The provider must be a `claude`-shaped CLI that supports `--version`, `--model`, and `-p`.
 
-## `gh pr checkout` fails
+## A provider call seems stuck
 
-`crewmate` checks out the PR branch before reading a file. It needs a clean working tree. Commit or stash your own changes first.
+`crewmate` kills a provider call that exceeds `--timeout` seconds (default 600) and retries it with backoff. Lower the timeout or investigate the provider itself.
 
-## `--dry-run` changed my working tree
+## Another `crewmate` process is already running
 
-For single-PR targets, `--dry-run` still runs `gh pr checkout` so it can read the file. It only skips posting replies and committing/pushing. Commit or stash your own changes before running it, or use `crewmate stream` to preview mentions without touching the repo.
-
-## `git push` failed after a fix
-
-`crewmate` commits the fix locally and tries to push it. If the push fails, the commit stays local. Push it manually when the problem is fixed.
+`watch` and `stream` take a lock at `<config>/crewmate/lock`. If a previous run crashed, the stale lock is reclaimed automatically; otherwise stop the other process or use a different config directory (`XDG_CONFIG_HOME`).
 
 ## `@crewmate` mention is ignored
 
-`crewmate` only replies to review comments (not replies) that contain `@crewmate` and were not written by `crewmate` itself. The newest unseen mention is handled on each poll; older ones wait for the next poll.
+`crewmate` only replies to comments that contain `@crewmate`, were not written by `crewmate` itself, and (by default) were written by the active `gh` user. Use `--user <login>` or `--unsafe-no-user` to widen the filter, and `--debug` to see why a mention was filtered.
 
 ## The same conversation comment was answered twice
 
 General PR conversation comments do not expose a stable parent id. If you delete or reset `<config>/crewmate/state.json`, `crewmate` cannot tell that a conversation comment was already answered, so it may reply again. Review comments are not affected because `crewmate` can match replies to their parent.
 
-## Fix was not applied
+## Replies keep failing
 
-The review comment must contain both `@crewmate` and the tag `#fix` (case-insensitive) for `--fix` to run. If the file is missing or `claude` returns no change, `crewmate` replies with the reason.
+A failed reply is retried up to 3 times with an exponential backoff starting at 60 seconds, then `crewmate` posts an error reply to the mention. Check the log for the underlying `gh` or provider error.
 
 ## Still stuck?
 
