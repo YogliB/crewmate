@@ -46,6 +46,8 @@ If you are building from source, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md
 ```bash
 crewmate watch [<target>] [options]
 crewmate stream [<target>] [options]
+crewmate --help
+crewmate --version
 ```
 
 `<target>` is optional when `crewmate watch` or `crewmate stream` is run inside a git repository whose `origin` remote points to GitHub; it defaults to that repository. When provided, it can be:
@@ -125,6 +127,7 @@ Each line in `crewmate.log` is an NDJSON object with an `at` ISO-8601 timestamp 
 
 - `poll` — started a poll iteration.
 - `mention` — found a new `@crewmate` mention.
+- `skip` — a failed job was not retried yet because its backoff has not elapsed (`reason: not-due`).
 - `reply` — posted or would post a comment reply (`kind: explain|error`, `failed` on errors).
 - `warning` — a recoverable problem such as an empty provider response, a poll failure, or a corrupted state file.
 - `error` — an unhandled failure that stops the watch loop (`errorType`, `message`, `stack`).

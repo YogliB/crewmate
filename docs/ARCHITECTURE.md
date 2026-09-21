@@ -16,13 +16,17 @@
 ├── dist/          # built ESM output from tsdown
 ├── assets/
 │   ├── help.md    # help text shown for --help
+│   ├── SYSTEM_PROMPT.md    # default system prompt for review replies
+│   ├── config.schema.json  # JSON Schema for config.json
 │   └── logo.webp  # README mascot
 ├── docs/          # user and contributor documentation
+├── skills/        # agent skills (crewmate, crewmate-stream)
 ├── scripts/
-│   └── oxlint-repo-guidelines.js  # custom oxlint rule guarding doc sprawl
+│   ├── oxlint-repo-guidelines.js  # custom oxlint rule guarding doc sprawl
+│   └── oxlint-no-comment.js       # custom oxlint rule banning code comments
 ├── package.json   # scripts, metadata, and release config
 ├── tsdown.config.ts  # build configuration
-└── .github/workflows/  # CI checks (lint, format, duplicates, knip, typecheck, test, security)
+└── .github/workflows/  # CI (lint, format, duplicates, knip, typecheck, test, security) and tag-driven release/publish
 ```
 
 ## Data Flow
@@ -42,7 +46,7 @@ The poll loop is shared between `watch` and `stream`. `watch` marks a job `runni
 
 ## State
 
-Mention jobs are stored in `$XDG_CONFIG_HOME/crewmate/state.json` as a versioned JSON map of item URLs to jobs (`status`, `attempts`, `retryAt`, error). Issue bodies use the state key `issue:<number>` because an issue body has no separate comment id. Writes are atomic (temporary file + rename), each target keeps at most 500 jobs (oldest finished jobs are pruned), and state files written by crewmate 0.6.0 and earlier (plain comment-id arrays) are migrated on load. In `--dry-run` mode, state is not written.
+Mention jobs are stored in `$XDG_CONFIG_HOME/crewmate/state.json` as a versioned JSON map of item URLs to jobs (`status`, `attempts`, `nextAttemptAt`, `lastError`, `updatedAt`) keyed by `<kind>:<id>` (`review:<commentId>`, `conversation:<commentId>`, `issue:<number>`). Issue bodies use the issue number because an issue body has no separate comment id. Writes are atomic (temporary file + rename), each target keeps at most 500 jobs (oldest finished jobs are pruned), and state files written by crewmate 0.6.0 and earlier (plain comment-id arrays) are migrated on load. In `--dry-run` mode, state is not written.
 
 Both `watch` and `stream` take a lock directory at `$XDG_CONFIG_HOME/crewmate/lock` so only one process per config directory runs at a time; a stale lock from a dead process is reclaimed.
 
