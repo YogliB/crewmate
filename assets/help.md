@@ -6,6 +6,7 @@ Watch GitHub PR comments (review and conversation) and issues for `@crewmate` me
 
 - `crewmate watch [<target>] [options]` — poll and reply to mentions.
 - `crewmate stream [<target>] [options]` — emit new mentions as NDJSON, without invoking a provider or posting replies.
+- `crewmate --version` — print the installed version.
 
 `<target>` is optional inside a git repository whose `origin` remote points to GitHub. Otherwise pass a PR, issue, or repo URL or `owner/repo` shorthand. For GHES, use a full URL. Organization scope is not supported. A repo target watches open PRs and issues by default (add `--closed` to include closed ones); pass a specific URL for a closed item.
 

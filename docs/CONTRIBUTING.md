@@ -48,6 +48,10 @@ Install [Nub](https://nubjs.com) first. If Nub is not available, `devEngines.onF
 
 The custom `oxlint-repo-guidelines/no-more-docs` rule blocks new Markdown or `docs/` files that are not in the allow-list. Remove the file or add it to [scripts/oxlint-repo-guidelines.js](../scripts/oxlint-repo-guidelines.js) and link it from [AGENTS.md](../AGENTS.md) and [README.md](../README.md).
 
+### `nub run lint:ci` reports "Comments hide intent"
+
+The custom `no-comment/no-comment` rule ([scripts/oxlint-no-comment.js](../scripts/oxlint-no-comment.js)) rejects code comments. Rename variables or extract named functions instead. Tool directives (`oxlint`, `eslint`, `@ts-`, coverage pragmas) and shebangs are allowed.
+
 ### The pre-commit hook rejects my commit
 
 Husky's pre-commit hook runs `lint-staged`, which runs `oxfmt` and `oxlint` on staged files. If it fixes formatting, stage the changes and commit again.
