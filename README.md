@@ -46,7 +46,10 @@ If you are building from source, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md
 ```bash
 crewmate watch [<target>] [options]
 crewmate stream [<target>] [options]
+crewmate --version
 ```
+
+`crewmate --version` (or `-v`) prints the installed version; `crewmate --help` (or `-h`) prints usage.
 
 `<target>` is optional when `crewmate watch` or `crewmate stream` is run inside a git repository whose `origin` remote points to GitHub; it defaults to that repository. When provided, it can be:
 

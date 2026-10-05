@@ -15,14 +15,18 @@
 │   └── state.ts   # durable job state (atomic writes, locking, retries, pruning)
 ├── dist/          # built ESM output from tsdown
 ├── assets/
-│   ├── help.md    # help text shown for --help
-│   └── logo.webp  # README mascot
+│   ├── help.md             # help text shown for --help
+│   ├── SYSTEM_PROMPT.md    # default system prompt for review comment replies
+│   ├── config.schema.json  # JSON schema for config.json
+│   └── logo.webp           # README mascot
 ├── docs/          # user and contributor documentation
+├── skills/        # agent skills (crewmate, crewmate-stream)
 ├── scripts/
-│   └── oxlint-repo-guidelines.js  # custom oxlint rule guarding doc sprawl
+│   ├── oxlint-repo-guidelines.js  # custom oxlint rule guarding doc sprawl
+│   └── oxlint-no-comment.js       # custom oxlint rule disallowing code comments
 ├── package.json   # scripts, metadata, and release config
 ├── tsdown.config.ts  # build configuration
-└── .github/workflows/  # CI checks (lint, format, duplicates, knip, typecheck, test, security)
+└── .github/workflows/  # CI (quality, build verification, security), PR checks, and tag-triggered release/publish
 ```
 
 ## Data Flow
