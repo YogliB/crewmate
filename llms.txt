@@ -1,11 +1,11 @@
 # crewmate
 
-> crewmate is a command-line tool. The project is currently a minimal bare-metal scaffold; this file will grow alongside real functionality.
+> crewmate is a CLI that watches GitHub PRs and issues for `@crewmate` mentions and replies with AI-generated explanations (`crewmate watch`), or streams new mentions as NDJSON for an agent to handle (`crewmate stream`).
 
 Important notes:
 
-- Development of this repository requires [Nub](https://nubjs.com); end users will be able to install the published package with npm once it ships.
-- There is no CLI behavior beyond a placeholder entry point yet.
+- Install with `npm install -g crewmate`. Requires Node.js 24+, an authenticated GitHub CLI (`gh`), and (for `watch`) a `claude`-shaped provider CLI.
+- Development of this repository requires [Nub](https://nubjs.com).
 
 ## User docs
 
@@ -21,7 +21,7 @@ Important notes:
 ## Implementation
 
 - [src/bin.ts](https://raw.githubusercontent.com/YogliB/crewmate/main/src/bin.ts): CLI entry point.
-- [src/index.ts](https://raw.githubusercontent.com/YogliB/crewmate/main/src/index.ts): Public API and main entry function.
+- [src/index.ts](https://raw.githubusercontent.com/YogliB/crewmate/main/src/index.ts): CLI, poll loop, and job runner; default-exports `run`.
 
 ## Optional
 
