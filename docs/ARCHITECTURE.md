@@ -15,14 +15,18 @@
 │   └── state.ts   # durable job state (atomic writes, locking, retries, pruning)
 ├── dist/          # built ESM output from tsdown
 ├── assets/
-│   ├── help.md    # help text shown for --help
-│   └── logo.webp  # README mascot
+│   ├── help.md             # help text shown for --help
+│   ├── SYSTEM_PROMPT.md    # default system prompt for review replies
+│   ├── config.schema.json  # JSON schema for config.json
+│   └── logo.webp           # README mascot
 ├── docs/          # user and contributor documentation
+├── skills/        # agent skills (crewmate, crewmate-stream)
 ├── scripts/
-│   └── oxlint-repo-guidelines.js  # custom oxlint rule guarding doc sprawl
+│   ├── oxlint-repo-guidelines.js  # custom oxlint rule guarding doc sprawl
+│   └── oxlint-no-comment.js       # custom oxlint rule rejecting code comments
 ├── package.json   # scripts, metadata, and release config
 ├── tsdown.config.ts  # build configuration
-└── .github/workflows/  # CI checks (lint, format, duplicates, knip, typecheck, test, security)
+└── .github/workflows/  # CI (quality checks, build verification, security, PR quality, release, publish)
 ```
 
 ## Data Flow
@@ -38,7 +42,7 @@
 
 `src/index.ts` also implements `crewmate stream`, which emits new `@crewmate` mentions as NDJSON to stdout without invoking a provider or posting replies. With `--ack`, the stream also posts an `eyes` reaction to each new mention and emits the returned `reactionId`, giving an agent an immediate ack it can replace with a final reaction.
 
-The poll loop is shared between `watch` and `stream`. `watch` marks a job `running` before replying so a crash does not reprocess it, and `succeeded` (or `failed`) after; `stream` saves state after writing stdout to avoid event loss. Failed jobs are retried with an exponential backoff (60s, 120s) up to 3 attempts; a job that exhausts its attempts gets an error reply posted to the mention.
+The poll loop is shared between `watch` and `stream`. `watch` marks a job `running` before replying so a crash does not reprocess it, and `succeeded` (or `failed`) after; `stream` saves state after writing stdout to avoid event loss. Failed jobs are retried with an exponential backoff (60s, 120s), up to 3 attempts in total; a job that exhausts its attempts gets an error reply posted to the mention.
 
 ## State
 

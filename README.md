@@ -46,6 +46,8 @@ If you are building from source, see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md
 ```bash
 crewmate watch [<target>] [options]
 crewmate stream [<target>] [options]
+crewmate --version
+crewmate --help
 ```
 
 `<target>` is optional when `crewmate watch` or `crewmate stream` is run inside a git repository whose `origin` remote points to GitHub; it defaults to that repository. When provided, it can be:
@@ -96,7 +98,7 @@ State (tracked mentions) is stored in `<config>/crewmate/state.json` and logs in
 ## Reliability
 
 - **Jobs, not fire-and-forget.** Each new mention becomes a job in the state file with a status of `pending`, `running`, `succeeded`, or `failed`. A crash between polls leaves jobs `pending`, and the next poll retries them.
-- **Retries with backoff.** A failed reply is retried up to 3 times with an exponential backoff starting at 60 seconds. After the last attempt, `crewmate` posts an error reply to the mention instead of silently dropping it.
+- **Retries with backoff.** A failed reply is attempted up to 3 times, with retries after 60 and 120 seconds. After the last attempt, `crewmate` posts an error reply to the mention instead of silently dropping it.
 - **Atomic state writes.** State is written to a temporary file and renamed into place, so a crash never leaves a half-written `state.json`.
 - **Single watcher per config directory.** `watch` and `stream` take a lock in `<config>/crewmate/lock`; a second process on the same config directory exits instead of double-posting.
 - **Bounded state and logs.** Each target keeps at most 500 tracked mentions (oldest finished jobs are pruned), and `crewmate.log` is rotated to `crewmate.log.1` when it exceeds 1 MB.
