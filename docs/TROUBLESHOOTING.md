@@ -48,7 +48,7 @@ General PR conversation comments do not expose a stable parent id. If you delete
 
 ## Replies keep failing
 
-A failed reply is retried up to 3 times with an exponential backoff starting at 60 seconds, then `crewmate` posts an error reply to the mention. Check the log for the underlying `gh` or provider error.
+A failed reply gets 3 attempts in total, retried after 60 and then 120 seconds. After the last attempt, `crewmate` posts an error reply to the mention. Check the log for the underlying `gh` or provider error.
 
 ## Still stuck?
 

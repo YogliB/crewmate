@@ -32,13 +32,16 @@ npx --yes crewmate stream <pr-url-or-shorthand>
 ## Start the stream
 
 ```bash
-crewmate stream <pr-url-or-shorthand> [--user <login>] [--interval <seconds>] [--log] [--ack] [--output-file <path>] [--since <ISO-timestamp>]
+crewmate stream [<pr-url-or-shorthand>] [--user <login>] [--unsafe-no-user] [--interval <seconds>] [--closed] [--log] [--debug] [--ack] [--output-file <path>] [--since <ISO-timestamp>]
 ```
 
-- `<pr-url-or-shorthand>`: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`. Can also be an issue, a repo, or a GHES full URL.
-- `--user`: only emit mentions from this GitHub login.
+- `<pr-url-or-shorthand>`: `https://github.com/owner/repo/pull/4` or `owner/repo/pull/4`. Can also be an issue, a repo, or a GHES full URL. Optional inside a git repo whose `origin` points to GitHub.
+- `--user`: only emit mentions from this GitHub login (defaults to the active `gh` user).
+- `--unsafe-no-user`: emit mentions from any GitHub user. Wins over `--user`.
 - `--interval`: seconds between polls (default 60).
+- `--closed`: for repo targets, also emit mentions from closed PRs and issues.
 - `--log`: also mirror log lines to stderr.
+- `--debug`: log extra poll pipeline detail.
 - `--ack`: post an `eyes` reaction on each new mention and include the returned `reactionId` in the event.
 - `--output-file`: also append each emitted NDJSON line to the given file, creating its parent directory if needed.
 - `--since`: only emit mentions whose GitHub `created_at` is at or after the given ISO-8601 timestamp. A timestamp without an offset is read as UTC.
