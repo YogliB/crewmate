@@ -50,7 +50,7 @@ The custom `oxlint-repo-guidelines/no-more-docs` rule blocks new Markdown or `do
 
 ### `nub run lint:ci` reports "Comments hide intent"
 
-The custom `no-comment/no-comment` rule ([scripts/oxlint-no-comment.js](../scripts/oxlint-no-comment.js)) rejects code comments. Rename variables or extract named functions instead. Tool directives (`oxlint`, `eslint`, `@ts-`, coverage pragmas), triple-slash directives, and shebangs are allowed.
+The custom `no-comment/no-comment` rule ([scripts/oxlint-no-comment.js](../scripts/oxlint-no-comment.js)) rejects code comments. Rename variables or extract named functions instead. Comments starting with `oxlint`, `eslint`, `@ts-`, `istanbul`, `c8`, or `v8`, triple-slash directives, and shebangs are allowed.
 
 ### The pre-commit hook rejects my commit
 
