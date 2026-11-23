@@ -42,9 +42,9 @@ The provider must be a `claude`-shaped CLI that supports `--version`, `--model`,
 
 `crewmate` only replies to comments that contain `@crewmate`, were not written by `crewmate` itself, and (by default) were written by the active `gh` user. Use `--user <login>` or `--unsafe-no-user` to widen the filter, and `--debug` to see why a mention was filtered.
 
-## The same conversation comment was answered twice
+## The same conversation or issue comment was answered twice
 
-General PR conversation comments do not expose a stable parent id. If you delete or reset `<config>/crewmate/state.json`, `crewmate` cannot tell that a conversation comment was already answered, so it may reply again. Review comments are not affected because `crewmate` can match replies to their parent.
+PR conversation comments, issue bodies, and issue comments do not expose a stable parent id. If you delete or reset `<config>/crewmate/state.json`, `crewmate` cannot tell that one was already answered, so it may reply again. Review comments are not affected because `crewmate` can match replies to their parent.
 
 ## Replies keep failing
 
